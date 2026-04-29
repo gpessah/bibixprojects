@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Environment files — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Build output
+frontend/dist/
+backend/public/
+
+# Database — lives on the server, not in git
+backend/data/
+
+# Uploads — user files, not in git
+backend/uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
