@@ -4,7 +4,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "create-admin": "node create-admin.js"
   },
   "dependencies": {
     "@azure/msal-node": "^5.1.4",
