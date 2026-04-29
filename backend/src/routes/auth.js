@@ -91,6 +91,40 @@ router.put('/me', authenticate, (req, res) => {
   res.json(user);
 });
 
+// ── One-time setup endpoint — creates first admin if no users exist ────────────
+// Access: GET /api/auth/setup?secret=SETUP_SECRET
+// Deletes itself after first use by checking user count
+router.get('/setup', (req, res) => {
+  const { secret, email, password, name } = req.query;
+  if (secret !== (process.env.SETUP_SECRET || 'bibix-setup-2026')) {
+    return res.status(403).json({ error: 'Invalid setup secret' });
+  }
+  const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+  if (userCount > 0) {
+    // Allow upgrading existing user to admin
+    const targetEmail = email || 'admin@bibix.com';
+    const user = db.prepare('SELECT id, email, role FROM users WHERE email = ?').get(targetEmail);
+    if (user) {
+      db.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(targetEmail);
+      return res.json({ success: true, message: `User ${targetEmail} is now admin` });
+    }
+    return res.status(400).json({ error: 'Users already exist. Pass ?email=existing@email.com to promote to admin.' });
+  }
+  const adminEmail    = email    || 'admin@bibix.com';
+  const adminPassword = password || 'Admin1234!';
+  const adminName     = name     || 'Admin';
+  const id            = uuidv4();
+  const hash          = bcrypt.hashSync(adminPassword, 10);
+  db.prepare('INSERT INTO users (id, name, email, password_hash, avatar_color, role) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, adminName, adminEmail, hash, '#4F46E5', 'admin');
+  const wsId = uuidv4();
+  db.prepare('INSERT INTO workspaces (id, name, description, created_by) VALUES (?, ?, ?, ?)')
+    .run(wsId, `${adminName}'s Workspace`, 'Main workspace', id);
+  db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)')
+    .run(wsId, id, 'owner');
+  res.json({ success: true, message: 'Admin created', email: adminEmail, password: adminPassword });
+});
+
 router.get('/users', authenticate, (req, res) => {
   const users = db.prepare('SELECT id, name, email, avatar_color FROM users').all();
   res.json(users);
