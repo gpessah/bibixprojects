@@ -1,18 +1,17 @@
 ---
 deployment:
   tasks:
-    # 1. Install backend dependencies (production only, no devDependencies)
-    - export REPO=$HOME/repositories/monday
-    - export APP=$HOME/bibix.ailabstech.com
+    # The repo lives at ~/bibixprojects on the server
+    - export APP=$HOME/bibixprojects
 
+    # 1. Install backend dependencies (production only)
     - /usr/local/bin/npm install --prefix $APP/backend --omit=dev
 
     # 2. Install frontend dependencies and build
     - /usr/local/bin/npm install --prefix $APP/frontend
-
     - /usr/local/bin/npm run build --prefix $APP/frontend
 
-    # 3. Copy the built React app into backend/public so Express can serve it
+    # 3. Copy built React app into backend/public so Express can serve it
     - mkdir -p $APP/backend/public
     - cp -r $APP/frontend/dist/. $APP/backend/public/
 
