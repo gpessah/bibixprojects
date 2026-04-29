@@ -37,6 +37,7 @@ app.use('/api/bibixbot', require('./routes/bibixbot'));
 app.use('/api/events',      require('./routes/events'));
 app.use('/api/scheduling',  require('./routes/scheduling'));
 app.use('/api/crm',         require('./routes/crm'));
+app.use('/api/invoices',    require('./routes/invoices'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 require('./bot/telegram');

@@ -8,10 +8,15 @@ node_modules/
 
 # Build output
 frontend/dist/
-backend/public/
 
 # Database — lives on the server, not in git
 backend/data/
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/*.db.lock
+backend/*_backup*
+backend/*_recovered*
 
 # Uploads — user files, not in git
 backend/uploads/
@@ -27,3 +32,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Claude Code local config
+.claude/

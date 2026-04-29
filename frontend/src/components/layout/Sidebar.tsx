@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../ui/Avatar';
@@ -78,6 +78,9 @@ export default function Sidebar() {
             <ContactRound size={16} /> CRM
           </Link>
         )}
+        <Link to="/invoices" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+          <FileText size={16} /> Invoices
+        </Link>
         <Link to="/admin" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
           <Shield size={16} /> User Management
         </Link>

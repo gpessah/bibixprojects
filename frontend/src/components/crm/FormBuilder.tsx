@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import {
   Plus, Trash2, ExternalLink, Copy, ToggleLeft, ToggleRight, Pencil,
-  X, Check, Code2, Download, EyeOff, Eye, Link2, ChevronDown,
+  X, Check, Code2, Download, EyeOff, Eye, Link2, BookOpen,
 } from 'lucide-react';
 import { useCRMStore, type CRMForm, type CRMField, type HiddenField } from '../../store/crmStore';
 import toast from 'react-hot-toast';
+import IntegrationGuide from './IntegrationGuide';
 
 const PUBLIC_BASE = window.location.origin;
 const API_BASE = window.location.origin + '/api';
@@ -472,6 +473,7 @@ export default function FormBuilder() {
   const [showNew, setShowNew] = useState(false);
   const [embedForm, setEmbedForm] = useState<CRMForm | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showGuide, setShowGuide] = useState(false);
 
   const handleDelete = async (f: CRMForm) => {
     if (!confirm(`Delete form "${f.name}"?`)) return;
@@ -500,10 +502,18 @@ export default function FormBuilder() {
             Create embeddable forms for your landing pages. Download the code and customize the styles.
           </p>
         </div>
-        <button onClick={() => setShowNew(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-monday-blue text-white text-sm rounded-lg hover:bg-blue-600">
-          <Plus size={15} /> New Form
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowGuide(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50"
+          >
+            <BookOpen size={15} /> Integration Guide
+          </button>
+          <button onClick={() => setShowNew(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-monday-blue text-white text-sm rounded-lg hover:bg-blue-600">
+            <Plus size={15} /> New Form
+          </button>
+        </div>
       </div>
 
       {forms.length === 0 ? (
@@ -589,6 +599,7 @@ export default function FormBuilder() {
       {showNew   && <FormEditorModal onClose={() => setShowNew(false)} />}
       {editForm  && <FormEditorModal form={editForm} onClose={() => setEditForm(null)} />}
       {embedForm && <EmbedCodeModal form={embedForm} fields={fields} onClose={() => setEmbedForm(null)} />}
+      {showGuide && <IntegrationGuide onClose={() => setShowGuide(false)} />}
     </div>
   );
 }

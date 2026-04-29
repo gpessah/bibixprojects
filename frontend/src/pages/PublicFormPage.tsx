@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import api from '../api/client';
 import FieldRenderer from '../components/crm/FieldRenderer';
-import type { CRMField } from '../store/crmStore';
+import type { CRMField, HiddenField } from '../store/crmStore';
 
 interface PublicForm {
   id: string;
@@ -20,6 +20,8 @@ export default function PublicFormPage() {
   const [form, setForm] = useState<PublicForm | null>(null);
   const [fields, setFields] = useState<CRMField[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
+  // Hidden field values read from URL params — sent on submit but never displayed
+  const [hiddenValues, setHiddenValues] = useState<Record<string, string>>({});
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -27,6 +29,19 @@ export default function PublicFormPage() {
       .then(({ data }) => {
         setForm(data.form);
         setFields(data.fields);
+
+        // Resolve hidden field values from current URL query params
+        const urlParams = new URLSearchParams(window.location.search);
+        const hiddenFields: HiddenField[] = data.hidden_fields ?? [];
+        const resolved: Record<string, string> = {};
+        for (const hf of hiddenFields) {
+          if (hf.field_key && hf.url_param) {
+            const val = urlParams.get(hf.url_param);
+            if (val !== null) resolved[hf.field_key] = val;
+          }
+        }
+        setHiddenValues(resolved);
+
         setState('ready');
       })
       .catch(() => {
@@ -50,7 +65,9 @@ export default function PublicFormPage() {
     setState('submitting');
 
     try {
-      const { data } = await api.post(`/crm/forms/${formId}/submit`, { values });
+      // Merge visible field values with silently-captured hidden field values
+      const payload = { ...hiddenValues, ...values };
+      const { data } = await api.post(`/crm/forms/${formId}/submit`, { values: payload });
       if (data.redirect_url) {
         window.location.href = data.redirect_url;
       } else {

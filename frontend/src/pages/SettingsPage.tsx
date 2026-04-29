@@ -301,6 +301,85 @@ function _unused() {
   return <div className="ml-11"><button onClick={connect} className="flex items-center gap-2 px-4 py-2 bg-[#1a73e8] text-white text-sm rounded-lg"><Calendar size={14} /> Connect</button></div>;
 }
 
+function ChangePasswordSection() {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast.error('All fields are required');
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast.error('New password must be at least 6 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('New passwords do not match');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put('/auth/password', { currentPassword, newPassword });
+      toast.success('Password updated');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to update password');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6 mt-6">
+      <h2 className="font-semibold text-gray-900 mb-6">Change Password</h2>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={e => setCurrentPassword(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-monday-blue"
+            placeholder="Enter your current password"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={e => setNewPassword(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-monday-blue"
+            placeholder="At least 6 characters"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Confirm New Password</label>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={e => setConfirmPassword(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-monday-blue"
+            placeholder="Re-enter your new password"
+          />
+        </div>
+      </div>
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        className="mt-6 px-6 py-2.5 bg-monday-blue text-white text-sm font-medium rounded-lg hover:bg-blue-600 disabled:opacity-60"
+      >
+        {saving ? 'Saving...' : 'Update Password'}
+      </button>
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { user, updateUser } = useAuthStore();
   const [searchParams] = useSearchParams();
@@ -361,7 +440,10 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <TelegramSection />
+        <ChangePasswordSection />
+        <div className="mt-6">
+          <TelegramSection />
+        </div>
         <div className="mt-6">
           <GoogleCalendarSection />
         </div>

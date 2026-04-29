@@ -58,7 +58,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     const state = useAuthStore.getState() as { user: User | null };
     const user: User | null = state.user;
     if (!user) return false;
-    if (user.role === 'admin') return true;
+    if (user.role === 'super_admin' || user.role === 'admin') return true;
     const perms: Partial<Record<AppModule, boolean>> = user.permissions ?? {};
     // If the key is absent → default allow (backward compatible)
     return perms[module] !== false;

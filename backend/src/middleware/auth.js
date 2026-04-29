@@ -16,12 +16,22 @@ function authenticate(req, res, next) {
   }
 }
 
+// Allows both 'admin' and 'super_admin'
 function requireAdmin(req, res, next) {
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
-  if (!user || user.role !== 'admin') {
+  if (!user || (user.role !== 'admin' && user.role !== 'super_admin')) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
 }
 
-module.exports = { authenticate, requireAdmin, JWT_SECRET };
+// Allows only 'super_admin'
+function requireSuperAdmin(req, res, next) {
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  if (!user || user.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Super admin access required' });
+  }
+  next();
+}
+
+module.exports = { authenticate, requireAdmin, requireSuperAdmin, JWT_SECRET };

@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'user' | 'readonly';
+export type UserRole = 'super_admin' | 'admin' | 'user' | 'readonly';
 
 export type AppModule = 'boards' | 'calendar' | 'bibixbot' | 'scheduling' | 'crm';
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, Shield, User, Eye, Settings2, ToggleLeft, ToggleRight, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, User, Eye, Settings2, ToggleLeft, ToggleRight, ChevronRight, Crown } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import type { User as UserType, UserRole, AppModule } from '../types';
@@ -10,9 +10,10 @@ import toast from 'react-hot-toast';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const ROLE_META: Record<UserRole, { label: string; color: string; icon: React.ReactNode }> = {
-  admin:    { label: 'Admin',     color: 'bg-purple-100 text-purple-700', icon: <Shield size={12} /> },
-  user:     { label: 'User',      color: 'bg-blue-100 text-blue-700',     icon: <User size={12} /> },
-  readonly: { label: 'Read Only', color: 'bg-gray-100 text-gray-600',     icon: <Eye size={12} /> },
+  super_admin: { label: 'Super Admin', color: 'bg-yellow-100 text-yellow-700', icon: <Crown size={12} /> },
+  admin:       { label: 'Admin',       color: 'bg-purple-100 text-purple-700', icon: <Shield size={12} /> },
+  user:        { label: 'User',        color: 'bg-blue-100 text-blue-700',     icon: <User size={12} /> },
+  readonly:    { label: 'Read Only',   color: 'bg-gray-100 text-gray-600',     icon: <Eye size={12} /> },
 };
 
 const MODULES: { id: AppModule; label: string; description: string; emoji: string }[] = [
@@ -31,6 +32,7 @@ interface AdminUser extends UserType {
   role: UserRole;
   permissions: Partial<Record<AppModule, boolean>>;
   created_at: string;
+  workspace_count?: number;
 }
 
 interface FormState {
@@ -40,26 +42,25 @@ const emptyForm = (): FormState => ({ name: '', email: '', password: '', role: '
 
 // ── Permissions panel ─────────────────────────────────────────────────────────
 
-function PermissionsPanel({ user, onClose, onSaved }: {
+function PermissionsPanel({ user, canEdit, onClose, onSaved }: {
   user: AdminUser;
+  canEdit: boolean;
   onClose: () => void;
   onSaved: (updated: AdminUser) => void;
 }) {
   const [perms, setPerms] = useState<Partial<Record<AppModule, boolean>>>(user.permissions ?? {});
   const [saving, setSaving] = useState(false);
 
-  // For admins permissions are irrelevant (always full access), but we still allow editing
-  const isAdmin = user.role === 'admin';
+  const isElevated = user.role === 'super_admin' || user.role === 'admin';
 
   const toggle = (mod: AppModule) => {
     setPerms(p => {
-      // If key absent → currently defaults to true; toggling means set to false
       const current = p[mod] !== false;
       return { ...p, [mod]: !current };
     });
   };
 
-  const getValue = (mod: AppModule) => perms[mod] !== false; // absent = allowed
+  const getValue = (mod: AppModule) => perms[mod] !== false;
 
   const handleSave = async () => {
     setSaving(true);
@@ -91,8 +92,8 @@ function PermissionsPanel({ user, onClose, onSaved }: {
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ROLE_META[user.role]?.color}`}>
               {ROLE_META[user.role]?.icon} {ROLE_META[user.role]?.label}
             </span>
-            {isAdmin && (
-              <span className="text-xs text-purple-500 font-medium">Admins always have full access</span>
+            {isElevated && (
+              <span className="text-xs text-purple-500 font-medium">Elevated roles always have full access</span>
             )}
           </div>
         </div>
@@ -104,16 +105,17 @@ function PermissionsPanel({ user, onClose, onSaved }: {
           <div className="space-y-2">
             {MODULES.map(mod => {
               const on = getValue(mod.id);
+              const disabled = isElevated || !canEdit;
               return (
                 <div key={mod.id}
                   className={`flex items-center gap-3 p-4 rounded-xl border transition-colors ${
-                    isAdmin
+                    disabled
                       ? 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
                       : on
                         ? 'border-blue-200 bg-blue-50/50 cursor-pointer hover:bg-blue-50'
                         : 'border-gray-200 bg-white cursor-pointer hover:bg-gray-50'
                   }`}
-                  onClick={() => !isAdmin && toggle(mod.id)}
+                  onClick={() => !disabled && toggle(mod.id)}
                 >
                   <span className="text-xl flex-shrink-0">{mod.emoji}</span>
                   <div className="flex-1 min-w-0">
@@ -121,11 +123,9 @@ function PermissionsPanel({ user, onClose, onSaved }: {
                     <div className="text-xs text-gray-400 mt-0.5">{mod.description}</div>
                   </div>
                   <div className="flex-shrink-0">
-                    {isAdmin
-                      ? <ToggleRight size={22} className="text-blue-400" />
-                      : on
-                        ? <ToggleRight size={22} className="text-blue-500" />
-                        : <ToggleLeft  size={22} className="text-gray-300" />
+                    {isElevated || on
+                      ? <ToggleRight size={22} className="text-blue-500" />
+                      : <ToggleLeft  size={22} className="text-gray-300" />
                     }
                   </div>
                 </div>
@@ -139,7 +139,7 @@ function PermissionsPanel({ user, onClose, onSaved }: {
           <button onClick={onClose} className="flex-1 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg border border-gray-200">
             Cancel
           </button>
-          {!isAdmin && (
+          {canEdit && !isElevated && (
             <button onClick={handleSave} disabled={saving}
               className="flex-1 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 font-medium">
               {saving ? 'Saving…' : 'Save'}
@@ -148,6 +148,63 @@ function PermissionsPanel({ user, onClose, onSaved }: {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Role change modal ─────────────────────────────────────────────────────────
+
+function RoleModal({ user, onClose, onSaved }: {
+  user: AdminUser;
+  onClose: () => void;
+  onSaved: (updated: AdminUser) => void;
+}) {
+  const [role, setRole] = useState<UserRole>(user.role);
+  const [saving, setSaving] = useState(false);
+  const selectableRoles: UserRole[] = ['super_admin', 'admin', 'user', 'readonly'];
+
+  const handleSave = async () => {
+    if (role === user.role) { onClose(); return; }
+    setSaving(true);
+    try {
+      const { data } = await api.put(`/admin/users/${user.id}/role`, { role });
+      onSaved(data);
+      toast.success('Role updated');
+      onClose();
+    } catch (e: unknown) {
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to update role');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Change Role" onClose={onClose} size="sm">
+      <div className="p-6 space-y-4">
+        <div>
+          <p className="text-sm text-gray-500 mb-1">Changing role for <span className="font-medium text-gray-800">{user.name}</span></p>
+          <p className="text-xs text-gray-400">{user.email}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {selectableRoles.map(r => {
+            const meta = ROLE_META[r];
+            return (
+              <button key={r} onClick={() => setRole(r)}
+                className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border-2 transition-colors ${role === r ? 'border-monday-blue bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                <span className={`p-1.5 rounded-full ${meta.color}`}>{meta.icon}</span>
+                <span className="text-xs font-medium text-gray-700">{meta.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex gap-2 justify-end pt-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+          <button onClick={handleSave} disabled={saving || role === user.role}
+            className="px-4 py-2 text-sm bg-monday-blue text-white rounded-lg hover:bg-blue-600 disabled:opacity-60">
+            {saving ? 'Saving…' : 'Update Role'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -160,9 +217,12 @@ export default function AdminPage() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [permUser, setPermUser] = useState<AdminUser | null>(null);
+  const [roleUser, setRoleUser] = useState<AdminUser | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm());
   const [saving, setSaving] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [accessLevel, setAccessLevel] = useState<'none' | 'admin' | 'super_admin'>('none');
+
+  const isSuperAdmin = accessLevel === 'super_admin';
 
   useEffect(() => { checkAndLoad(); }, []);
 
@@ -170,9 +230,11 @@ export default function AdminPage() {
     try {
       const { data } = await api.get('/admin/users');
       setUsers(data);
-      setIsAdmin(true);
+      // Determine caller's level from the me store (already loaded by App)
+      const myRole = me?.role;
+      setAccessLevel(myRole === 'super_admin' ? 'super_admin' : myRole === 'admin' ? 'admin' : 'none');
     } catch {
-      setIsAdmin(false);
+      setAccessLevel('none');
     } finally { setLoading(false); }
   };
 
@@ -213,9 +275,13 @@ export default function AdminPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this user?')) return;
-    await api.delete(`/admin/users/${id}`);
-    setUsers(u => u.filter(x => x.id !== id));
-    toast.success('User deleted');
+    try {
+      await api.delete(`/admin/users/${id}`);
+      setUsers(u => u.filter(x => x.id !== id));
+      toast.success('User deleted');
+    } catch (e: unknown) {
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed');
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -226,7 +292,7 @@ export default function AdminPage() {
     </div>
   );
 
-  if (!isAdmin) return (
+  if (accessLevel === 'none') return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
       <Shield size={48} className="text-gray-300" />
       <h2 className="text-xl font-bold text-gray-800">Admin Access Required</h2>
@@ -237,17 +303,32 @@ export default function AdminPage() {
     </div>
   );
 
+  const myRoleMeta = me?.role ? ROLE_META[me.role as UserRole] : null;
+
   return (
     <div className="flex-1 overflow-y-auto bg-gray-50">
       <div className="max-w-5xl mx-auto px-8 py-10">
+        {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-            <p className="text-sm text-gray-500 mt-1">{users.length} user{users.length !== 1 ? 's' : ''} registered</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+              {myRoleMeta && (
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${myRoleMeta.color}`}>
+                  {myRoleMeta.icon} {myRoleMeta.label}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-500 mt-1">
+              {users.length} user{users.length !== 1 ? 's' : ''}
+              {isSuperAdmin ? ' — showing all users' : ' — showing users in your workspaces'}
+            </p>
           </div>
-          <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2.5 bg-monday-blue text-white rounded-lg hover:bg-blue-600 text-sm font-medium">
-            <Plus size={16} /> New User
-          </button>
+          {isSuperAdmin && (
+            <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2.5 bg-monday-blue text-white rounded-lg hover:bg-blue-600 text-sm font-medium">
+              <Plus size={16} /> New User
+            </button>
+          )}
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -264,11 +345,8 @@ export default function AdminPage() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {users.map(u => {
-                const roleMeta = ROLE_META[u.role] || ROLE_META.user;
-                const isAdmin_ = u.role === 'admin';
-                const allowedCount = isAdmin_
-                  ? MODULES.length
-                  : MODULES.filter(m => (u.permissions ?? {})[m.id] !== false).length;
+                const roleMeta = ROLE_META[u.role] ?? ROLE_META.user;
+                const isElevated = u.role === 'super_admin' || u.role === 'admin';
 
                 return (
                   <tr key={u.id} className="hover:bg-gray-50 transition-colors">
@@ -283,9 +361,18 @@ export default function AdminPage() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${roleMeta.color}`}>
-                        {roleMeta.icon} {roleMeta.label}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${roleMeta.color}`}>
+                          {roleMeta.icon} {roleMeta.label}
+                        </span>
+                        {/* Role change button — super_admin only, not for own account */}
+                        {isSuperAdmin && u.id !== me?.id && (
+                          <button onClick={() => setRoleUser(u)} title="Change role"
+                            className="p-1 text-gray-300 hover:text-purple-500 hover:bg-purple-50 rounded transition-colors">
+                            <Shield size={13} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <button
@@ -294,7 +381,7 @@ export default function AdminPage() {
                       >
                         <div className="flex gap-1">
                           {MODULES.map(m => {
-                            const on = isAdmin_ || (u.permissions ?? {})[m.id] !== false;
+                            const on = isElevated || (u.permissions ?? {})[m.id] !== false;
                             return (
                               <span key={m.id} title={m.label}
                                 className={`w-5 h-5 rounded flex items-center justify-center text-[11px] ${on ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-300'}`}>
@@ -315,15 +402,19 @@ export default function AdminPage() {
                           className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded">
                           <Settings2 size={15} />
                         </button>
-                        <button onClick={() => openEdit(u)}
-                          className="p-1.5 text-gray-400 hover:text-monday-blue hover:bg-blue-50 rounded">
-                          <Pencil size={15} />
-                        </button>
-                        {u.id !== me?.id && (
-                          <button onClick={() => handleDelete(u.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded">
-                            <Trash2 size={15} />
-                          </button>
+                        {isSuperAdmin && (
+                          <>
+                            <button onClick={() => openEdit(u)}
+                              className="p-1.5 text-gray-400 hover:text-monday-blue hover:bg-blue-50 rounded">
+                              <Pencil size={15} />
+                            </button>
+                            {u.id !== me?.id && u.role !== 'super_admin' && (
+                              <button onClick={() => handleDelete(u.id)}
+                                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded">
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -335,8 +426,8 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* Edit / Create user modal */}
-      {showModal && (
+      {/* Edit / Create user modal (super_admin only) */}
+      {showModal && isSuperAdmin && (
         <Modal title={editing ? 'Edit User' : 'New User'} onClose={() => setShowModal(false)} size="sm">
           <div className="p-6 space-y-4">
             <div>
@@ -367,7 +458,7 @@ export default function AdminPage() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Role</label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {(Object.entries(ROLE_META) as [UserRole, typeof ROLE_META[UserRole]][]).map(([role, meta]) => (
                   <button key={role} onClick={() => setForm(f => ({ ...f, role }))}
                     className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border-2 transition-colors ${form.role === role ? 'border-monday-blue bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
@@ -391,7 +482,17 @@ export default function AdminPage() {
       {permUser && (
         <PermissionsPanel
           user={permUser}
+          canEdit={isSuperAdmin}
           onClose={() => setPermUser(null)}
+          onSaved={updated => setUsers(u => u.map(x => x.id === updated.id ? { ...x, ...updated } : x))}
+        />
+      )}
+
+      {/* Role change modal (super_admin only) */}
+      {roleUser && isSuperAdmin && (
+        <RoleModal
+          user={roleUser}
+          onClose={() => setRoleUser(null)}
           onSaved={updated => setUsers(u => u.map(x => x.id === updated.id ? { ...x, ...updated } : x))}
         />
       )}

@@ -16,6 +16,7 @@ import BibixBotPage from './pages/BibixBotPage';
 import BookingPage from './pages/BookingPage';
 import SchedulingPage from './pages/SchedulingPage';
 import CRMPage from './pages/CRMPage';
+import InvoicePage from './pages/InvoicePage';
 import PublicFormPage from './pages/PublicFormPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="bibixbot" element={<ModuleRoute module="bibixbot"><BibixBotPage /></ModuleRoute>} />
         <Route path="scheduling" element={<ModuleRoute module="scheduling"><SchedulingPage /></ModuleRoute>} />
         <Route path="crm" element={<ModuleRoute module="crm"><CRMPage /></ModuleRoute>} />
+        <Route path="invoices" element={<InvoicePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="admin" element={<AdminPage />} />
       </Route>

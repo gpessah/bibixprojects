@@ -25,6 +25,8 @@ const migrations = [
   "ALTER TABLE items ADD COLUMN parent_item_id TEXT",
   "ALTER TABLE board_columns ADD COLUMN width INTEGER NOT NULL DEFAULT 140",
   "ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}'",
+  // super_admin role: no schema change needed — role column already TEXT
+  // This migration is a no-op placeholder to document the new valid value
 ];
 for (const m of migrations) {
   try { rawDb.exec(m); } catch { /* column already exists */ }

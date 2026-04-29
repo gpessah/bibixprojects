@@ -538,7 +538,18 @@ router.get('/forms/:id/public', (req, res) => {
   const fieldDefs = db.prepare('SELECT * FROM crm_fields ORDER BY position').all().map(parseField);
   const formFields = parsed.fields.map(key => fieldDefs.find(f => f.field_key === key)).filter(Boolean);
 
-  res.json({ form: { id: form.id, name: form.name, description: form.description, settings: parsed.settings }, fields: formFields });
+  // Include hidden_fields so the public form renderer can read URL params and
+  // inject them into the submission payload without showing them to the visitor.
+  res.json({
+    form: {
+      id: form.id,
+      name: form.name,
+      description: form.description,
+      settings: parsed.settings,
+    },
+    fields: formFields,
+    hidden_fields: parsed.settings.hidden_fields ?? [],
+  });
 });
 
 router.post('/forms/:id/submit', (req, res) => {

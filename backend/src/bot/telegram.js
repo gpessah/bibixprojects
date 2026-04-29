@@ -137,6 +137,27 @@ function getBoardsForUser(userId) {
   `).all(userId, userId);
 }
 
+function getWorkspacesForUser(userId) {
+  return db.prepare(`
+    SELECT w.id, w.name FROM workspaces w
+    JOIN workspace_members wm ON w.id = wm.workspace_id
+    WHERE wm.user_id = ?
+    ORDER BY w.name
+  `).all(userId);
+}
+
+function getBoardsForWorkspace(userId, workspaceId) {
+  return db.prepare(`
+    SELECT DISTINCT b.id, b.name, b.icon FROM boards b
+    WHERE b.workspace_id = ?
+    AND (
+      EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = ? AND wm.user_id = ?)
+      OR EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = ?)
+    )
+    ORDER BY b.name
+  `).all(workspaceId, workspaceId, userId, userId);
+}
+
 function getGroupsForBoard(boardId) {
   return db.prepare('SELECT id, name FROM groups WHERE board_id = ? ORDER BY position').all(boardId);
 }
@@ -216,8 +237,9 @@ function parseReminderTime(parts) {
 }
 
 // ── Keyboards ────────────────────────────────────────────────────────────────
-const boardKeyboard = (boards) => ({ inline_keyboard: [...boards.map(b => [{ text: `${b.icon || '📋'} ${b.name}`, callback_data: `b:${b.id}` }]), [{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] });
-const groupKeyboard = (groups) => ({ inline_keyboard: [...groups.map(g => [{ text: g.name, callback_data: `g:${g.id}` }]), [{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] });
+const boardKeyboard     = (boards)      => ({ inline_keyboard: [...boards.map(b => [{ text: `${b.icon || '📋'} ${b.name}`, callback_data: `b:${b.id}` }]), [{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] });
+const groupKeyboard     = (groups)      => ({ inline_keyboard: [...groups.map(g => [{ text: g.name, callback_data: `g:${g.id}` }]), [{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] });
+const workspaceKeyboard = (workspaces)  => ({ inline_keyboard: [...workspaces.map(w => [{ text: `🏢 ${w.name}`, callback_data: `ws:${w.id}` }]), [{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] });
 
 // ── Timezone list & keyboard ──────────────────────────────────────────────────
 const TIMEZONES = [
@@ -557,24 +579,21 @@ if (!token) {
     const taskName = match[1]?.trim();
 
     const proceed = (name) => {
-      if (link.default_board_id && link.default_group_id) {
-        const board = db.prepare('SELECT name, icon FROM boards WHERE id = ?').get(link.default_board_id);
-        const group = db.prepare('SELECT name FROM groups WHERE id = ?').get(link.default_group_id);
-        if (board && group) {
-          const itemId = createTask(link.user_id, link.default_board_id, link.default_group_id, name);
-          setDefaultStatus(itemId, link.default_board_id);
-          notifyBoardUpdated(link.user_id, link.default_board_id);
-          const columns = getColumnsForBoard(link.default_board_id);
-          Object.assign(session, { step: 'fill_columns', pendingTask: name, boardId: link.default_board_id, boardName: `${board.icon || ''} ${board.name}`, groupName: group.name, itemId, columns, filled: new Set() });
-          sendColumnMenu(bot, chatId, session);
-          return;
-        }
-      }
-      const boards = getBoardsForUser(link.user_id);
-      if (!boards.length) { bot.sendMessage(chatId, "You don't have any boards yet. Create one in the app first."); return; }
-      session.step        = 'choose_board';
       session.pendingTask = name;
-      bot.sendMessage(chatId, `📋 *Which board for "${name}"?*`, { parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) });
+      // Always show workspace selection first
+      const workspaces = getWorkspacesForUser(link.user_id);
+      if (!workspaces.length) { bot.sendMessage(chatId, "You don't have any workspaces yet."); return; }
+      if (workspaces.length === 1) {
+        // Only one workspace — skip to board selection
+        const boards = getBoardsForWorkspace(link.user_id, workspaces[0].id);
+        if (!boards.length) { bot.sendMessage(chatId, "No boards in your workspace yet. Create one in the app first."); return; }
+        session.step        = 'choose_board';
+        session.workspaceId = workspaces[0].id;
+        bot.sendMessage(chatId, `📋 *Which board for "${name}"?*`, { parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) });
+      } else {
+        session.step = 'choose_workspace';
+        bot.sendMessage(chatId, `🏢 *Which workspace for "${name}"?*`, { parse_mode: 'Markdown', reply_markup: workspaceKeyboard(workspaces) });
+      }
     };
 
     if (taskName) {
@@ -1148,26 +1167,21 @@ if (!token) {
     if (session.step === 'awaiting_task_name') {
       const taskName = msg.text.trim();
       if (!taskName) return;
-      // If default board+group exist, create immediately
-      if (link.default_board_id && link.default_group_id) {
-        const board = db.prepare('SELECT name, icon FROM boards WHERE id = ?').get(link.default_board_id);
-        const group = db.prepare('SELECT name FROM groups WHERE id = ?').get(link.default_group_id);
-        if (board && group) {
-          const itemId  = createTask(link.user_id, link.default_board_id, link.default_group_id, taskName);
-          setDefaultStatus(itemId, link.default_board_id);
-          notifyBoardUpdated(link.user_id, link.default_board_id);
-          const columns = getColumnsForBoard(link.default_board_id);
-          Object.assign(session, { step: 'fill_columns', pendingTask: taskName, boardId: link.default_board_id, boardName: `${board.icon || ''} ${board.name}`, groupName: group.name, itemId, columns, filled: new Set() });
-          sendColumnMenu(bot, chatId, session);
-          return;
-        }
-      }
-      // No defaults → pick board
-      const boards = getBoardsForUser(link.user_id);
-      if (!boards.length) { bot.sendMessage(chatId, "You don't have any boards yet."); clearSession(chatId); return; }
-      session.step        = 'choose_board';
       session.pendingTask = taskName;
-      bot.sendMessage(chatId, `📋 *Which board for "${taskName}"?*`, { parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) });
+      // Always show workspace selection first
+      const workspaces = getWorkspacesForUser(link.user_id);
+      if (!workspaces.length) { bot.sendMessage(chatId, "You don't have any workspaces yet."); clearSession(chatId); return; }
+      if (workspaces.length === 1) {
+        // Only one workspace — skip to board selection
+        const boards = getBoardsForWorkspace(link.user_id, workspaces[0].id);
+        if (!boards.length) { bot.sendMessage(chatId, "No boards in your workspace yet."); clearSession(chatId); return; }
+        session.step        = 'choose_board';
+        session.workspaceId = workspaces[0].id;
+        bot.sendMessage(chatId, `📋 *Which board for "${taskName}"?*`, { parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) });
+      } else {
+        session.step = 'choose_workspace';
+        bot.sendMessage(chatId, `🏢 *Which workspace for "${taskName}"?*`, { parse_mode: 'Markdown', reply_markup: workspaceKeyboard(workspaces) });
+      }
       return;
     }
 
@@ -1429,6 +1443,26 @@ if (!token) {
     }
 
     if (data === 'col_back') { session.step = 'fill_columns'; sendColumnMenu(bot, chatId, session, msgId); return; }
+
+    // ── Workspace selected (task creation flow) ───────────────────────────────
+    if (data.startsWith('ws:') && session.step === 'choose_workspace') {
+      const workspaceId = data.slice(3);
+      const workspace   = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId);
+      if (!workspace || !link) return;
+      const boards = getBoardsForWorkspace(link.user_id, workspaceId);
+      if (!boards.length) {
+        bot.editMessageText(`That workspace has no boards yet. Create one in the app first.`, { chat_id: chatId, message_id: msgId });
+        clearSession(chatId);
+        return;
+      }
+      session.workspaceId = workspaceId;
+      session.step        = 'choose_board';
+      bot.editMessageText(
+        `📋 *Which board for "${session.pendingTask}"?*\n🏢 _${workspace.name}_`,
+        { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) }
+      );
+      return;
+    }
 
     if (data.startsWith('b:') && (session.step === 'choose_board' || session.step === 'choose_board_default')) {
       const boardId = data.slice(2);

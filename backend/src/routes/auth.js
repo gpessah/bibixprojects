@@ -91,9 +91,9 @@ router.put('/me', authenticate, (req, res) => {
   res.json(user);
 });
 
-// ── One-time setup endpoint — creates first admin if no users exist ────────────
+// ── One-time setup endpoint — creates first super_admin if no users exist ──────
 // Access: GET /api/auth/setup?secret=SETUP_SECRET
-// Deletes itself after first use by checking user count
+// Also allows promoting an existing user to super_admin by passing ?email=
 router.get('/setup', (req, res) => {
   const { secret, email, password, name } = req.query;
   if (secret !== (process.env.SETUP_SECRET || 'bibix-setup-2026')) {
@@ -101,14 +101,14 @@ router.get('/setup', (req, res) => {
   }
   const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
   if (userCount > 0) {
-    // Allow upgrading existing user to admin
+    // Allow promoting an existing user to super_admin
     const targetEmail = email || 'admin@bibix.com';
     const user = db.prepare('SELECT id, email, role FROM users WHERE email = ?').get(targetEmail);
     if (user) {
-      db.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(targetEmail);
-      return res.json({ success: true, message: `User ${targetEmail} is now admin` });
+      db.prepare("UPDATE users SET role = 'super_admin' WHERE email = ?").run(targetEmail);
+      return res.json({ success: true, message: `User ${targetEmail} is now super_admin` });
     }
-    return res.status(400).json({ error: 'Users already exist. Pass ?email=existing@email.com to promote to admin.' });
+    return res.status(400).json({ error: 'Users already exist. Pass ?email=existing@email.com to promote to super_admin.' });
   }
   const adminEmail    = email    || 'admin@bibix.com';
   const adminPassword = password || 'Admin1234!';
@@ -116,18 +116,51 @@ router.get('/setup', (req, res) => {
   const id            = uuidv4();
   const hash          = bcrypt.hashSync(adminPassword, 10);
   db.prepare('INSERT INTO users (id, name, email, password_hash, avatar_color, role) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, adminName, adminEmail, hash, '#4F46E5', 'admin');
+    .run(id, adminName, adminEmail, hash, '#4F46E5', 'super_admin');
   const wsId = uuidv4();
   db.prepare('INSERT INTO workspaces (id, name, description, created_by) VALUES (?, ?, ?, ?)')
     .run(wsId, `${adminName}'s Workspace`, 'Main workspace', id);
   db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)')
     .run(wsId, id, 'owner');
-  res.json({ success: true, message: 'Admin created', email: adminEmail, password: adminPassword });
+  res.json({ success: true, message: 'Super admin created', email: adminEmail, password: adminPassword });
 });
 
 router.get('/users', authenticate, (req, res) => {
-  const users = db.prepare('SELECT id, name, email, avatar_color FROM users').all();
+  const caller = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  if (!caller) return res.status(404).json({ error: 'User not found' });
+
+  // super_admin sees everyone
+  if (caller.role === 'super_admin') {
+    const users = db.prepare('SELECT id, name, email, avatar_color FROM users ORDER BY name ASC').all();
+    return res.json(users);
+  }
+
+  // admin and regular members see only users sharing at least one workspace
+  const users = db.prepare(`
+    SELECT DISTINCT u.id, u.name, u.email, u.avatar_color
+    FROM users u
+    JOIN workspace_members wm ON wm.user_id = u.id
+    WHERE wm.workspace_id IN (
+      SELECT workspace_id FROM workspace_members WHERE user_id = ?
+    )
+    ORDER BY u.name ASC
+  `).all(req.user.id);
   res.json(users);
+});
+
+router.put('/password', authenticate, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both currentPassword and newPassword are required' });
+  if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!user || !bcrypt.compareSync(currentPassword, user.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+
+  const password_hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(password_hash, req.user.id);
+  res.json({ success: true });
 });
 
 module.exports = router;
