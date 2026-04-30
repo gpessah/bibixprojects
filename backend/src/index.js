@@ -53,7 +53,24 @@ if (tgBot.enabled && process.env.TELEGRAM_WEBHOOK_URL && process.env.TELEGRAM_BO
   console.log('[Telegram] Webhook endpoint active at', whPath);
 }
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+const fetch = require('node-fetch');
+const SETUP_SECRET = process.env.SETUP_SECRET || 'bibix-setup-2026';
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok', pid: process.pid, v: 2 }));
+
+app.get('/api/ping', (req, res) => res.json({ ok: true, pid: process.pid }));
+
+app.get('/api/wh-info', async (req, res) => {
+  if (req.query.secret !== SETUP_SECRET) return res.status(403).json({ error: 'Forbidden' });
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+  if (!token) return res.json({ error: 'No token', webhookUrl, pid: process.pid });
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const data = await r.json();
+    res.json({ pid: process.pid, webhookUrl, telegramInfo: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── Serve built React frontend in production ──────────────────────────────────
 const FRONTEND_DIST = path.join(__dirname, '../public');
