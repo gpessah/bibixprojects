@@ -1652,9 +1652,29 @@ if (!token) {
   if (!WEBHOOK_URL) {
     bot.on('polling_error', (err) => {
       console.error('[Telegram] polling error:', err.message);
+      // If Telegram says webhook is active, stop polling in THIS process immediately.
+      // This kills the duplicate-response window when new code (webhook mode) deploys
+      // while this old process is still alive in polling mode.
+      if (err.message && (err.message.includes('409') || err.message.includes('webhook'))) {
+        console.warn('[Telegram] Webhook detected — stopping polling in this worker');
+        bot.stopPolling().catch(() => {});
+      }
     });
   }
 
-  console.log('[Telegram] Bot started (polling)');
+  // Graceful shutdown: stop polling immediately on SIGTERM/SIGINT so Passenger's
+  // 30-second graceful-shutdown window doesn't keep an old polling worker alive.
+  const shutdown = () => {
+    console.log('[Telegram] Shutdown signal received');
+    if (!WEBHOOK_URL) {
+      bot.stopPolling().then(() => process.exit(0)).catch(() => process.exit(0));
+    } else {
+      bot.deleteWebHook().catch(() => {}).finally(() => process.exit(0));
+    }
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT',  shutdown);
+
+  console.log('[Telegram] Bot started (' + (WEBHOOK_URL ? 'webhook' : 'polling') + ')');
   module.exports = { enabled: true, bot };
 }
