@@ -1669,7 +1669,7 @@ if (!token) {
     if (!WEBHOOK_URL) {
       bot.stopPolling().then(() => process.exit(0)).catch(() => process.exit(0));
     } else {
-      bot.deleteWebHook().catch(() => {}).finally(() => process.exit(0));
+      process.exit(0); // Keep webhook registered across restarts
     }
   };
   process.once('SIGTERM', shutdown);
