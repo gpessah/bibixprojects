@@ -1,0 +1,4 @@
+# Limit Passenger to 1 Node.js process so SQLite stays consistent across requests
+PassengerMaxInstances 1
+PassengerMaxPoolSize 1
+PassengerConcurrencyModel thread
