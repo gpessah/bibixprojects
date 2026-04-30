@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
+const fetch = require('node-fetch');
 const db = require('../db/database');
 const { authenticate, JWT_SECRET } = require('../middleware/auth');
 
@@ -146,20 +146,18 @@ router.get('/setup', (req, res) => {
 const SETUP_SECRET = () => process.env.SETUP_SECRET || 'bibix-setup-2026';
 
 // ── Webhook status check ─────────────────────────────────────────────────────
-router.get('/webhook-info', (req, res) => {
+router.get('/ping', (req, res) => res.json({ ok: true, pid: process.pid }));
+
+router.get('/webhook-info', async (req, res) => {
   if (req.query.secret !== SETUP_SECRET()) return res.status(403).json({ error: 'Forbidden' });
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
   if (!token) return res.json({ error: 'TELEGRAM_BOT_TOKEN not set', webhookUrl });
-  const url = `https://api.telegram.org/bot${token}/getWebhookInfo`;
-  https.get(url, (r) => {
-    let data = '';
-    r.on('data', c => { data += c; });
-    r.on('end', () => {
-      try { res.json({ pid: process.pid, webhookUrl, telegramInfo: JSON.parse(data) }); }
-      catch { res.json({ pid: process.pid, webhookUrl, raw: data }); }
-    });
-  }).on('error', e => res.status(500).json({ error: e.message }));
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const data = await r.json();
+    res.json({ pid: process.pid, webhookUrl, telegramInfo: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.get('/db-backup', (req, res) => {
