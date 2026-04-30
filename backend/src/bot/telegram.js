@@ -1594,7 +1594,21 @@ if (!token) {
     } catch (e) { console.error('[Bot] habit check error:', e.message); }
   }, 60000);
 
-  bot.on('polling_error', (err) => console.error('[Telegram] polling error:', err.message));
+  bot.on('polling_error', (err) => {
+    console.error('[Telegram] polling error:', err.message);
+    // 409 Conflict = another instance is polling the same token.
+    // Wait 30 s then stop our polling so the other instance wins.
+    if (err.message && err.message.includes('409')) {
+      console.warn('[Telegram] 409 Conflict detected — another instance is polling. Stopping this instance in 30 s…');
+      setTimeout(() => {
+        try { bot.stopPolling(); } catch (_) {}
+        // Restart polling after 60 s to take over if the other instance is gone
+        setTimeout(() => {
+          try { bot.startPolling(); console.log('[Telegram] Polling restarted after conflict backoff'); } catch (_) {}
+        }, 60000);
+      }, 30000);
+    }
+  });
 
   console.log('[Telegram] Bot started (polling)');
   module.exports = { enabled: true, bot };
