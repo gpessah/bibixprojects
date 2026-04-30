@@ -106,6 +106,12 @@ router.get('/setup', (req, res) => {
     const user = db.prepare('SELECT id, email, role FROM users WHERE email = ?').get(targetEmail);
     if (user) {
       db.prepare("UPDATE users SET role = 'super_admin' WHERE email = ?").run(targetEmail);
+      // Also reset password if provided
+      if (password) {
+        const hash = bcrypt.hashSync(password, 10);
+        db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(hash, targetEmail);
+        return res.json({ success: true, message: `User ${targetEmail} is now super_admin and password has been reset` });
+      }
       return res.json({ success: true, message: `User ${targetEmail} is now super_admin` });
     }
     return res.status(400).json({ error: 'Users already exist. Pass ?email=existing@email.com to promote to super_admin.' });
