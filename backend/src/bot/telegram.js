@@ -471,12 +471,28 @@ function sendColumnMenu(bot, chatId, session, msgId = null) {
 
 // ── Token check ──────────────────────────────────────────────────────────────
 const token = process.env.TELEGRAM_BOT_TOKEN;
+// Set TELEGRAM_WEBHOOK_URL in production .env (e.g. https://bibix.ailabstech.com)
+// to use webhook mode — safe when Passenger runs multiple workers.
+// Leave unset for local dev (falls back to polling).
+const WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL;
 
 if (!token) {
   console.log('[Telegram] TELEGRAM_BOT_TOKEN not set — bot disabled');
   module.exports = { enabled: false };
 } else {
-  const bot = new TelegramBot(token, { polling: true });
+  const bot = WEBHOOK_URL
+    ? new TelegramBot(token, { polling: false })   // webhook mode
+    : new TelegramBot(token, { polling: true });    // polling mode (local dev)
+
+  if (WEBHOOK_URL) {
+    const whPath = `/api/tgwh/${token}`;
+    bot.setWebHook(`${WEBHOOK_URL}${whPath}`)
+      .then(() => console.log(`[Telegram] Webhook registered → ${WEBHOOK_URL}${whPath}`))
+      .catch(e => console.error('[Telegram] Webhook setup failed:', e.message));
+    console.log('[Telegram] Bot started (webhook mode)');
+  } else {
+    console.log('[Telegram] Bot started (polling mode — local dev)');
+  }
 
   // ── /start ────────────────────────────────────────────────────────────────
   bot.onText(/\/start(?:\s+(.+))?/, (msg, match) => {
@@ -1594,21 +1610,11 @@ if (!token) {
     } catch (e) { console.error('[Bot] habit check error:', e.message); }
   }, 60000);
 
-  bot.on('polling_error', (err) => {
-    console.error('[Telegram] polling error:', err.message);
-    // 409 Conflict = another instance is polling the same token.
-    // Wait 30 s then stop our polling so the other instance wins.
-    if (err.message && err.message.includes('409')) {
-      console.warn('[Telegram] 409 Conflict detected — another instance is polling. Stopping this instance in 30 s…');
-      setTimeout(() => {
-        try { bot.stopPolling(); } catch (_) {}
-        // Restart polling after 60 s to take over if the other instance is gone
-        setTimeout(() => {
-          try { bot.startPolling(); console.log('[Telegram] Polling restarted after conflict backoff'); } catch (_) {}
-        }, 60000);
-      }, 30000);
-    }
-  });
+  if (!WEBHOOK_URL) {
+    bot.on('polling_error', (err) => {
+      console.error('[Telegram] polling error:', err.message);
+    });
+  }
 
   console.log('[Telegram] Bot started (polling)');
   module.exports = { enabled: true, bot };

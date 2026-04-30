@@ -40,7 +40,17 @@ app.use('/api/crm',         require('./routes/crm'));
 app.use('/api/invoices',    require('./routes/invoices'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
-require('./bot/telegram');
+const tgBot = require('./bot/telegram');
+
+// Webhook endpoint — only active in production (when TELEGRAM_WEBHOOK_URL is set)
+if (tgBot.enabled && process.env.TELEGRAM_WEBHOOK_URL && process.env.TELEGRAM_BOT_TOKEN) {
+  const whPath = `/api/tgwh/${process.env.TELEGRAM_BOT_TOKEN}`;
+  app.post(whPath, (req, res) => {
+    tgBot.bot.processUpdate(req.body);
+    res.sendStatus(200);
+  });
+  console.log('[Telegram] Webhook endpoint active at', whPath);
+}
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
