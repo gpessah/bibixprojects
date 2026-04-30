@@ -63,6 +63,7 @@ db.exec(`
     user_id TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL UNIQUE,
     username TEXT,
+    default_workspace_id TEXT,
     default_board_id TEXT,
     default_group_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -117,6 +118,9 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 `);
+
+// Migration: add default_workspace_id if it doesn't exist yet
+try { db.exec('ALTER TABLE telegram_links ADD COLUMN default_workspace_id TEXT'); } catch (_) {}
 
 // ── Session state ────────────────────────────────────────────────────────────
 const sessions  = new Map();
@@ -274,9 +278,9 @@ const menuKeyboard = () => ({ inline_keyboard: [
   [{ text: '📝 New Note',       callback_data: 'menu:note'      }, { text: '⏰ Set Reminder',   callback_data: 'menu:remind'    }],
   [{ text: '🎯 My Habits',      callback_data: 'menu:habits'    }, { text: '⏱️ Focus Session',  callback_data: 'menu:focus'     }],
   [{ text: '📋 Create Task',    callback_data: 'menu:task'      }, { text: '🔄 Change Board',   callback_data: 'menu:boards'    }],
-  [{ text: '🔔 My Reminders',   callback_data: 'menu:reminders' }, { text: '🌍 Timezone',       callback_data: 'menu:timezone'  }],
+  [{ text: '🏢 Workspace',      callback_data: 'menu:workspace' }, { text: '🌍 Timezone',       callback_data: 'menu:timezone'  }],
+  [{ text: '🔔 My Reminders',   callback_data: 'menu:reminders' }, { text: '❓ Help',            callback_data: 'menu:help'      }],
   ...(aiEnabled() ? [[{ text: '🤖 AI Tools',   callback_data: 'menu:ai'        }]] : []),
-  [{ text: '❓ Help',           callback_data: 'menu:help'      }],
 ]});
 
 const aiMenuKeyboard = () => ({ inline_keyboard: [
@@ -1381,6 +1385,17 @@ if (!token) {
       return;
     }
 
+    // ── Menu: change workspace ────────────────────────────────────────────────
+    if (data === 'menu:workspace') {
+      if (!link) return;
+      const workspaces = getWorkspacesForUser(link.user_id);
+      if (!workspaces?.length) { bot.editMessageText("You don't have any workspaces yet.", { chat_id: chatId, message_id: msgId }); return; }
+      clearSession(chatId);
+      getSession(chatId).step = 'choose_workspace_default';
+      bot.editMessageText('🏢 *Select your default workspace:*', { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: workspaceKeyboard(workspaces) });
+      return;
+    }
+
     // ── Menu: help ────────────────────────────────────────────────────────────
     if (data === 'menu:help') {
       const aiSection = aiEnabled()
@@ -1459,6 +1474,30 @@ if (!token) {
     }
 
     if (data === 'col_back') { session.step = 'fill_columns'; sendColumnMenu(bot, chatId, session, msgId); return; }
+
+    // ── Workspace selected (set default workspace flow) ───────────────────────
+    if (data.startsWith('ws:') && session.step === 'choose_workspace_default') {
+      const workspaceId = data.slice(3);
+      const workspace   = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(workspaceId);
+      if (!workspace || !link) return;
+      // Save default workspace and clear old board/group defaults (they belong to old workspace)
+      db.prepare('UPDATE telegram_links SET default_workspace_id = ?, default_board_id = NULL, default_group_id = NULL WHERE user_id = ?')
+        .run(workspaceId, link.user_id);
+      // Show boards in this workspace so user can pick a default board too
+      const boards = getBoardsForWorkspace(link.user_id, workspaceId);
+      if (!boards.length) {
+        bot.editMessageText(`✅ *Default workspace set to "${workspace.name}"*\n\nNo boards in this workspace yet — create one in the app first.`,
+          { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '⬅️ Back to Menu', callback_data: 'menu:back' }]] } });
+        clearSession(chatId);
+        return;
+      }
+      session.step = 'choose_board_default';
+      bot.editMessageText(
+        `✅ *Workspace: ${workspace.name}*\n\n📋 Now pick a default board:`,
+        { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: boardKeyboard(boards) }
+      );
+      return;
+    }
 
     // ── Workspace selected (task creation flow) ───────────────────────────────
     if (data.startsWith('ws:') && session.step === 'choose_workspace') {
