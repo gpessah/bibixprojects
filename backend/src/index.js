@@ -1,7 +1,8 @@
-require('dotenv').config();
+const path = require('path');
+// Use __dirname so dotenv always finds backend/.env regardless of cwd (Passenger quirk)
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 
 const app = express();
 
