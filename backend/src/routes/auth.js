@@ -74,7 +74,7 @@ router.post('/login', (req, res) => {
   }
 
   const token = jwt.sign({ id: user.id, name: user.name, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar_color: user.avatar_color } });
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar_color: user.avatar_color, role: user.role } });
 });
 
 router.get('/me', authenticate, (req, res) => {

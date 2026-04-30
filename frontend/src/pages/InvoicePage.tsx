@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   FileText, Building2, Users, Plus, Pencil, Trash2,
-  Download, X, ChevronDown, Save
+  Download, X, ChevronDown, Save, Eye
 } from 'lucide-react';
 import api from '../api/client';
 import toast from 'react-hot-toast';
+import InvoicePreview, { TemplateSelector, type PreviewInvoice } from '../components/invoices/InvoicePreview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ interface Invoice {
   subtotal: number;
   tax_amount: number;
   total: number;
+  template_id?: number;
   company_name?: string;
   client_name?: string;
   items?: InvoiceItem[];
@@ -309,6 +311,7 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
     notes:          invoice?.notes          || '',
     tax_rate:       invoice?.tax_rate       ?? 0,
     discount:       invoice?.discount       ?? 0,
+    template_id:    invoice?.template_id    ?? 1,
   });
 
   const [items, setItems] = useState<InvoiceItem[]>(
@@ -316,6 +319,7 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
   );
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
 
   // Recalculate item amounts and totals
   const updateItem = (idx: number, field: keyof InvoiceItem, value: string | number) => {
@@ -346,7 +350,7 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
     if (!form.issue_date)            { toast.error('Issue date is required');      return; }
     setSaving(true);
     try {
-      const payload = { ...form, items };
+      const payload = { ...form, items, template_id: form.template_id };
       const { data } = invoice
         ? await api.put(`/invoices/${invoice.id}`, payload)
         : await api.post('/invoices', payload);
@@ -357,20 +361,56 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
     } finally { setSaving(false); }
   };
 
-  const handleDownloadPdf = async () => {
-    if (!invoice) return;
-    setDownloading(true);
-    try {
-      const response = await api.get(`/invoices/${invoice.id}/pdf`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `invoice-${invoice.invoice_number}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      toast.error('Failed to generate PDF');
-    } finally { setDownloading(false); }
+  // Build a PreviewInvoice from current form state for inline preview
+  const buildPreviewInvoice = (): PreviewInvoice => {
+    const company = companies.find(c => c.id === form.my_company_id);
+    const client  = clients.find(c => c.id === form.client_id);
+    const subTotal = items.reduce((s, it) => s + it.amount, 0);
+    const discounted = subTotal - (form.discount || 0);
+    const taxAmt = discounted * ((form.tax_rate || 0) / 100);
+    return {
+      invoice_number: form.invoice_number || 'PREVIEW',
+      issue_date:     form.issue_date,
+      due_date:       form.due_date || undefined,
+      status:         form.status,
+      currency:       form.currency,
+      notes:          form.notes || undefined,
+      tax_rate:       form.tax_rate,
+      discount:       form.discount,
+      subtotal:       subTotal,
+      tax_amount:     taxAmt,
+      total:          discounted + taxAmt,
+      template_id:    form.template_id,
+      items,
+      company: {
+        name:         company?.name         || '',
+        address:      company?.address      || '',
+        city:         company?.city         || '',
+        country:      company?.country      || '',
+        phone:        company?.phone        || '',
+        email:        company?.email        || '',
+        vat_number:   company?.vat_number   || '',
+        bank_name:    company?.bank_name    || '',
+        bank_account: company?.bank_account || '',
+        bank_swift:   company?.bank_swift   || '',
+        logo_url:     company?.logo_url     || '',
+      },
+      client: {
+        name:           client?.name           || '',
+        address:        client?.address        || '',
+        city:           client?.city           || '',
+        country:        client?.country        || '',
+        phone:          client?.phone          || '',
+        email:          client?.email          || '',
+        vat_number:     client?.vat_number     || '',
+        contact_person: client?.contact_person || '',
+      },
+    };
+  };
+
+  const handleDownloadPdf = () => {
+    // Open preview modal — user can print/save as PDF from there
+    setPreviewing(true);
   };
 
   return (
@@ -526,14 +566,23 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
           </div>
         </div>
 
+        {/* Template selector */}
+        <TemplateSelector value={form.template_id} onChange={v => setF('template_id', v)} />
+
         {/* Actions */}
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          {invoice ? (
-            <button onClick={handleDownloadPdf} disabled={downloading}
-              className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 disabled:opacity-60">
-              <Download size={14} /> {downloading ? 'Generating…' : 'Download PDF'}
+          <div className="flex gap-2">
+            <button onClick={() => setPreviewing(true)}
+              className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
+              <Eye size={14} /> Preview
             </button>
-          ) : <div />}
+            {invoice && (
+              <button onClick={handleDownloadPdf} disabled={downloading}
+                className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 disabled:opacity-60">
+                <Download size={14} /> {downloading ? 'Opening…' : 'Print / PDF'}
+              </button>
+            )}
+          </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
             <button onClick={handleSave} disabled={saving}
@@ -543,6 +592,14 @@ function InvoiceModal({ invoice, companies, clients, onClose, onSaved }: {
           </div>
         </div>
       </div>
+
+      {/* Preview modal (rendered outside the scroll container via portal-like approach) */}
+      {previewing && (
+        <InvoicePreview
+          invoice={buildPreviewInvoice()}
+          onClose={() => setPreviewing(false)}
+        />
+      )}
     </ModalOverlay>
   );
 }
@@ -555,6 +612,7 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<Invoice | null | 'new'>(null);
+  const [previewInvoice, setPreviewInvoice] = useState<PreviewInvoice | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -582,14 +640,57 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
     } catch { toast.error('Failed to load invoice'); }
   };
 
-  const handleDownload = async (inv: Invoice) => {
+  const handlePreview = async (inv: Invoice) => {
     try {
-      const response = await api.get(`/invoices/${inv.id}/pdf`, { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
-      const a = document.createElement('a');
-      a.href = url; a.download = `invoice-${inv.invoice_number}.pdf`; a.click();
-      URL.revokeObjectURL(url);
-    } catch { toast.error('Failed to generate PDF'); }
+      // Load full invoice detail (with items + company/client detail)
+      const { data } = await api.get(`/invoices/${inv.id}`);
+      const company = companies.find(c => c.id === data.my_company_id);
+      const client  = clients.find(c => c.id === data.client_id);
+      const preview: PreviewInvoice = {
+        invoice_number: data.invoice_number,
+        issue_date:     data.issue_date,
+        due_date:       data.due_date || undefined,
+        status:         data.status,
+        currency:       data.currency,
+        notes:          data.notes || undefined,
+        tax_rate:       data.tax_rate,
+        discount:       data.discount,
+        subtotal:       data.subtotal,
+        tax_amount:     data.tax_amount,
+        total:          data.total,
+        template_id:    data.template_id ?? 1,
+        items:          data.items || [],
+        company: {
+          name:         company?.name         || data.company_name || '',
+          address:      company?.address      || '',
+          city:         company?.city         || '',
+          country:      company?.country      || '',
+          phone:        company?.phone        || '',
+          email:        company?.email        || '',
+          vat_number:   company?.vat_number   || '',
+          bank_name:    company?.bank_name    || '',
+          bank_account: company?.bank_account || '',
+          bank_swift:   company?.bank_swift   || '',
+          logo_url:     company?.logo_url     || '',
+        },
+        client: {
+          name:           client?.name           || data.client_name || '',
+          address:        client?.address        || '',
+          city:           client?.city           || '',
+          country:        client?.country        || '',
+          phone:          client?.phone          || '',
+          email:          client?.email          || '',
+          vat_number:     client?.vat_number     || '',
+          contact_person: client?.contact_person || '',
+        },
+      };
+      setPreviewInvoice(preview);
+    } catch { toast.error('Failed to load invoice'); }
+  };
+
+  const handleDownload = async (inv: Invoice) => {
+    // Open preview so user can print/save as PDF
+    await handlePreview(inv);
   };
 
   const handleSaved = (saved: Invoice) => {
@@ -653,12 +754,16 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => handlePreview(inv)}
+                        className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg" title="Preview">
+                        <Eye size={14} />
+                      </button>
                       <button onClick={() => handleEdit(inv.id)}
                         className="p-1.5 text-gray-400 hover:text-monday-blue hover:bg-blue-50 rounded-lg" title="Edit">
                         <Pencil size={14} />
                       </button>
                       <button onClick={() => handleDownload(inv)}
-                        className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Download PDF">
+                        className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Print / Save PDF">
                         <Download size={14} />
                       </button>
                       <button onClick={() => handleDelete(inv.id)}
@@ -681,6 +786,13 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
           clients={clients}
           onClose={() => setModal(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {previewInvoice && (
+        <InvoicePreview
+          invoice={previewInvoice}
+          onClose={() => setPreviewInvoice(null)}
         />
       )}
     </div>

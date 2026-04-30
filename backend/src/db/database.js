@@ -7,6 +7,11 @@ const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
+// node-sqlite3-wasm creates a lock directory; clean it up on startup
+// so crashed/killed processes don't leave a stale lock
+const LOCK_PATH = DB_PATH + '.lock';
+try { fs.rmSync(LOCK_PATH, { recursive: true, force: true }); } catch {}
+
 const rawDb = new WasmDatabase(DB_PATH);
 rawDb.exec('PRAGMA foreign_keys = ON');
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');

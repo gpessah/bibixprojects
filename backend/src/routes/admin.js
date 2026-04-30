@@ -135,7 +135,7 @@ router.delete('/users/:id', authenticate, requireSuperAdmin, (req, res) => {
 router.post('/promote-self', authenticate, (req, res) => {
   const count = db.prepare("SELECT COUNT(*) as c FROM users WHERE role IN ('admin', 'super_admin')").get();
   if (count.c > 0) return res.status(403).json({ error: 'Admin already exists' });
-  db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(req.user.id);
+  db.prepare("UPDATE users SET role = 'super_admin' WHERE id = ?").run(req.user.id);
   res.json({ success: true });
 });
 

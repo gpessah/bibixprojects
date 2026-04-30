@@ -54,6 +54,7 @@ db.exec(`
     subtotal REAL DEFAULT 0,
     tax_amount REAL DEFAULT 0,
     total REAL DEFAULT 0,
+    template_id INTEGER DEFAULT 1,
     created_by TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -70,6 +71,11 @@ db.exec(`
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
   );
 `);
+
+// ── Migration: add template_id column if it doesn't exist ────────────────────
+try {
+  db.exec(`ALTER TABLE invoices ADD COLUMN template_id INTEGER DEFAULT 1`);
+} catch (_) { /* column already exists */ }
 
 // ── Helper: recalc totals from items ─────────────────────────────────────────
 function calcTotals(items, taxRate, discount) {
@@ -204,7 +210,7 @@ router.get('/:id', authenticate, (req, res) => {
 router.post('/', authenticate, (req, res) => {
   const {
     invoice_number, my_company_id, client_id, issue_date, due_date,
-    status, currency, notes, tax_rate, discount, items = []
+    status, currency, notes, tax_rate, discount, items = [], template_id
   } = req.body;
 
   if (!invoice_number || !my_company_id || !client_id || !issue_date) {
@@ -216,11 +222,12 @@ router.post('/', authenticate, (req, res) => {
 
   db.prepare(`INSERT INTO invoices
     (id, invoice_number, my_company_id, client_id, issue_date, due_date, status, currency, notes,
-     tax_rate, discount, subtotal, tax_amount, total, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+     tax_rate, discount, subtotal, tax_amount, total, template_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(id, invoice_number, my_company_id, client_id, issue_date, due_date || null,
          status || 'draft', currency || 'USD', notes || null,
-         tax_rate || 0, discount || 0, subtotal, tax_amount, total, req.user.id);
+         tax_rate || 0, discount || 0, subtotal, tax_amount, total,
+         template_id || 1, req.user.id);
 
   const insertItem = db.prepare(`INSERT INTO invoice_items
     (id, invoice_id, description, quantity, unit_price, amount, position)
@@ -241,12 +248,13 @@ router.put('/:id', authenticate, (req, res) => {
 
   const {
     invoice_number, my_company_id, client_id, issue_date, due_date,
-    status, currency, notes, tax_rate, discount, items
+    status, currency, notes, tax_rate, discount, items, template_id
   } = req.body;
 
   const newItems = items !== undefined ? items : db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position').all(req.params.id);
   const usedTaxRate = tax_rate !== undefined ? tax_rate : existing.tax_rate;
   const usedDiscount = discount !== undefined ? discount : existing.discount;
+  const usedTemplateId = template_id !== undefined ? template_id : (existing.template_id || 1);
   const { subtotal, tax_amount, total } = calcTotals(newItems, usedTaxRate, usedDiscount);
 
   db.prepare(`UPDATE invoices SET
@@ -263,6 +271,7 @@ router.put('/:id', authenticate, (req, res) => {
     subtotal       = ?,
     tax_amount     = ?,
     total          = ?,
+    template_id    = ?,
     updated_at     = CURRENT_TIMESTAMP
     WHERE id = ?`)
     .run(
@@ -271,7 +280,7 @@ router.put('/:id', authenticate, (req, res) => {
       status || null, currency || null,
       notes !== undefined ? (notes || null) : existing.notes,
       usedTaxRate, usedDiscount, subtotal, tax_amount, total,
-      req.params.id
+      usedTemplateId, req.params.id
     );
 
   if (items !== undefined) {
