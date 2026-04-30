@@ -7,6 +7,22 @@ const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
+// ── Startup backup — copy DB before opening so restarts never destroy data ───
+const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
+try {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  if (fs.existsSync(DB_PATH)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    fs.copyFileSync(DB_PATH, path.join(BACKUP_DIR, `monday.db.${stamp}`));
+    // Keep only the 10 most recent startup backups
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('monday.db.'))
+      .sort()
+      .reverse();
+    files.slice(10).forEach(f => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch {} });
+  }
+} catch (e) { console.warn('[DB] Backup warning:', e.message); }
+
 // node-sqlite3-wasm creates a lock directory; clean it up on startup
 // so crashed/killed processes don't leave a stale lock
 const LOCK_PATH = DB_PATH + '.lock';

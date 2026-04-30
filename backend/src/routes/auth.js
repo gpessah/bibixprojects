@@ -2,8 +2,13 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 const db = require('../db/database');
 const { authenticate, JWT_SECRET } = require('../middleware/auth');
+
+const DB_PATH = path.join(__dirname, '../../data/monday.db');
+const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
 
 const router = express.Router();
 
@@ -129,6 +134,62 @@ router.get('/setup', (req, res) => {
   db.prepare('INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)')
     .run(wsId, id, 'owner');
   res.json({ success: true, message: 'Super admin created', email: adminEmail, password: adminPassword });
+});
+
+// ── Database backup / restore endpoints (super_admin only, or setup secret) ──
+// GET  /api/auth/db-backup?secret=...   → lists available backup files
+// GET  /api/auth/db-backup/download?secret=...&file=...  → download a backup
+// POST /api/auth/db-backup?secret=...   → create a manual backup right now
+// POST /api/auth/db-restore?secret=...&file=...  → restore from a backup file
+
+const SETUP_SECRET = () => process.env.SETUP_SECRET || 'bibix-setup-2026';
+
+router.get('/db-backup', (req, res) => {
+  if (req.query.secret !== SETUP_SECRET()) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.startsWith('monday.db')).sort().reverse();
+    const list = files.map(f => {
+      const stat = fs.statSync(path.join(BACKUP_DIR, f));
+      return { file: f, size: stat.size, mtime: stat.mtime };
+    });
+    res.json({ backups: list, count: list.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.get('/db-backup/download', (req, res) => {
+  if (req.query.secret !== SETUP_SECRET()) return res.status(403).json({ error: 'Forbidden' });
+  const file = req.query.file || 'monday.db';
+  const filePath = file === 'monday.db' ? DB_PATH : path.join(BACKUP_DIR, path.basename(file));
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+  res.download(filePath, path.basename(filePath));
+});
+
+router.post('/db-backup', (req, res) => {
+  if (req.query.secret !== SETUP_SECRET()) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dest = path.join(BACKUP_DIR, `monday.db.manual-${stamp}`);
+    fs.copyFileSync(DB_PATH, dest);
+    const stat = fs.statSync(dest);
+    res.json({ success: true, file: path.basename(dest), size: stat.size });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/db-restore', (req, res) => {
+  if (req.query.secret !== SETUP_SECRET()) return res.status(403).json({ error: 'Forbidden' });
+  const file = req.query.file;
+  if (!file) return res.status(400).json({ error: 'Pass ?file=backup-filename' });
+  const src = path.join(BACKUP_DIR, path.basename(file));
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'Backup file not found' });
+  try {
+    // Save current DB before overwriting
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    fs.copyFileSync(DB_PATH, path.join(BACKUP_DIR, `monday.db.pre-restore-${stamp}`));
+    fs.copyFileSync(src, DB_PATH);
+    res.json({ success: true, message: `Restored from ${file}. Restart the app to apply.` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.get('/users', authenticate, (req, res) => {

@@ -4,6 +4,12 @@ deployment:
     # The repo lives at ~/bibixprojects on the server
     - export APP=$HOME/bibixprojects
 
+    # 0. Backup the database BEFORE any deployment step (preserves data across deploys)
+    - mkdir -p $APP/backend/data/backups
+    - cp $APP/backend/data/monday.db $APP/backend/data/backups/monday.db.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+    # Keep only the 10 most recent backups to save disk space
+    - ls -1t $APP/backend/data/backups/monday.db.* 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+
     # 1. Install backend dependencies (production only)
     - /usr/local/bin/npm install --prefix $APP/backend --omit=dev
 
