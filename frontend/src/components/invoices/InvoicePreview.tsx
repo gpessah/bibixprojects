@@ -377,7 +377,7 @@ function renderInvoiceHTML(inv: PreviewInvoice, templateId: number): string {
   const notesBlock = inv.notes ? `
     <div class="inv-notes">
       <div class="inv-section-label">Notes</div>
-      <div class="inv-notes-text">${escHtml(inv.notes)}</div>
+      <div class="inv-notes-text" style="white-space:pre-line">${escHtml(inv.notes)}</div>
     </div>
   ` : '';
 
@@ -492,7 +492,33 @@ export default function InvoicePreview({ invoice, onClose }: InvoicePreviewProps
   }, [invoice, templateId]);
 
   const handlePrint = () => {
-    window.print();
+    const html = renderInvoiceHTML(invoice, templateId);
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) return;
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Invoice #${invoice.invoice_number}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: white; }
+    @page { size: A4; margin: 10mm; }
+    @media print {
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+  </style>
+</head>
+<body>
+  ${html}
+  <script>
+    window.onload = function() {
+      setTimeout(function() { window.print(); window.close(); }, 300);
+    };
+  <\/script>
+</body>
+</html>`);
+    printWindow.document.close();
   };
 
   const html = renderInvoiceHTML(invoice, templateId);
