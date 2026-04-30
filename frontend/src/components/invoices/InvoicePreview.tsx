@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Printer, X } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -472,24 +472,9 @@ interface InvoicePreviewProps {
 }
 
 export default function InvoicePreview({ invoice, onClose }: InvoicePreviewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const templateId = invoice.template_id ?? 1;
-
-  // Scale-to-fit: measure rendered height and shrink if > A4 height at 96dpi
-  useEffect(() => {
-    const el = containerRef.current?.querySelector('#invoice-content') as HTMLElement | null;
-    if (!el) return;
-    // A4 at 96dpi = ~1122px; we use the container's visible width as scale basis
-    const A4_HEIGHT = 1122;
-    const naturalHeight = el.scrollHeight;
-    if (naturalHeight > A4_HEIGHT) {
-      const scale = A4_HEIGHT / naturalHeight;
-      el.style.transform = `scale(${scale})`;
-      el.style.transformOrigin = 'top left';
-      // Collapse the extra space so it doesn't scroll weird
-      (el.parentElement as HTMLElement).style.height = `${naturalHeight * scale}px`;
-    }
-  }, [invoice, templateId]);
+  const [iframeHeight, setIframeHeight] = useState(1122);
 
   const handlePrint = () => {
     const html = renderInvoiceHTML(invoice, templateId);
@@ -523,65 +508,62 @@ export default function InvoicePreview({ invoice, onClose }: InvoicePreviewProps
 
   const html = renderInvoiceHTML(invoice, templateId);
 
+  // Measure iframe content height after load for proper display
+  const handleIframeLoad = () => {
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc) {
+        const h = doc.documentElement.scrollHeight || doc.body.scrollHeight;
+        setIframeHeight(Math.max(h, 400));
+      }
+    } catch {}
+  };
+
+  const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <style>* { margin:0; padding:0; box-sizing:border-box; } body { background:#fff; }</style>
+  </head><body>${html}</body></html>`;
+
   return (
-    <>
-      {/* Print-only: render invoice directly into document so window.print() captures it */}
-      <style>{`
-        @media print {
-          body > *:not(#print-root) { display: none !important; }
-          #print-root { display: block !important; position: fixed; inset: 0; z-index: 9999; }
-        }
-        @media screen {
-          #print-root { display: none; }
-        }
-      `}</style>
-
-      {/* Screen preview modal */}
-      <div className="fixed inset-0 z-[60] flex flex-col bg-black/60">
-        {/* Toolbar */}
-        <div className="no-print flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold text-gray-800">
-              Invoice Preview — #{invoice.invoice_number}
-            </span>
-            <span className="text-xs text-gray-400 capitalize bg-gray-100 px-2 py-0.5 rounded-full">
-              {['', 'Classic', 'Modern', 'Professional', 'Minimal', 'Bold'][templateId] || 'Classic'} template
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handlePrint}
-              className="flex items-center gap-2 px-4 py-2 bg-monday-blue text-white text-sm font-medium rounded-lg hover:bg-blue-600"
-            >
-              <Printer size={14} /> Print / Save PDF
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
-            >
-              <X size={18} />
-            </button>
-          </div>
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/60">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold text-gray-800">
+            Invoice Preview — #{invoice.invoice_number}
+          </span>
+          <span className="text-xs text-gray-400 capitalize bg-gray-100 px-2 py-0.5 rounded-full">
+            {['', 'Classic', 'Modern', 'Professional', 'Minimal', 'Bold'][templateId] || 'Classic'} template
+          </span>
         </div>
-
-        {/* Preview area */}
-        <div className="flex-1 overflow-y-auto py-8 px-4 flex justify-center">
-          <div
-            ref={containerRef}
-            className="bg-white shadow-2xl"
-            style={{ width: '794px', minWidth: '794px' }}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-4 py-2 bg-monday-blue text-white text-sm font-medium rounded-lg hover:bg-blue-600"
+          >
+            <Printer size={14} /> Print / Save PDF
+          </button>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+          >
+            <X size={18} />
+          </button>
         </div>
       </div>
 
-      {/* Invisible print target — same HTML injected here for actual printing */}
-      <div
-        id="print-root"
-        dangerouslySetInnerHTML={{ __html: html }}
-        style={{ display: 'none' }}
-      />
-    </>
+      {/* Preview area — isolated iframe so template CSS never leaks into the app */}
+      <div className="flex-1 overflow-y-auto py-8 px-4 flex justify-center">
+        <div className="bg-white shadow-2xl" style={{ width: '794px', minWidth: '794px' }}>
+          <iframe
+            ref={iframeRef}
+            srcDoc={fullHtml}
+            onLoad={handleIframeLoad}
+            style={{ width: '100%', height: `${iframeHeight}px`, border: 'none', display: 'block' }}
+            title="Invoice Preview"
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 
