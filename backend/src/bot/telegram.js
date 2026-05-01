@@ -513,15 +513,20 @@ if (!token) {
       return;
     }
 
-    const record = db.prepare('SELECT * FROM telegram_link_codes WHERE code = ?').get(code);
-    if (!record || new Date(record.expires_at) <= new Date()) {
+    // Read link codes from file (bypasses WASM SQLite in-memory isolation)
+    let linkCodes = {};
+    try { linkCodes = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../data/link_codes.json'), 'utf8')); } catch {}
+    const record = linkCodes[code];
+    if (!record || record.expires <= Date.now()) {
       bot.sendMessage(chatId, '❌ That code is invalid or has expired. Please generate a new one in Settings.'); return;
     }
 
-    db.prepare('DELETE FROM telegram_link_codes WHERE code = ?').run(code);
-    db.prepare('INSERT OR REPLACE INTO telegram_links (user_id, chat_id, username) VALUES (?,?,?)').run(record.user_id, String(chatId), msg.from?.username || null);
+    // Remove used code from file
+    delete linkCodes[code];
+    try { fs.writeFileSync(path.join(__dirname, '../../../data/link_codes.json'), JSON.stringify(linkCodes)); } catch {}
+    db.prepare('INSERT OR REPLACE INTO telegram_links (user_id, chat_id, username) VALUES (?,?,?)').run(record.userId, String(chatId), msg.from?.username || null);
 
-    const user = db.prepare('SELECT name FROM users WHERE id = ?').get(record.user_id);
+    const user = db.prepare('SELECT name FROM users WHERE id = ?').get(record.userId);
     bot.sendMessage(chatId,
       `✅ *Account linked!* Welcome, ${user?.name || 'there'}! 🎉\n\nI'm BibixBot — your Bibix Projects assistant.\n\n/menu — open the feature menu\n/help — all commands`,
       { parse_mode: 'Markdown' }
