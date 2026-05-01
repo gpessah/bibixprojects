@@ -513,8 +513,10 @@ if (!token) {
       return;
     }
 
-    const record = db.prepare("SELECT * FROM telegram_link_codes WHERE code = ? AND expires_at > datetime('now')").get(code);
-    if (!record) { bot.sendMessage(chatId, '❌ That code is invalid or has expired. Please generate a new one in Settings.'); return; }
+    const record = db.prepare('SELECT * FROM telegram_link_codes WHERE code = ?').get(code);
+    if (!record || new Date(record.expires_at) <= new Date()) {
+      bot.sendMessage(chatId, '❌ That code is invalid or has expired. Please generate a new one in Settings.'); return;
+    }
 
     db.prepare('DELETE FROM telegram_link_codes WHERE code = ?').run(code);
     db.prepare('INSERT OR REPLACE INTO telegram_links (user_id, chat_id, username) VALUES (?,?,?)').run(record.user_id, String(chatId), msg.from?.username || null);
