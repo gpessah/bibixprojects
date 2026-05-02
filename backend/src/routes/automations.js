@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { authenticate } = require('../middleware/auth');
+const { sendPushToUser } = require('../services/pushNotifications');
 
 const router = express.Router();
 
@@ -94,11 +95,12 @@ function executeAction(type, config, ctx, dbRef) {
   if (type === 'notify') {
     const targetUsers = config.user_ids || [];
     for (const userId of targetUsers) {
+      const notifTitle = config.title || `Automation triggered on "${ctx.item?.name}"`;
+      const notifBody = config.body || '';
       dbRef.prepare('INSERT INTO notifications (id, user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(uuidv4(), userId, 'automation',
-          config.title || `Automation triggered on "${ctx.item?.name}"`,
-          config.body || '',
+        .run(uuidv4(), userId, 'automation', notifTitle, notifBody,
           `/board/${ctx.item?.board_id}/item/${ctx.item?.id}`);
+      sendPushToUser(userId, notifTitle, notifBody);
     }
   } else if (type === 'set_value') {
     if (ctx.item && config.column_id) {

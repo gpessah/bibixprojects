@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('../db/database');
 const { authenticate } = require('../middleware/auth');
+const { sendPushToUser } = require('../services/pushNotifications');
 
 const router = express.Router();
 
@@ -46,6 +47,7 @@ router.post('/', authenticate, (req, res) => {
       .run(uuidv4(), m.user_id, 'update', `New update on "${item.name}"`,
         `${req.user.name}: ${content.trim().slice(0, 100)}`,
         `/board/${item.board_id}/item/${item_id}`);
+    sendPushToUser(m.user_id, `New update on "${item.name}"`, `${req.user.name}: ${content.trim().slice(0, 80)}`);
   }
 
   const update = db.prepare(`
