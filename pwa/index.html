@@ -13,280 +13,333 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --blue:#0073ea;--blue-dk:#0060c0;--blue-lt:#cce4ff;
-  --green:#00c875;--red:#e2445c;--orange:#fdab3d;
-  --bg:#f5f6f8;--card:#fff;--text:#323338;--muted:#676879;--border:#e6e9ef;
+  --blue:#0073ea;--blue-dk:#0055c8;--blue-lt:#e8f3ff;
+  --green:#00c875;--red:#e2445c;--orange:#fdab3d;--purple:#a25ddc;
+  --teal:#0096a0;--pink:#ff5ac4;--indigo:#5559df;
+  --bg:#f0f4f8;--card:#fff;--text:#1a1d23;--muted:#7a7e8a;--border:#e4e8f0;
   --st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px);
-  --r:12px;--shadow:0 2px 12px rgba(0,0,0,.08);--ease:.2s cubic-bezier(.4,0,.2,1);
+  --shadow:0 2px 16px rgba(0,0,0,.07);--r:16px;--ease:.18s cubic-bezier(.4,0,.2,1);
 }
-html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;-webkit-tap-highlight-color:transparent}
-#app{height:100%;display:flex;flex-direction:column;max-width:480px;margin:0 auto;position:relative;overflow:hidden;background:var(--bg)}
+html,body{height:100%;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--text);overflow:hidden;-webkit-tap-highlight-color:transparent}
+#app{height:100%;display:flex;flex-direction:column;max-width:430px;margin:0 auto;overflow:hidden;position:relative}
 
-/* screens */
-.screen{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);transform:translateX(100%);pointer-events:none;overflow:hidden;transition:transform var(--ease),opacity var(--ease)}
-.screen.active{transform:translateX(0);pointer-events:all}
-.screen.behind{transform:translateX(-28%)}
+/* ── Screens ── */
+.scr{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);transform:translateX(100%);pointer-events:none;overflow:hidden;transition:transform .22s cubic-bezier(.4,0,.2,1)}
+.scr.on{transform:translateX(0);pointer-events:all}
+.scr.back{transform:translateX(-28%)}
 
-/* topbar */
-.tb{background:var(--card);border-bottom:1px solid var(--border);padding:calc(var(--st) + 12px) 16px 12px;display:flex;align-items:center;gap:10px;flex-shrink:0;min-height:56px}
-.tb-title{font-size:17px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-back{width:36px;height:36px;border:none;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:8px;color:var(--blue);font-size:22px;flex-shrink:0;transition:background var(--ease)}
-.tb-back:active{background:var(--blue-lt)}
-.tb-btn{padding:7px 18px;background:var(--blue);color:#fff;border:none;border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;flex-shrink:0;transition:background var(--ease)}
-.tb-btn:active{background:var(--blue-dk)}
-.tb-btn:disabled{background:var(--border);color:var(--muted)}
+/* ── Login ── */
+#s-login{transform:translateX(0);background:linear-gradient(160deg,#003f8a 0%,#0073ea 55%,#38b6ff 100%)}
+.login-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 28px;padding-top:calc(var(--st)+40px)}
+.login-logo{width:88px;height:88px;background:#fff;border-radius:24px;display:flex;align-items:center;justify-content:center;box-shadow:0 12px 40px rgba(0,0,0,.25);margin-bottom:22px}
+.login-logo img{width:68px}
+.l-title{font-size:30px;font-weight:800;color:#fff;letter-spacing:-.5px;margin-bottom:6px}
+.l-sub{font-size:15px;color:rgba(255,255,255,.75);margin-bottom:40px}
+.l-card{width:100%;background:#fff;border-radius:20px;padding:28px;box-shadow:0 12px 50px rgba(0,0,0,.18)}
+.err{background:#fff0f2;border:1px solid #ffc5ce;color:var(--red);padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:14px;display:none}
+.fld label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px}
+.fld{margin-bottom:16px}
+.fld input{width:100%;padding:13px 16px;border:1.5px solid var(--border);border-radius:12px;font-size:16px;color:var(--text);outline:none;transition:border-color var(--ease);-webkit-appearance:none;background:#fff}
+.fld input:focus{border-color:var(--blue)}
+.btn-main{width:100%;padding:15px;background:var(--blue);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;transition:background var(--ease),transform var(--ease);letter-spacing:.2px}
+.btn-main:active{background:var(--blue-dk);transform:scale(.98)}
+.btn-main:disabled{background:#b3d4fa;cursor:default;transform:none}
 
-/* content */
-.content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
-.content.np{padding:0}
+/* ── Top bar ── */
+.tb{display:flex;align-items:center;gap:10px;padding:calc(var(--st)+14px) 20px 14px;background:var(--card);border-bottom:1px solid var(--border);flex-shrink:0}
+.tb-back{width:38px;height:38px;border:none;background:var(--blue-lt);border-radius:10px;color:var(--blue);font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background var(--ease)}
+.tb-back:active{background:#d0e8ff}
+.tb-title{font-size:17px;font-weight:700;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-action{padding:8px 20px;background:var(--blue);color:#fff;border:none;border-radius:20px;font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0;transition:background var(--ease)}
+.tb-action:active{background:var(--blue-dk)}
+.tb-action:disabled{background:var(--border);color:var(--muted)}
 
-/* step bar */
-.steps{display:flex;gap:6px;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--border);flex-shrink:0}
-.step{flex:1;height:4px;border-radius:2px;background:var(--border);transition:background var(--ease)}
-.step.active{background:var(--blue)}
-.step.done{background:var(--green)}
+/* ── Home header ── */
+.home-hdr{background:linear-gradient(135deg,#003f8a 0%,#0073ea 100%);padding:calc(var(--st)+22px) 22px 28px;flex-shrink:0;position:relative;overflow:hidden}
+.home-hdr::after{content:'';position:absolute;right:-40px;top:-40px;width:200px;height:200px;background:rgba(255,255,255,.06);border-radius:50%}
+.hdr-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.hdr-brand{display:flex;align-items:center;gap:10px}
+.hdr-logo{width:32px;height:32px;background:rgba(255,255,255,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.hdr-logo img{width:24px}
+.hdr-app{font-size:13px;color:rgba(255,255,255,.8);font-weight:600}
+.hdr-avatar{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;cursor:pointer;border:2px solid rgba(255,255,255,.3)}
+.hdr-greet{font-size:14px;color:rgba(255,255,255,.75);margin-bottom:4px}
+.hdr-name{font-size:24px;font-weight:800;color:#fff;letter-spacing:-.3px}
 
-/* login */
-#scr-login{transform:translateX(0);background:linear-gradient(155deg,#0060c0 0%,#0073ea 50%,#1eafff 100%)}
-.login-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;padding-top:calc(var(--st) + 32px)}
-.login-logo{width:80px;height:80px;background:#fff;border-radius:20px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(0,0,0,.2);margin-bottom:18px;overflow:hidden}
-.login-logo img{width:64px}
-.login-name{font-size:28px;font-weight:700;color:#fff;margin-bottom:4px;letter-spacing:-.5px}
-.login-tag{font-size:15px;color:rgba(255,255,255,.75);margin-bottom:36px}
-.login-card{width:100%;background:#fff;border-radius:var(--r);padding:24px;box-shadow:0 8px 40px rgba(0,0,0,.15)}
-.err{background:#fff0f2;border:1px solid #ffc5ce;color:var(--red);padding:10px 14px;border-radius:8px;font-size:14px;margin-bottom:14px;display:none}
-.field{margin-bottom:14px}
-.field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}
-.field input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:16px;color:var(--text);background:#fff;outline:none;transition:border-color var(--ease);-webkit-appearance:none}
-.field input:focus{border-color:var(--blue)}
-.btn{width:100%;padding:14px;background:var(--blue);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;cursor:pointer;transition:background var(--ease)}
-.btn:active{background:var(--blue-dk)}
-.btn:disabled{background:#c5e0ff;cursor:default}
+/* ── Grid ── */
+.content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 16px;padding-bottom:calc(var(--sb)+20px)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.gc{background:var(--card);border-radius:var(--r);padding:16px 10px;display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;box-shadow:var(--shadow);transition:transform var(--ease),box-shadow var(--ease);user-select:none;border:1.5px solid transparent;position:relative;overflow:hidden}
+.gc:active{transform:scale(.94);box-shadow:0 1px 6px rgba(0,0,0,.06)}
+.gc-ico{width:52px;height:52px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
+.gc-lbl{font-size:12px;font-weight:700;color:var(--text);text-align:center;line-height:1.3}
 
-/* home header */
-.home-hdr{background:var(--blue);padding:calc(var(--st) + 18px) 20px 22px;color:#fff;flex-shrink:0}
-.hdr-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.hdr-logo{width:26px;height:26px;background:rgba(255,255,255,.25);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}
-.hdr-logo img{width:20px}
-.hdr-app{font-size:12px;opacity:.7;font-weight:500}
-.hdr-greet{font-size:13px;opacity:.75}
-.hdr-name{font-size:22px;font-weight:700;letter-spacing:-.3px}
+/* Card colors */
+.c-blue .gc-ico{background:#e8f3ff}
+.c-green .gc-ico{background:#e0f9ee}
+.c-orange .gc-ico{background:#fff4e3}
+.c-purple .gc-ico{background:#f1eaff}
+.c-teal .gc-ico{background:#e0f7f8}
+.c-pink .gc-ico{background:#fff0f8}
+.c-red .gc-ico{background:#fff0f2}
+.c-indigo .gc-ico{background:#eeeffc}
+.c-yellow .gc-ico{background:#fffbe6}
 
-/* action cards */
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
-.card{background:var(--card);border-radius:var(--r);padding:18px 16px;box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;gap:10px;transition:transform var(--ease);user-select:none}
-.card:active{transform:scale(.97)}
-.card-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px}
-.ci-blue{background:#e8f3ff}
-.ci-green{background:#e0f9ee}
-.ci-purple{background:#f1eaff}
-.card-label{font-size:14px;font-weight:600}
-.card-sub{font-size:12px;color:var(--muted);margin-top:-4px}
+/* ── Content area ── */
+.inner{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
+.inner.np{padding:0}
 
-/* list */
-.list{background:var(--card);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);margin-bottom:12px}
-.li{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background var(--ease);-webkit-tap-highlight-color:transparent}
+/* ── Form fields ── */
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:12px;font-size:15px;color:var(--text);background:#fff;outline:none;transition:border-color var(--ease);-webkit-appearance:none;font-family:inherit}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--blue)}
+.form-group textarea{resize:none;min-height:90px}
+.card-box{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;margin-bottom:12px}
+
+/* ── List items ── */
+.list-wrap{background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;margin-bottom:12px}
+.li{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background var(--ease)}
 .li:last-child{border-bottom:none}
 .li:active{background:var(--bg)}
-.li-ico{width:36px;height:36px;border-radius:10px;background:var(--blue-lt);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.li-ico{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0}
 .li-txt{flex:1;min-width:0}
-.li-title{font-size:15px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li-title{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .li-sub{font-size:12px;color:var(--muted);margin-top:2px}
-.li-chev{color:#ccc;font-size:18px;flex-shrink:0}
+.li-chev{color:#ccc;font-size:18px}
+.li-del{width:34px;height:34px;border:none;background:#fff0f2;border-radius:8px;color:var(--red);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 
-/* section title */
-.sec{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:16px 0 8px}
+/* ── Steps ── */
+.steps{display:flex;gap:6px;padding:10px 16px;background:var(--card);border-bottom:1px solid var(--border);flex-shrink:0}
+.step{flex:1;height:4px;border-radius:2px;background:var(--border);transition:background var(--ease)}
+.step.on{background:var(--blue)}
+.step.done{background:var(--green)}
 
-/* loading / empty */
+/* ── Task column fields ── */
+.cf{background:var(--card);border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);margin-bottom:8px}
+.cf-lbl{font-size:13px;color:var(--muted);font-weight:600;width:80px;flex-shrink:0}
+.cf select,.cf input[type=date]{flex:1;border:none;outline:none;background:transparent;font-size:15px;font-weight:600;color:var(--text);-webkit-appearance:none;font-family:inherit;cursor:pointer}
+.task-name-inp{width:100%;font-size:22px;font-weight:700;border:none;outline:none;background:transparent;color:var(--text);padding:16px 0;border-bottom:2px solid var(--border);margin-bottom:18px;transition:border-color var(--ease)}
+.task-name-inp:focus{border-bottom-color:var(--blue)}
+.task-name-inp::placeholder{color:#ccc;font-weight:400}
+
+/* ── Parent picker ── */
+.pick{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background var(--ease)}
+.pick:last-child{border-bottom:none}
+.pick:active{background:var(--bg)}
+.pick-chk{width:24px;height:24px;border:2px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px;transition:all var(--ease)}
+.pick.sel .pick-chk{background:var(--blue);border-color:var(--blue);color:#fff}
+.pick-name{font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Loading / empty ── */
 .loading{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:48px 24px;color:var(--muted);font-size:14px}
 .spin{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .empty{display:flex;flex-direction:column;align-items:center;padding:48px 24px;gap:10px;color:var(--muted);text-align:center}
-.empty-ico{font-size:40px}
-.empty-t{font-size:15px;font-weight:500;color:var(--text)}
+.empty-ico{font-size:48px}
+.empty-t{font-size:16px;font-weight:600;color:var(--text)}
 
-/* task form */
-.task-input{width:100%;font-size:20px;font-weight:600;border:none;outline:none;background:transparent;color:var(--text);padding:16px 0;border-bottom:2px solid var(--border);margin-bottom:18px;transition:border-color var(--ease)}
-.task-input:focus{border-bottom-color:var(--blue)}
-.task-input::placeholder{color:#ccc;font-weight:400}
-.col-fields{display:flex;flex-direction:column;gap:8px}
-.cf{background:var(--card);border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow)}
-.cf-lbl{font-size:13px;color:var(--muted);font-weight:500;width:76px;flex-shrink:0}
-.cf-val{flex:1;min-width:0}
-.cf select,.cf input[type=date]{width:100%;border:none;outline:none;background:transparent;font-size:15px;font-weight:500;color:var(--text);-webkit-appearance:none;cursor:pointer;font-family:inherit}
+/* ── Section title ── */
+.sec{font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin:16px 0 8px;padding:0 2px}
 
-/* parent item picker */
-.pick-row{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background var(--ease)}
-.pick-row:last-child{border-bottom:none}
-.pick-row:active{background:var(--bg)}
-.pick-check{width:22px;height:22px;border:2px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:12px;transition:all var(--ease)}
-.pick-row.sel .pick-check{background:var(--blue);border-color:var(--blue);color:#fff}
-.pick-name{font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── Badge ── */
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;color:#fff}
+.badge-green{background:var(--green)}
+.badge-orange{background:var(--orange)}
+.badge-red{background:var(--red)}
 
-/* bottom nav */
-.bnav{display:flex;background:var(--card);border-top:1px solid var(--border);padding-bottom:var(--sb);flex-shrink:0}
-.ntab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:10px 0 8px;cursor:pointer;color:var(--muted);font-size:10px;font-weight:500;border:none;background:none;-webkit-tap-highlight-color:transparent}
-.ntab .ni{font-size:22px}
-.ntab.on{color:var(--blue)}
-
-/* profile */
-.prof-hdr{display:flex;align-items:center;gap:14px;padding:20px 16px;border-bottom:1px solid var(--border)}
-.avatar{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0}
-.prof-name{font-size:17px;font-weight:600}
-.prof-email{font-size:13px;color:var(--muted);margin-top:2px}
-.pm{display:flex;align-items:center;gap:14px;padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:background var(--ease);font-size:15px}
-.pm:last-child{border-bottom:none}
-.pm:active{background:var(--bg)}
-.pm .pmi{font-size:20px;width:28px;text-align:center}
-.pm.danger{color:var(--red)}
-
-/* group dot */
-.gdot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-
-/* toast */
-#toast{position:fixed;bottom:calc(var(--sb) + 24px);left:50%;transform:translateX(-50%) translateY(120px);background:#323338;color:#fff;padding:12px 20px;border-radius:24px;font-size:14px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.25);transition:transform .3s cubic-bezier(.34,1.56,.64,1);z-index:9999;pointer-events:none;white-space:nowrap;max-width:90%;text-align:center}
+/* ── Toast ── */
+#toast{position:fixed;bottom:calc(var(--sb)+20px);left:50%;transform:translateX(-50%) translateY(120px);background:#1a1d23;color:#fff;padding:12px 22px;border-radius:28px;font-size:14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.2);transition:transform .3s cubic-bezier(.34,1.56,.64,1);z-index:9999;pointer-events:none;white-space:nowrap;max-width:90%;text-align:center}
 #toast.show{transform:translateX(-50%) translateY(0)}
 #toast.ok{background:var(--green)}
 #toast.err{background:var(--red)}
+
+/* ── Group dot ── */
+.gdot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+
+/* ── Chat (BibixBot) ── */
+.chat-wrap{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:82%;padding:12px 16px;border-radius:18px;font-size:15px;line-height:1.45;word-break:break-word}
+.msg.bot{background:var(--card);box-shadow:var(--shadow);border-bottom-left-radius:4px;align-self:flex-start;color:var(--text)}
+.msg.user{background:var(--blue);color:#fff;border-bottom-right-radius:4px;align-self:flex-end}
+.msg.thinking{color:var(--muted);font-style:italic}
+.chat-input-row{display:flex;gap:10px;padding:12px 16px;padding-bottom:calc(var(--sb)+12px);background:var(--card);border-top:1px solid var(--border);flex-shrink:0}
+.chat-inp{flex:1;padding:12px 16px;border:1.5px solid var(--border);border-radius:24px;font-size:15px;outline:none;color:var(--text);background:#fff;font-family:inherit;transition:border-color var(--ease)}
+.chat-inp:focus{border-color:var(--blue)}
+.chat-send{width:44px;height:44px;background:var(--blue);border:none;border-radius:50%;color:#fff;font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background var(--ease)}
+.chat-send:active{background:var(--blue-dk)}
+.chat-send:disabled{background:var(--border)}
 </style>
 </head>
 <body>
 <div id="app">
 
-  <!-- LOGIN -->
-  <div class="screen active" id="scr-login">
-    <div class="login-wrap">
-      <div class="login-logo"><img src="/bibix-logo.png" alt="Bibix"></div>
-      <div class="login-name">Bibix Projects</div>
-      <div class="login-tag">Manage your work anywhere</div>
-      <div class="login-card">
-        <div class="err" id="login-err"></div>
-        <div class="field">
-          <label>Email</label>
-          <input type="email" id="l-email" autocomplete="email" placeholder="you@example.com">
-        </div>
-        <div class="field">
-          <label>Password</label>
-          <input type="password" id="l-pwd" autocomplete="current-password" placeholder="••••••••">
-        </div>
-        <button class="btn" id="l-btn" onclick="doLogin()">Sign In</button>
-      </div>
+<!-- LOGIN -->
+<div class="scr on" id="s-login">
+  <div class="login-wrap">
+    <div class="login-logo"><img src="/bibix-logo.png" alt="Bibix"></div>
+    <div class="l-title">Bibix Projects</div>
+    <div class="l-sub">Your work, always with you</div>
+    <div class="l-card">
+      <div class="err" id="l-err"></div>
+      <div class="fld"><label>Email</label><input type="email" id="l-email" autocomplete="email" placeholder="you@example.com"></div>
+      <div class="fld"><label>Password</label><input type="password" id="l-pwd" autocomplete="current-password" placeholder="••••••••"></div>
+      <button class="btn-main" id="l-btn" onclick="doLogin()">Sign In</button>
     </div>
   </div>
+</div>
 
-  <!-- HOME -->
-  <div class="screen" id="scr-home">
-    <div class="home-hdr">
-      <div class="hdr-row">
+<!-- HOME -->
+<div class="scr" id="s-home">
+  <div class="home-hdr">
+    <div class="hdr-top">
+      <div class="hdr-brand">
         <div class="hdr-logo"><img src="/bibix-logo.png" alt=""></div>
         <span class="hdr-app">Bibix Projects</span>
       </div>
-      <div class="hdr-greet">Good <span id="tod">day</span>,</div>
-      <div class="hdr-name" id="hdr-name">–</div>
+      <div class="hdr-avatar" id="hdr-av" onclick="push('profile')">?</div>
     </div>
-    <div class="content">
-      <div class="grid">
-        <div class="card" onclick="startWiz('new')">
-          <div class="card-icon ci-blue">✏️</div>
-          <div><div class="card-label">New Task</div><div class="card-sub">Add to a board</div></div>
-        </div>
-        <div class="card" onclick="startWiz('sub')">
-          <div class="card-icon ci-green">🔗</div>
-          <div><div class="card-label">Subtask</div><div class="card-sub">Under existing task</div></div>
-        </div>
+    <div class="hdr-greet">Good <span id="tod">day</span>,</div>
+    <div class="hdr-name" id="hdr-nm">–</div>
+  </div>
+  <div class="content">
+    <div class="grid">
+      <div class="gc c-blue" onclick="push('set-reminder')">
+        <div class="gc-ico">🔔</div><div class="gc-lbl">Set Reminder</div>
       </div>
-      <div class="sec">Recent Boards</div>
-      <div id="recent-boards"><div class="loading"><div class="spin"></div></div></div>
-    </div>
-    <div class="bnav">
-      <button class="ntab on" onclick="goTab('home')"><span class="ni">🏠</span>Home</button>
-      <button class="ntab" onclick="goTab('boards')"><span class="ni">📋</span>Boards</button>
-      <button class="ntab" onclick="goTab('profile')"><span class="ni">👤</span>Profile</button>
+      <div class="gc c-green" onclick="startWiz('new')">
+        <div class="gc-ico">✏️</div><div class="gc-lbl">Add Task</div>
+      </div>
+      <div class="gc c-orange" onclick="push('invoices')">
+        <div class="gc-ico">🧾</div><div class="gc-lbl">Create Invoice</div>
+      </div>
+      <div class="gc c-purple" onclick="push('reminders-list')">
+        <div class="gc-ico">📋</div><div class="gc-lbl">Reminders List</div>
+      </div>
+      <div class="gc c-pink" onclick="push('crm')">
+        <div class="gc-ico">👥</div><div class="gc-lbl">Marketing</div>
+      </div>
+      <div class="gc c-teal" onclick="push('calendar')">
+        <div class="gc-ico">📅</div><div class="gc-lbl">Calendar</div>
+      </div>
+      <div class="gc c-indigo" onclick="push('scheduling')">
+        <div class="gc-ico">🗓️</div><div class="gc-lbl">Scheduling</div>
+      </div>
+      <div class="gc c-yellow" onclick="push('notif-settings')">
+        <div class="gc-ico">🔕</div><div class="gc-lbl">Notifications</div>
+      </div>
+      <div class="gc c-red" onclick="push('bibixbot')">
+        <div class="gc-ico">🤖</div><div class="gc-lbl">AI Tools</div>
+      </div>
     </div>
   </div>
+</div>
 
-  <!-- BOARDS -->
-  <div class="screen" id="scr-boards">
-    <div class="home-hdr">
-      <div class="hdr-row"><div class="hdr-logo"><img src="/bibix-logo.png" alt=""></div><span class="hdr-app">Bibix Projects</span></div>
-      <div class="hdr-name">My Boards</div>
-    </div>
-    <div class="content" id="boards-body"><div class="loading"><div class="spin"></div></div></div>
-    <div class="bnav">
-      <button class="ntab" onclick="goTab('home')"><span class="ni">🏠</span>Home</button>
-      <button class="ntab on" onclick="goTab('boards')"><span class="ni">📋</span>Boards</button>
-      <button class="ntab" onclick="goTab('profile')"><span class="ni">👤</span>Profile</button>
-    </div>
+<!-- SET REMINDER -->
+<div class="scr" id="s-set-reminder">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Set Reminder</div><button class="tb-action" onclick="saveReminder()">Save</button></div>
+  <div class="inner">
+    <div class="form-group"><label>What to remind</label><textarea id="rem-content" placeholder="Remind me to…"></textarea></div>
+    <div class="form-group"><label>Date & Time</label><input type="datetime-local" id="rem-dt"></div>
   </div>
+</div>
 
-  <!-- PROFILE -->
-  <div class="screen" id="scr-profile">
-    <div class="home-hdr">
-      <div class="hdr-row"><div class="hdr-logo"><img src="/bibix-logo.png" alt=""></div><span class="hdr-app">Bibix Projects</span></div>
-      <div class="hdr-name">My Account</div>
-    </div>
-    <div class="content" id="profile-body"></div>
-    <div class="bnav">
-      <button class="ntab" onclick="goTab('home')"><span class="ni">🏠</span>Home</button>
-      <button class="ntab" onclick="goTab('boards')"><span class="ni">📋</span>Boards</button>
-      <button class="ntab on" onclick="goTab('profile')"><span class="ni">👤</span>Profile</button>
-    </div>
-  </div>
+<!-- REMINDERS LIST -->
+<div class="scr" id="s-reminders-list">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Reminders</div></div>
+  <div class="inner np" id="rem-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
 
-  <!-- STEP: WORKSPACE -->
-  <div class="screen" id="scr-ws">
-    <div class="tb">
-      <button class="tb-back" onclick="goBack()">‹</button>
-      <div class="tb-title">Select Workspace</div>
-    </div>
-    <div class="steps" id="ws-steps"></div>
-    <div class="content np" id="ws-body"><div class="loading"><div class="spin"></div></div></div>
-  </div>
+<!-- INVOICES -->
+<div class="scr" id="s-invoices">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Invoices</div><button class="tb-action" onclick="openInvoiceForm()">+ New</button></div>
+  <div class="inner np" id="inv-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
 
-  <!-- STEP: BOARD -->
-  <div class="screen" id="scr-board">
-    <div class="tb">
-      <button class="tb-back" onclick="goBack()">‹</button>
-      <div class="tb-title">Select Board</div>
-    </div>
-    <div class="steps" id="board-steps"></div>
-    <div class="content np" id="board-body"><div class="loading"><div class="spin"></div></div></div>
+<!-- CREATE INVOICE FORM -->
+<div class="scr" id="s-invoice-form">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">New Invoice</div><button class="tb-action" onclick="saveInvoice()">Save</button></div>
+  <div class="inner">
+    <div class="form-group"><label>Client Name</label><input type="text" id="inv-client" placeholder="Client name"></div>
+    <div class="form-group"><label>Description</label><textarea id="inv-desc" placeholder="Services rendered…"></textarea></div>
+    <div class="form-group"><label>Amount</label><input type="number" id="inv-amount" placeholder="0.00" step="0.01"></div>
+    <div class="form-group"><label>Due Date</label><input type="date" id="inv-due"></div>
   </div>
+</div>
 
-  <!-- STEP: GROUP -->
-  <div class="screen" id="scr-group">
-    <div class="tb">
-      <button class="tb-back" onclick="goBack()">‹</button>
-      <div class="tb-title">Select Group</div>
-    </div>
-    <div class="steps" id="group-steps"></div>
-    <div class="content np" id="group-body"><div class="loading"><div class="spin"></div></div></div>
-  </div>
+<!-- CRM -->
+<div class="scr" id="s-crm">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Contacts</div></div>
+  <div class="inner np" id="crm-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
 
-  <!-- STEP: PARENT TASK -->
-  <div class="screen" id="scr-parent">
-    <div class="tb">
-      <button class="tb-back" onclick="goBack()">‹</button>
-      <div class="tb-title">Select Parent Task</div>
-      <button class="tb-btn" id="parent-next" onclick="openForm()" disabled>Next</button>
-    </div>
-    <div class="steps" id="parent-steps"></div>
-    <div class="content np" id="parent-body"><div class="loading"><div class="spin"></div></div></div>
-  </div>
+<!-- CALENDAR -->
+<div class="scr" id="s-calendar">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Upcoming Events</div></div>
+  <div class="inner np" id="cal-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
 
-  <!-- STEP: TASK FORM -->
-  <div class="screen" id="scr-form">
-    <div class="tb">
-      <button class="tb-back" onclick="goBack()">‹</button>
-      <div class="tb-title" id="form-title">New Task</div>
-      <button class="tb-btn" id="save-btn" onclick="saveTask()">Save</button>
-    </div>
-    <div class="steps" id="form-steps"></div>
-    <div class="content">
-      <input class="task-input" id="task-name" type="text" placeholder="Task name…" autocomplete="off" autocorrect="off">
-      <div class="col-fields" id="col-fields"></div>
-    </div>
+<!-- SCHEDULING -->
+<div class="scr" id="s-scheduling">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Scheduling</div></div>
+  <div class="inner np" id="sched-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
+
+<!-- NOTIFICATIONS SETTINGS -->
+<div class="scr" id="s-notif-settings">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Notifications</div></div>
+  <div class="inner" id="notif-body"></div>
+</div>
+
+<!-- BIBIXBOT / AI TOOLS -->
+<div class="scr" id="s-bibixbot">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">🤖 AI Tools</div></div>
+  <div class="chat-wrap" id="chat-msgs"></div>
+  <div class="chat-input-row">
+    <input class="chat-inp" id="chat-inp" type="text" placeholder="Ask anything…" autocomplete="off">
+    <button class="chat-send" id="chat-send" onclick="sendChat()">➤</button>
   </div>
+</div>
+
+<!-- PROFILE -->
+<div class="scr" id="s-profile">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">My Account</div></div>
+  <div class="inner" id="prof-body"></div>
+</div>
+
+<!-- WIZARD: WORKSPACE -->
+<div class="scr" id="s-ws">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title" id="ws-ttl">Select Workspace</div></div>
+  <div class="steps" id="ws-steps"></div>
+  <div class="inner np" id="ws-body"><div class="loading"><div class="spin"></div></div></div>
+</div>
+<!-- WIZARD: BOARD -->
+<div class="scr" id="s-board">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Select Board</div></div>
+  <div class="steps" id="board-steps"></div>
+  <div class="inner np" id="board-body"><div class="loading"><div class="spin"></div></div></div>
+</div>
+<!-- WIZARD: GROUP -->
+<div class="scr" id="s-grp">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Select Group</div></div>
+  <div class="steps" id="grp-steps"></div>
+  <div class="inner np" id="grp-body"><div class="loading"><div class="spin"></div></div></div>
+</div>
+<!-- WIZARD: PARENT -->
+<div class="scr" id="s-parent">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Select Parent Task</div><button class="tb-action" id="par-next" onclick="openForm()" disabled>Next</button></div>
+  <div class="steps" id="par-steps"></div>
+  <div class="inner np" id="par-body"><div class="loading"><div class="spin"></div></div></div>
+</div>
+<!-- WIZARD: FORM -->
+<div class="scr" id="s-form">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title" id="form-ttl">New Task</div><button class="tb-action" id="save-btn" onclick="saveTask()">Save</button></div>
+  <div class="steps" id="form-steps"></div>
+  <div class="inner">
+    <input class="task-name-inp" id="task-nm" type="text" placeholder="Task name…" autocomplete="off">
+    <div id="col-fields"></div>
+  </div>
+</div>
 
 </div>
 <div id="toast"></div>
@@ -295,104 +348,98 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 var token = localStorage.getItem('bx_tok');
 var user  = null;
 try { user = JSON.parse(localStorage.getItem('bx_usr') || 'null'); } catch(e) {}
-var wiz = {};
-var stack = [];
+var stk   = [];
+var wiz   = {};
+var colVals = {};
 
-// ── API ──────────────────────────────────────────────────────────────────────
+// ── API ───────────────────────────────────────────────────────────────────────
 function api(method, path, body) {
   var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
   if (token) opts.headers['Authorization'] = 'Bearer ' + token;
   if (body)  opts.body = JSON.stringify(body);
   return fetch(path, opts).then(function(r) {
     return r.json().then(function(d) {
-      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
       return d;
     });
   });
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────
+// ── Toast ─────────────────────────────────────────────────────────────────────
 var _tt;
 function toast(msg, type) {
   var el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'show' + (type ? ' ' + type : '');
   clearTimeout(_tt);
-  _tt = setTimeout(function() { el.classList.remove('show'); }, 2800);
+  _tt = setTimeout(function() { el.classList.remove('show'); }, 2600);
 }
 
-// ── Navigation ───────────────────────────────────────────────────────────────
+// ── Navigation ────────────────────────────────────────────────────────────────
 function push(id) {
-  var cur = stack[stack.length - 1];
-  if (cur) {
-    var el = document.getElementById('scr-' + cur);
-    if (el) { el.classList.remove('active'); el.classList.add('behind'); }
-  }
-  stack.push(id);
-  var next = document.getElementById('scr-' + id);
-  if (next) { next.classList.remove('behind'); next.classList.add('active'); }
+  var cur = stk[stk.length - 1];
+  if (cur) { var e = document.getElementById('s-' + cur); if (e) { e.classList.remove('on'); e.classList.add('back'); } }
+  stk.push(id);
+  var n = document.getElementById('s-' + id);
+  if (n) { n.classList.remove('back'); n.classList.add('on'); }
+  onEnter(id);
 }
 
 function goBack() {
-  if (stack.length < 2) return;
-  var cur = stack.pop();
-  var prev = stack[stack.length - 1];
-  var el = document.getElementById('scr-' + cur);
-  if (el) el.classList.remove('active');
-  var pel = document.getElementById('scr-' + prev);
-  if (pel) { pel.classList.remove('behind'); pel.classList.add('active'); }
+  if (stk.length < 2) return;
+  var cur = stk.pop();
+  var prev = stk[stk.length - 1];
+  var e = document.getElementById('s-' + cur); if (e) e.classList.remove('on');
+  var p = document.getElementById('s-' + prev); if (p) { p.classList.remove('back'); p.classList.add('on'); }
 }
 
 function goHome() {
-  document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active','behind'); });
-  stack = ['home'];
-  document.getElementById('scr-home').classList.add('active');
+  document.querySelectorAll('.scr').forEach(function(s) { s.classList.remove('on','back'); });
+  stk = ['home'];
+  document.getElementById('s-home').classList.add('on');
 }
 
-function goTab(tab) {
-  document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active','behind'); });
-  stack = [tab];
-  document.getElementById('scr-' + tab).classList.add('active');
-  if (tab === 'boards')  loadBoardsTab();
-  if (tab === 'profile') renderProfile();
+// ── Screen enter hooks ────────────────────────────────────────────────────────
+function onEnter(id) {
+  if (id === 'reminders-list') loadReminders();
+  if (id === 'invoices')       loadInvoices();
+  if (id === 'crm')            loadCRM();
+  if (id === 'calendar')       loadCalendar();
+  if (id === 'scheduling')     loadScheduling();
+  if (id === 'notif-settings') loadNotifSettings();
+  if (id === 'bibixbot')       initChat();
+  if (id === 'profile')        renderProfile();
+  if (id === 'set-reminder')   initReminderForm();
 }
 
-// ── Steps ────────────────────────────────────────────────────────────────────
+// ── Steps ─────────────────────────────────────────────────────────────────────
 function renderSteps(id, total, cur) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  var html = '';
-  for (var i = 0; i < total; i++) {
-    var cls = i < cur ? 'done' : i === cur ? 'active' : '';
-    html += '<div class="step ' + cls + '"></div>';
-  }
-  el.innerHTML = html;
+  var el = document.getElementById(id); if (!el) return;
+  var h = '';
+  for (var i = 0; i < total; i++) { var c = i < cur ? 'done' : i === cur ? 'on' : ''; h += '<div class="step ' + c + '"></div>'; }
+  el.innerHTML = h;
 }
 
-// ── Login ────────────────────────────────────────────────────────────────────
-document.getElementById('l-pwd').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') doLogin();
-});
+// ── Login ─────────────────────────────────────────────────────────────────────
+document.getElementById('l-pwd').addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
 
 function doLogin() {
   var email = document.getElementById('l-email').value.trim();
   var pwd   = document.getElementById('l-pwd').value;
-  var errEl = document.getElementById('login-err');
+  var errEl = document.getElementById('l-err');
   var btn   = document.getElementById('l-btn');
   errEl.style.display = 'none';
-  if (!email || !pwd) { errEl.textContent = 'Enter email and password.'; errEl.style.display = 'block'; return; }
+  if (!email || !pwd) { errEl.textContent = 'Please enter email and password.'; errEl.style.display = 'block'; return; }
   btn.disabled = true; btn.textContent = 'Signing in…';
   api('POST', '/api/auth/login', { email: email, password: pwd })
-    .then(function(data) {
-      token = data.token;
-      user  = data.user;
+    .then(function(d) {
+      token = d.token; user = d.user;
       localStorage.setItem('bx_tok', token);
       localStorage.setItem('bx_usr', JSON.stringify(user));
       onLogin();
     })
     .catch(function(e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
+      errEl.textContent = e.message; errEl.style.display = 'block';
       btn.disabled = false; btn.textContent = 'Sign In';
     });
 }
@@ -400,198 +447,353 @@ function doLogin() {
 function onLogin() {
   var h = new Date().getHours();
   document.getElementById('tod').textContent = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-  document.getElementById('hdr-name').textContent = user.name;
-  document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active','behind'); });
-  stack = ['home'];
-  document.getElementById('scr-home').classList.add('active');
-  loadRecent();
+  document.getElementById('hdr-nm').textContent = user.name;
+  var ini = user.name.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0,2);
+  document.getElementById('hdr-av').textContent = ini;
+  document.querySelectorAll('.scr').forEach(function(s) { s.classList.remove('on','back'); });
+  stk = ['home'];
+  document.getElementById('s-home').classList.add('on');
 }
 
 function doLogout() {
   token = null; user = null;
   localStorage.removeItem('bx_tok'); localStorage.removeItem('bx_usr');
-  document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active','behind'); });
-  stack = [];
-  document.getElementById('scr-login').classList.add('active');
+  document.querySelectorAll('.scr').forEach(function(s) { s.classList.remove('on','back'); });
+  stk = [];
+  document.getElementById('s-login').classList.add('on');
   document.getElementById('l-pwd').value = '';
 }
 
-// ── Recent boards ────────────────────────────────────────────────────────────
-function loadRecent() {
-  var el = document.getElementById('recent-boards');
+// ── Reminders ─────────────────────────────────────────────────────────────────
+function initReminderForm() {
+  document.getElementById('rem-content').value = '';
+  var now = new Date(); now.setMinutes(now.getMinutes() - now.getTimezoneOffset() + 60);
+  document.getElementById('rem-dt').value = now.toISOString().slice(0,16);
+}
+
+function saveReminder() {
+  var content = document.getElementById('rem-content').value.trim();
+  var dt      = document.getElementById('rem-dt').value;
+  if (!content || !dt) { toast('Fill in all fields', 'err'); return; }
+  api('POST', '/api/bibixbot/reminders', { content: content, remind_at: new Date(dt).toISOString() })
+    .then(function() { toast('✅ Reminder set!', 'ok'); goBack(); })
+    .catch(function(e) { toast(e.message, 'err'); });
+}
+
+function loadReminders() {
+  var el = document.getElementById('rem-list');
   el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  api('GET', '/api/workspaces')
-    .then(function(ws) {
-      if (!ws.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📂</div><div class="empty-t">No boards yet</div></div>'; return; }
-      var promises = ws.slice(0, 3).map(function(w) {
-        return api('GET', '/api/boards/workspace/' + w.id).then(function(boards) {
-          boards.forEach(function(b) { b._ws = w.name; });
-          return boards;
-        });
-      });
-      return Promise.all(promises).then(function(all) {
-        var boards = [].concat.apply([], all).slice(0, 6);
-        if (!boards.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><div class="empty-t">No boards</div></div>'; return; }
-        el.innerHTML = '<div class="list">' + boards.map(function(b) {
-          return '<div class="li" onclick="quickBoard(\'' + esc(b.id) + '\',\'' + esc(b.name) + '\')">' +
-            '<div class="li-ico">' + (b.icon || '📋') + '</div>' +
-            '<div class="li-txt"><div class="li-title">' + esc(b.name) + '</div><div class="li-sub">' + esc(b._ws) + '</div></div>' +
-            '<div class="li-chev">›</div></div>';
+  api('GET', '/api/bibixbot/reminders')
+    .then(function(list) {
+      if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">🔔</div><div class="empty-t">No reminders</div></div>'; return; }
+      el.innerHTML = '<div class="list-wrap">' + list.map(function(r) {
+        var d = new Date(r.remind_at);
+        var due = d < new Date() ? 'badge-red' : 'badge-green';
+        var lbl = d < new Date() ? 'Overdue' : 'Upcoming';
+        return '<div class="li">' +
+          '<div class="li-ico" style="background:#e8f3ff">🔔</div>' +
+          '<div class="li-txt"><div class="li-title">' + esc(r.content) + '</div>' +
+          '<div class="li-sub">' + d.toLocaleString() + ' &nbsp;<span class="badge ' + due + '">' + lbl + '</span></div></div>' +
+          '<button class="li-del" onclick="delReminder(\'' + r.id + '\',this)">×</button></div>';
+      }).join('') + '</div>';
+    })
+    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+}
+
+function delReminder(id, btn) {
+  btn.disabled = true;
+  api('DELETE', '/api/bibixbot/reminders/' + id)
+    .then(function() { toast('Deleted', ''); loadReminders(); })
+    .catch(function() { btn.disabled = false; });
+}
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+function loadInvoices() {
+  var el = document.getElementById('inv-list');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  api('GET', '/api/invoices')
+    .then(function(data) {
+      var list = data.invoices || data || [];
+      if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">🧾</div><div class="empty-t">No invoices yet</div><div style="color:var(--muted);font-size:13px">Tap + New to create one</div></div>'; return; }
+      el.innerHTML = '<div class="list-wrap">' + list.map(function(inv) {
+        var status = inv.status || 'draft';
+        var cls = status === 'paid' ? 'badge-green' : status === 'sent' ? 'badge-orange' : 'badge-red';
+        return '<div class="li">' +
+          '<div class="li-ico" style="background:#fff4e3">🧾</div>' +
+          '<div class="li-txt"><div class="li-title">' + esc(inv.client_name || inv.title || 'Invoice #' + inv.number) + '</div>' +
+          '<div class="li-sub"><span class="badge ' + cls + '">' + status + '</span></div></div>' +
+          '<div class="li-chev">›</div></div>';
+      }).join('') + '</div>';
+    })
+    .catch(function() { el.innerHTML = '<div class="empty"><div class="empty-ico">🧾</div><div class="empty-t">No invoices yet</div><div style="color:var(--muted);font-size:13px">Tap + New to create one</div></div>'; });
+}
+
+function openInvoiceForm() { push('invoice-form'); }
+
+function saveInvoice() {
+  var client = document.getElementById('inv-client').value.trim();
+  var desc   = document.getElementById('inv-desc').value.trim();
+  var amount = document.getElementById('inv-amount').value;
+  var due    = document.getElementById('inv-due').value;
+  if (!client) { toast('Enter client name', 'err'); return; }
+  api('POST', '/api/invoices', { client_name: client, notes: desc, total: parseFloat(amount) || 0, due_date: due || null, status: 'draft' })
+    .then(function() { toast('✅ Invoice created!', 'ok'); goBack(); loadInvoices(); })
+    .catch(function(e) { toast(e.message, 'err'); });
+}
+
+// ── CRM ───────────────────────────────────────────────────────────────────────
+function loadCRM() {
+  var el = document.getElementById('crm-list');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  api('GET', '/api/crm/contacts?limit=50')
+    .then(function(data) {
+      var list = data.contacts || data || [];
+      if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">👥</div><div class="empty-t">No contacts yet</div></div>'; return; }
+      el.innerHTML = '<div class="list-wrap">' + list.map(function(c) {
+        var name = c.name || (c.first_name || '') + ' ' + (c.last_name || '');
+        return '<div class="li"><div class="li-ico" style="background:#fff0f8">👤</div>' +
+          '<div class="li-txt"><div class="li-title">' + esc(name.trim() || 'Contact') + '</div>' +
+          '<div class="li-sub">' + esc(c.email || c.phone || '') + '</div></div>' +
+          '<div class="li-chev">›</div></div>';
+      }).join('') + '</div>';
+    })
+    .catch(function() { el.innerHTML = '<div class="empty"><div class="empty-ico">👥</div><div class="empty-t">No contacts yet</div></div>'; });
+}
+
+// ── Calendar ──────────────────────────────────────────────────────────────────
+function loadCalendar() {
+  var el = document.getElementById('cal-list');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  api('GET', '/api/scheduling/bookings')
+    .then(function(data) {
+      var list = data.bookings || data || [];
+      var upcoming = list.filter(function(b) { return new Date(b.start_time) >= new Date(); })
+        .sort(function(a,b) { return new Date(a.start_time) - new Date(b.start_time); });
+      if (!upcoming.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📅</div><div class="empty-t">No upcoming events</div></div>'; return; }
+      el.innerHTML = '<div class="list-wrap">' + upcoming.map(function(b) {
+        var d = new Date(b.start_time);
+        return '<div class="li"><div class="li-ico" style="background:#e0f7f8">📅</div>' +
+          '<div class="li-txt"><div class="li-title">' + esc(b.event_type_name || b.guest_name || 'Meeting') + '</div>' +
+          '<div class="li-sub">' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</div></div></div>';
+      }).join('') + '</div>';
+    })
+    .catch(function() { el.innerHTML = '<div class="empty"><div class="empty-ico">📅</div><div class="empty-t">No upcoming events</div></div>'; });
+}
+
+// ── Scheduling ────────────────────────────────────────────────────────────────
+function loadScheduling() {
+  var el = document.getElementById('sched-list');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  Promise.all([
+    api('GET', '/api/scheduling/event-types'),
+    api('GET', '/api/scheduling/bookings'),
+  ]).then(function(res) {
+    var types = res[0] || []; var bookings = (res[1].bookings || res[1] || []);
+    var html = '';
+    if (types.length) {
+      html += '<div class="sec" style="padding:0 16px">Event Types</div><div class="list-wrap">' +
+        types.map(function(t) {
+          return '<div class="li"><div class="li-ico" style="background:' + (t.color || '#0073ea') + '22">🗓️</div>' +
+            '<div class="li-txt"><div class="li-title">' + esc(t.name) + '</div>' +
+            '<div class="li-sub">' + t.duration_minutes + ' min</div></div></div>';
         }).join('') + '</div>';
+    }
+    var upcoming = bookings.filter(function(b) { return new Date(b.start_time) >= new Date(); }).slice(0,5);
+    if (upcoming.length) {
+      html += '<div class="sec" style="padding:0 16px">Upcoming Bookings</div><div class="list-wrap">' +
+        upcoming.map(function(b) {
+          var d = new Date(b.start_time);
+          return '<div class="li"><div class="li-ico" style="background:#eeeffc">📌</div>' +
+            '<div class="li-txt"><div class="li-title">' + esc(b.guest_name) + '</div>' +
+            '<div class="li-sub">' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '</div></div></div>';
+        }).join('') + '</div>';
+    }
+    if (!html) html = '<div class="empty"><div class="empty-ico">🗓️</div><div class="empty-t">No scheduling data yet</div></div>';
+    el.innerHTML = html;
+  }).catch(function() { el.innerHTML = '<div class="empty"><div class="empty-ico">🗓️</div><div class="empty-t">Scheduling</div></div>'; });
+}
+
+// ── Notifications settings ────────────────────────────────────────────────────
+function loadNotifSettings() {
+  var el = document.getElementById('notif-body');
+  var pushEnabled = 'Notification' in window && Notification.permission === 'granted';
+  el.innerHTML = '<div class="card-box">' +
+    '<div style="font-size:16px;font-weight:700;margin-bottom:6px">Push Notifications</div>' +
+    '<div style="font-size:14px;color:var(--muted);margin-bottom:16px">Get notified for reminders, task updates, and automations.</div>' +
+    (pushEnabled
+      ? '<div style="color:var(--green);font-weight:600;font-size:15px">✅ Notifications are enabled</div>'
+      : '<button class="btn-main" onclick="enablePush()">Enable Push Notifications</button>'
+    ) + '</div>';
+}
+
+function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Not supported in this browser', 'err'); return; }
+  api('GET', '/api/push/key').then(function(d) {
+    if (!d.publicKey) { toast('Push not configured on server', 'err'); return; }
+    return Notification.requestPermission().then(function(perm) {
+      if (perm !== 'granted') { toast('Permission denied', 'err'); return; }
+      return navigator.serviceWorker.ready.then(function(reg) {
+        return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: d.publicKey });
+      }).then(function(sub) {
+        return api('POST', '/api/push/subscribe', { subscription: sub });
+      }).then(function() {
+        toast('✅ Push notifications enabled!', 'ok');
+        loadNotifSettings();
       });
+    });
+  }).catch(function(e) { toast(e.message, 'err'); });
+}
+
+// ── BibixBot / AI Chat ────────────────────────────────────────────────────────
+var chatHistory = [];
+
+function initChat() {
+  var el = document.getElementById('chat-msgs');
+  if (el.children.length === 0) {
+    addMsg('bot', '👋 Hi ' + (user ? user.name.split(' ')[0] : '') + '! I\'m your Bibix AI assistant. How can I help you today?');
+  }
+  document.getElementById('chat-inp').addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+}
+
+function addMsg(role, text) {
+  var el = document.getElementById('chat-msgs');
+  var d = document.createElement('div');
+  d.className = 'msg ' + role;
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  return d;
+}
+
+function sendChat() {
+  var inp = document.getElementById('chat-inp');
+  var msg = inp.value.trim();
+  if (!msg) return;
+  inp.value = '';
+  document.getElementById('chat-send').disabled = true;
+  addMsg('user', msg);
+  chatHistory.push({ role: 'user', content: msg });
+  var thinking = addMsg('bot thinking', '…');
+  api('POST', '/api/bibixbot/chat', { message: msg, history: chatHistory.slice(-10) })
+    .then(function(d) {
+      var reply = d.reply || d.message || d.content || JSON.stringify(d);
+      thinking.className = 'msg bot';
+      thinking.textContent = reply;
+      chatHistory.push({ role: 'assistant', content: reply });
+      document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight;
     })
-    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
-}
-
-function quickBoard(id, name) {
-  wiz = { mode: 'new', boardId: id, boardName: name };
-  renderSteps('group-steps', 3, 2);
-  push('group');
-  loadGroups(id);
-}
-
-// ── Boards tab ───────────────────────────────────────────────────────────────
-function loadBoardsTab() {
-  var el = document.getElementById('boards-body');
-  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  api('GET', '/api/workspaces')
-    .then(function(ws) {
-      if (!ws.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📂</div><div class="empty-t">No workspaces</div></div>'; return; }
-      var promises = ws.map(function(w) {
-        return api('GET', '/api/boards/workspace/' + w.id).then(function(boards) { return { ws: w, boards: boards }; });
-      });
-      return Promise.all(promises).then(function(all) {
-        var html = '';
-        all.forEach(function(item) {
-          html += '<div class="sec" style="padding:0 16px">' + esc(item.ws.name) + '</div>';
-          if (!item.boards.length) { html += '<div style="padding:0 16px 10px;color:var(--muted);font-size:13px">No boards</div>'; return; }
-          html += '<div class="list">' + item.boards.map(function(b) {
-            return '<div class="li" onclick="quickBoard(\'' + esc(b.id) + '\',\'' + esc(b.name) + '\')">' +
-              '<div class="li-ico">' + (b.icon || '📋') + '</div>' +
-              '<div class="li-txt"><div class="li-title">' + esc(b.name) + '</div></div>' +
-              '<div class="li-chev">›</div></div>';
-          }).join('') + '</div>';
-        });
-        el.innerHTML = html;
-      });
+    .catch(function(e) {
+      thinking.className = 'msg bot';
+      thinking.textContent = '⚠️ ' + e.message;
     })
-    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+    .finally(function() { document.getElementById('chat-send').disabled = false; });
 }
 
-// ── Wizard ───────────────────────────────────────────────────────────────────
+// ── Profile ───────────────────────────────────────────────────────────────────
+function renderProfile() {
+  if (!user) return;
+  var ini = user.name.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0,2);
+  var col = user.avatar_color || '#0073ea';
+  document.getElementById('prof-body').innerHTML =
+    '<div class="card-box" style="display:flex;align-items:center;gap:16px;margin-bottom:20px">' +
+    '<div style="width:56px;height:56px;border-radius:50%;background:' + col + ';display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;flex-shrink:0">' + ini + '</div>' +
+    '<div><div style="font-size:18px;font-weight:700">' + esc(user.name) + '</div><div style="font-size:13px;color:var(--muted)">' + esc(user.email) + '</div></div></div>' +
+    '<div class="list-wrap">' +
+    '<div class="li" onclick="push(\'reminders-list\')"><div class="li-ico" style="background:#e8f3ff">🔔</div><div class="li-txt"><div class="li-title">My Reminders</div></div><div class="li-chev">›</div></div>' +
+    '<div class="li" onclick="push(\'notif-settings\')"><div class="li-ico" style="background:#fff4e3">🔕</div><div class="li-txt"><div class="li-title">Notification Settings</div></div><div class="li-chev">›</div></div>' +
+    '</div>' +
+    '<div class="list-wrap" style="margin-top:12px">' +
+    '<div class="li" style="color:var(--red)" onclick="doLogout()"><div class="li-ico" style="background:#fff0f2">🚪</div><div class="li-txt"><div class="li-title" style="color:var(--red)">Sign Out</div></div></div>' +
+    '</div>' +
+    '<div style="text-align:center;color:var(--muted);font-size:12px;margin-top:28px">Bibix Projects · Mobile PWA</div>';
+}
+
+// ── Task wizard ───────────────────────────────────────────────────────────────
 function startWiz(mode) {
   wiz = { mode: mode };
   var total = mode === 'sub' ? 5 : 3;
   renderSteps('ws-steps', total, 0);
   push('ws');
-  var el = document.getElementById('ws-body');
-  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  api('GET', '/api/workspaces')
-    .then(function(ws) {
-      if (!ws.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📂</div><div class="empty-t">No workspaces</div></div>'; return; }
-      el.innerHTML = '<div class="list">' + ws.map(function(w) {
-        return '<div class="li" onclick="selWs(\'' + esc(w.id) + '\',\'' + esc(w.name) + '\')">' +
-          '<div class="li-ico">🏢</div>' +
-          '<div class="li-txt"><div class="li-title">' + esc(w.name) + '</div><div class="li-sub">' + esc(w.role || '') + '</div></div>' +
-          '<div class="li-chev">›</div></div>';
-      }).join('') + '</div>';
-    })
-    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+  loadWS();
 }
 
-function selWs(id, name) {
+function loadWS() {
+  var el = document.getElementById('ws-body');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  api('GET', '/api/workspaces').then(function(ws) {
+    if (!ws.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📂</div><div class="empty-t">No workspaces</div></div>'; return; }
+    el.innerHTML = '<div class="list-wrap">' + ws.map(function(w) {
+      return '<div class="li" onclick="selWS(\'' + esc(w.id) + '\',\'' + esc(w.name) + '\')"><div class="li-ico" style="background:#e8f3ff">🏢</div><div class="li-txt"><div class="li-title">' + esc(w.name) + '</div></div><div class="li-chev">›</div></div>';
+    }).join('') + '</div>';
+  }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+}
+
+function selWS(id, name) {
   wiz.wsId = id; wiz.wsName = name;
-  var total = wiz.mode === 'sub' ? 5 : 3;
-  renderSteps('board-steps', total, 1);
+  renderSteps('board-steps', wiz.mode === 'sub' ? 5 : 3, 1);
   push('board');
   var el = document.getElementById('board-body');
   el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  api('GET', '/api/boards/workspace/' + id)
-    .then(function(boards) {
-      if (!boards.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><div class="empty-t">No boards</div></div>'; return; }
-      el.innerHTML = '<div class="list">' + boards.map(function(b) {
-        return '<div class="li" onclick="selBoard(\'' + esc(b.id) + '\',\'' + esc(b.name) + '\')">' +
-          '<div class="li-ico">' + (b.icon || '📋') + '</div>' +
-          '<div class="li-txt"><div class="li-title">' + esc(b.name) + '</div></div>' +
-          '<div class="li-chev">›</div></div>';
-      }).join('') + '</div>';
-    })
-    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+  api('GET', '/api/boards/workspace/' + id).then(function(boards) {
+    if (!boards.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><div class="empty-t">No boards</div></div>'; return; }
+    el.innerHTML = '<div class="list-wrap">' + boards.map(function(b) {
+      return '<div class="li" onclick="selBoard(\'' + esc(b.id) + '\',\'' + esc(b.name) + '\')"><div class="li-ico">' + (b.icon || '📋') + '</div><div class="li-txt"><div class="li-title">' + esc(b.name) + '</div></div><div class="li-chev">›</div></div>';
+    }).join('') + '</div>';
+  }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
 }
 
 function selBoard(id, name) {
   wiz.boardId = id; wiz.boardName = name;
-  var total = wiz.mode === 'sub' ? 5 : 3;
-  renderSteps('group-steps', total, 2);
-  push('group');
-  loadGroups(id);
-}
-
-function loadGroups(boardId) {
-  var el = document.getElementById('group-body');
+  renderSteps('grp-steps', wiz.mode === 'sub' ? 5 : 3, 2);
+  push('grp');
+  var el = document.getElementById('grp-body');
   el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  api('GET', '/api/boards/' + boardId)
-    .then(function(board) {
-      wiz._board = board;
-      if (!board.groups || !board.groups.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">No groups</div></div>'; return; }
-      el.innerHTML = '<div class="list">' + board.groups.map(function(g) {
-        var color = g.color || '#0073ea';
-        return '<div class="li" onclick="selGroup(\'' + esc(g.id) + '\',\'' + esc(g.name) + '\',\'' + esc(color) + '\')">' +
-          '<div class="li-ico" style="background:' + color + '22"><div class="gdot" style="background:' + color + '"></div></div>' +
-          '<div class="li-txt"><div class="li-title">' + esc(g.name) + '</div></div>' +
-          '<div class="li-chev">›</div></div>';
-      }).join('') + '</div>';
-    })
-    .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+  api('GET', '/api/boards/' + id).then(function(board) {
+    wiz._board = board;
+    if (!board.groups || !board.groups.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">No groups</div></div>'; return; }
+    el.innerHTML = '<div class="list-wrap">' + board.groups.map(function(g) {
+      var color = g.color || '#0073ea';
+      return '<div class="li" onclick="selGrp(\'' + esc(g.id) + '\',\'' + esc(g.name) + '\',\'' + esc(color) + '\')"><div class="li-ico" style="background:' + color + '22"><div class="gdot" style="background:' + color + '"></div></div><div class="li-txt"><div class="li-title">' + esc(g.name) + '</div></div><div class="li-chev">›</div></div>';
+    }).join('') + '</div>';
+  }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
 }
 
-function selGroup(id, name, color) {
-  wiz.groupId = id; wiz.groupName = name; wiz.groupColor = color;
+function selGrp(id, name, color) {
+  wiz.grpId = id; wiz.grpName = name; wiz.grpColor = color;
   if (wiz.mode === 'sub') {
-    var total = 5;
-    renderSteps('parent-steps', total, 3);
-    document.getElementById('parent-next').disabled = true;
+    renderSteps('par-steps', 5, 3);
+    document.getElementById('par-next').disabled = true;
     wiz.parentId = null;
     push('parent');
-    loadParents();
+    var el = document.getElementById('par-body');
+    var items = (wiz._board.items || []).filter(function(i) { return i.group_id === id && !i.parent_item_id; });
+    if (!items.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📝</div><div class="empty-t">No tasks in this group</div></div>'; return; }
+    el.innerHTML = '<div class="list-wrap">' + items.map(function(it) {
+      return '<div class="pick" id="pk-' + it.id + '" onclick="pickPar(\'' + it.id + '\')"><div class="pick-chk" id="pc-' + it.id + '">✓</div><div class="pick-name">' + esc(it.name) + '</div></div>';
+    }).join('') + '</div>';
   } else {
     openForm();
   }
 }
 
-function loadParents() {
-  var el = document.getElementById('parent-body');
-  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
-  var items = (wiz._board.items || []).filter(function(i) { return i.group_id === wiz.groupId && !i.parent_item_id; });
-  if (!items.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📝</div><div class="empty-t">No tasks in this group</div></div>'; return; }
-  el.innerHTML = '<div class="list">' + items.map(function(it) {
-    return '<div class="pick-row" id="pk-' + it.id + '" onclick="pickParent(\'' + esc(it.id) + '\')">' +
-      '<div class="pick-check" id="pc-' + it.id + '">✓</div>' +
-      '<div class="pick-name">' + esc(it.name) + '</div></div>';
-  }).join('') + '</div>';
-}
-
-function pickParent(id) {
-  document.querySelectorAll('.pick-row').forEach(function(r) { r.classList.remove('sel'); });
+function pickPar(id) {
+  document.querySelectorAll('.pick').forEach(function(r) { r.classList.remove('sel'); });
   document.getElementById('pk-' + id).classList.add('sel');
   wiz.parentId = id;
-  document.getElementById('parent-next').disabled = false;
+  document.getElementById('par-next').disabled = false;
 }
 
 function openForm() {
   var total = wiz.mode === 'sub' ? 5 : 3;
   renderSteps('form-steps', total, total - 1);
-  document.getElementById('form-title').textContent = wiz.mode === 'sub' ? 'New Subtask' : 'New Task';
-  document.getElementById('task-name').value = '';
+  document.getElementById('form-ttl').textContent = wiz.mode === 'sub' ? 'New Subtask' : 'New Task';
+  document.getElementById('task-nm').value = '';
   document.getElementById('save-btn').disabled = false;
   document.getElementById('save-btn').textContent = 'Save';
   renderCols();
   push('form');
-  setTimeout(function() { document.getElementById('task-name').focus(); }, 320);
+  setTimeout(function() { document.getElementById('task-nm').focus(); }, 300);
 }
-
-// ── Column fields ─────────────────────────────────────────────────────────────
-var colVals = {};
 
 function renderCols() {
   colVals = {};
@@ -600,91 +802,50 @@ function renderCols() {
   if (!board || !board.columns) { el.innerHTML = ''; return; }
   var cols = board.columns.filter(function(c) { return ['status','person','date','priority'].indexOf(c.type) !== -1; });
   if (!cols.length) { el.innerHTML = ''; return; }
-
-  var needUsers = cols.some(function(c) { return c.type === 'person'; });
-  var usersP = needUsers ? api('GET', '/api/auth/users').catch(function() { return []; }) : Promise.resolve([]);
-
-  usersP.then(function(users) {
+  var needU = cols.some(function(c) { return c.type === 'person'; });
+  var up = needU ? api('GET', '/api/auth/users').catch(function() { return []; }) : Promise.resolve([]);
+  up.then(function(users) {
     el.innerHTML = cols.map(function(col) {
       var s = col.settings || {};
       if (col.type === 'status' || col.type === 'priority') {
-        var opts = s.options || defaultOpts(col.type);
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><div class="cf-val">' +
-          '<select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' +
-          opts.map(function(o) { return '<option value="' + esc(o.label) + '">' + esc(o.label) + '</option>'; }).join('') +
-          '</select></div></div>';
+        var opts = s.options || (col.type === 'priority'
+          ? [{label:'Critical'},{label:'High'},{label:'Medium'},{label:'Low'}]
+          : [{label:'Done'},{label:'Working on it'},{label:'Stuck'},{label:'Not started'}]);
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' + opts.map(function(o) { return '<option>' + esc(o.label) + '</option>'; }).join('') + '</select></div>';
       }
       if (col.type === 'person') {
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><div class="cf-val">' +
-          '<select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' +
-          users.map(function(u) { return '<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'; }).join('') +
-          '</select></div></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' + users.map(function(u) { return '<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'; }).join('') + '</select></div>';
       }
       if (col.type === 'date') {
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><div class="cf-val">' +
-          '<input type="date" onchange="colVals[\'' + col.id + '\']=this.value"></div></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="date" onchange="colVals[\'' + col.id + '\']=this.value"></div>';
       }
       return '';
     }).join('');
   });
 }
 
-function defaultOpts(type) {
-  if (type === 'priority') return [{label:'Critical'},{label:'High'},{label:'Medium'},{label:'Low'}];
-  return [{label:'Done'},{label:'Working on it'},{label:'Stuck'},{label:'Not started'}];
-}
-
-// ── Save ──────────────────────────────────────────────────────────────────────
 function saveTask() {
-  var name = document.getElementById('task-name').value.trim();
-  if (!name) { toast('Enter a task name', 'err'); document.getElementById('task-name').focus(); return; }
+  var name = document.getElementById('task-nm').value.trim();
+  if (!name) { toast('Enter a task name', 'err'); document.getElementById('task-nm').focus(); return; }
   var btn = document.getElementById('save-btn');
   btn.disabled = true; btn.textContent = 'Saving…';
-  var body = { group_id: wiz.groupId, name: name };
+  var body = { group_id: wiz.grpId, name: name };
   if (wiz.parentId) body.parent_item_id = wiz.parentId;
-  api('POST', '/api/items', body)
-    .then(function(item) {
-      var board = wiz._board;
-      var saves = [];
-      if (board && board.columns) {
-        board.columns.forEach(function(col) {
-          if (colVals[col.id] && colVals[col.id] !== '') {
-            saves.push(api('PUT', '/api/items/' + item.id + '/values', { column_id: col.id, value: colVals[col.id] }).catch(function(){}));
-          }
-        });
-      }
-      return Promise.all(saves);
-    })
-    .then(function() {
-      toast(wiz.mode === 'sub' ? '✅ Subtask added!' : '✅ Task added!', 'ok');
-      goHome();
-      loadRecent();
-    })
-    .catch(function(e) {
-      toast(e.message, 'err');
-      btn.disabled = false; btn.textContent = 'Save';
-    });
-}
-
-// ── Profile ───────────────────────────────────────────────────────────────────
-function renderProfile() {
-  if (!user) return;
-  var ini = user.name.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0,2);
-  var color = user.avatar_color || '#0073ea';
-  document.getElementById('profile-body').innerHTML =
-    '<div class="list">' +
-    '<div class="prof-hdr"><div class="avatar" style="background:' + color + '">' + ini + '</div>' +
-    '<div><div class="prof-name">' + esc(user.name) + '</div><div class="prof-email">' + esc(user.email) + '</div></div></div>' +
-    '</div>' +
-    '<div class="list" style="margin-top:12px">' +
-    '<div class="pm" onclick="goTab(\'boards\')"><span class="pmi">📋</span> My Boards</div>' +
-    '<div class="pm" onclick="startWiz(\'new\')"><span class="pmi">✏️</span> New Task</div>' +
-    '<div class="pm" onclick="startWiz(\'sub\')"><span class="pmi">🔗</span> Add Subtask</div>' +
-    '</div>' +
-    '<div class="list" style="margin-top:12px">' +
-    '<div class="pm danger" onclick="doLogout()"><span class="pmi">🚪</span> Sign Out</div>' +
-    '</div>' +
-    '<div style="text-align:center;color:var(--muted);font-size:12px;margin-top:24px">Bibix Projects · Mobile</div>';
+  api('POST', '/api/items', body).then(function(item) {
+    var saves = [];
+    if (wiz._board && wiz._board.columns) {
+      wiz._board.columns.forEach(function(col) {
+        if (colVals[col.id]) saves.push(api('PUT', '/api/items/' + item.id + '/values', { column_id: col.id, value: colVals[col.id] }).catch(function(){}));
+      });
+    }
+    return Promise.all(saves);
+  }).then(function() {
+    toast(wiz.mode === 'sub' ? '✅ Subtask added!' : '✅ Task added!', 'ok');
+    goHome();
+  }).catch(function(e) {
+    toast(e.message, 'err');
+    btn.disabled = false; btn.textContent = 'Save';
+  });
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -693,15 +854,13 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// ── Service Worker ────────────────────────────────────────────────────────────
+// ── Service worker ────────────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/app/sw.js').catch(function(){});
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-if (token && user) {
-  onLogin();
-}
+if (token && user) { onLogin(); }
 </script>
 </body>
 </html>
