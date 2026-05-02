@@ -1,4 +1,4 @@
-const CACHE = 'bibix-pwa-v2';
+const CACHE = 'bibix-pwa-v3';
 self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', e => {
