@@ -72,6 +72,11 @@ app.get('/api/wh-info', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Serve PWA mobile app ──────────────────────────────────────────────────────
+const PWA_DIR = path.join(__dirname, '../../pwa');
+app.use('/app', express.static(PWA_DIR));
+app.get('/app', (req, res) => res.redirect('/app/'));
+
 // ── Serve built React frontend in production ──────────────────────────────────
 const FRONTEND_DIST = path.join(__dirname, '../public');
 app.use(express.static(FRONTEND_DIST));
