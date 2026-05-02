@@ -722,14 +722,21 @@ function startWiz(mode) {
   loadWS();
 }
 
+function bindClicks(container, attr, fn) {
+  container.querySelectorAll('[data-' + attr + ']').forEach(function(el) {
+    el.onclick = function() { fn(el); };
+  });
+}
+
 function loadWS() {
   var el = document.getElementById('ws-body');
   el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
   api('GET', '/api/workspaces').then(function(ws) {
     if (!ws.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📂</div><div class="empty-t">No workspaces</div></div>'; return; }
     el.innerHTML = '<div class="list-wrap">' + ws.map(function(w) {
-      return '<div class="li" onclick="selWS(\'' + esc(w.id) + '\',\'' + esc(w.name) + '\')"><div class="li-ico" style="background:#e8f3ff">🏢</div><div class="li-txt"><div class="li-title">' + esc(w.name) + '</div></div><div class="li-chev">›</div></div>';
+      return '<div class="li" data-wsid="' + esc(w.id) + '" data-wsname="' + esc(w.name) + '"><div class="li-ico" style="background:#e8f3ff">🏢</div><div class="li-txt"><div class="li-title">' + esc(w.name) + '</div></div><div class="li-chev">›</div></div>';
     }).join('') + '</div>';
+    bindClicks(el, 'wsid', function(li) { selWS(li.dataset.wsid, li.dataset.wsname); });
   }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
 }
 
@@ -742,8 +749,9 @@ function selWS(id, name) {
   api('GET', '/api/boards/workspace/' + id).then(function(boards) {
     if (!boards.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📋</div><div class="empty-t">No boards</div></div>'; return; }
     el.innerHTML = '<div class="list-wrap">' + boards.map(function(b) {
-      return '<div class="li" onclick="selBoard(\'' + esc(b.id) + '\',\'' + esc(b.name) + '\')"><div class="li-ico">' + (b.icon || '📋') + '</div><div class="li-txt"><div class="li-title">' + esc(b.name) + '</div></div><div class="li-chev">›</div></div>';
+      return '<div class="li" data-bid="' + esc(b.id) + '" data-bname="' + esc(b.name) + '"><div class="li-ico">' + (b.icon || '📋') + '</div><div class="li-txt"><div class="li-title">' + esc(b.name) + '</div></div><div class="li-chev">›</div></div>';
     }).join('') + '</div>';
+    bindClicks(el, 'bid', function(li) { selBoard(li.dataset.bid, li.dataset.bname); });
   }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
 }
 
@@ -758,8 +766,9 @@ function selBoard(id, name) {
     if (!board.groups || !board.groups.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">📁</div><div class="empty-t">No groups</div></div>'; return; }
     el.innerHTML = '<div class="list-wrap">' + board.groups.map(function(g) {
       var color = g.color || '#0073ea';
-      return '<div class="li" onclick="selGrp(\'' + esc(g.id) + '\',\'' + esc(g.name) + '\',\'' + esc(color) + '\')"><div class="li-ico" style="background:' + color + '22"><div class="gdot" style="background:' + color + '"></div></div><div class="li-txt"><div class="li-title">' + esc(g.name) + '</div></div><div class="li-chev">›</div></div>';
+      return '<div class="li" data-gid="' + esc(g.id) + '" data-gname="' + esc(g.name) + '" data-gcolor="' + esc(color) + '"><div class="li-ico" style="background:' + color + '22"><div class="gdot" style="background:' + color + '"></div></div><div class="li-txt"><div class="li-title">' + esc(g.name) + '</div></div><div class="li-chev">›</div></div>';
     }).join('') + '</div>';
+    bindClicks(el, 'gid', function(li) { selGrp(li.dataset.gid, li.dataset.gname, li.dataset.gcolor); });
   }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
 }
 
