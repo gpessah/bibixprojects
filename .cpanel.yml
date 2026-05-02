@@ -21,6 +21,10 @@ deployment:
     - mkdir -p $APP/backend/public
     - cp -r $APP/frontend/dist/. $APP/backend/public/
 
-    # 4. Restart the Node.js app (Passenger picks this up automatically)
+    # 4. Copy PWA directly (no build step needed)
+    - mkdir -p $APP/backend/public/app
+    - cp -r $APP/pwa/. $APP/backend/public/app/
+
+    # 5. Restart the Node.js app (Passenger picks this up automatically)
     - mkdir -p $APP/backend/tmp
     - touch $APP/backend/tmp/restart.txt
