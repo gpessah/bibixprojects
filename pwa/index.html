@@ -814,27 +814,50 @@ function renderCols() {
   var el = document.getElementById('col-fields');
   var board = wiz._board;
   if (!board || !board.columns) { el.innerHTML = ''; return; }
-  var cols = board.columns.filter(function(c) { return ['status','person','date','priority'].indexOf(c.type) !== -1; });
+  var SKIP = ['timeline','attachments'];
+  var cols = board.columns.filter(function(c) { return SKIP.indexOf(c.type) === -1; });
   if (!cols.length) { el.innerHTML = ''; return; }
   var needU = cols.some(function(c) { return c.type === 'person'; });
   var up = needU ? api('GET', '/api/auth/users').catch(function() { return []; }) : Promise.resolve([]);
   up.then(function(users) {
     el.innerHTML = cols.map(function(col) {
       var s = col.settings || {};
+      var cid = col.id;
       if (col.type === 'status' || col.type === 'priority') {
         var opts = s.options || (col.type === 'priority'
           ? [{label:'Critical'},{label:'High'},{label:'Medium'},{label:'Low'}]
           : [{label:'Done'},{label:'Working on it'},{label:'Stuck'},{label:'Not started'}]);
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' + opts.map(function(o) { return '<option>' + esc(o.label) + '</option>'; }).join('') + '</select></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select data-cid="' + esc(cid) + '"><option value="">— None —</option>' + opts.map(function(o) { return '<option>' + esc(o.label) + '</option>'; }).join('') + '</select></div>';
       }
       if (col.type === 'person') {
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select onchange="colVals[\'' + col.id + '\']=this.value"><option value="">— None —</option>' + users.map(function(u) { return '<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'; }).join('') + '</select></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select data-cid="' + esc(cid) + '"><option value="">— None —</option>' + users.map(function(u) { return '<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'; }).join('') + '</select></div>';
       }
       if (col.type === 'date') {
-        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="date" onchange="colVals[\'' + col.id + '\']=this.value"></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="date" data-cid="' + esc(cid) + '"></div>';
       }
-      return '';
+      if (col.type === 'number') {
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="number" inputmode="numeric" placeholder="0" data-cid="' + esc(cid) + '"></div>';
+      }
+      if (col.type === 'checkbox') {
+        return '<div class="cf" style="flex-direction:row;align-items:center;justify-content:space-between"><div class="cf-lbl" style="margin:0">' + esc(col.name) + '</div><input type="checkbox" data-cid="' + esc(cid) + '" style="width:22px;height:22px;accent-color:var(--blue)"></div>';
+      }
+      if (col.type === 'link' || col.type === 'url') {
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="url" inputmode="url" placeholder="https://..." data-cid="' + esc(cid) + '"></div>';
+      }
+      if (col.type === 'tags') {
+        var tags = s.options || [];
+        if (!tags.length) return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="text" placeholder="Tag..." data-cid="' + esc(cid) + '"></div>';
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select data-cid="' + esc(cid) + '"><option value="">— None —</option>' + tags.map(function(o) { return '<option>' + esc(o.label || o) + '</option>'; }).join('') + '</select></div>';
+      }
+      // text and anything else
+      return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="text" placeholder="..." data-cid="' + esc(cid) + '"></div>';
     }).join('');
+    // bind change handlers using data-cid to avoid inline string issues
+    el.querySelectorAll('[data-cid]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        colVals[inp.dataset.cid] = inp.type === 'checkbox' ? (inp.checked ? 'true' : '') : inp.value;
+      });
+    });
   });
 }
 
