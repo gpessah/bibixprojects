@@ -55,7 +55,7 @@ html,body{height:100%;background:var(--bg);font-family:-apple-system,BlinkMacSys
 .tb-action:disabled{background:var(--border);color:var(--muted)}
 
 /* ── Home header ── */
-.home-hdr{background:linear-gradient(135deg,#003f8a 0%,#0073ea 100%);padding:calc(var(--st)+22px) 22px 28px;flex-shrink:0;position:relative;overflow:hidden}
+.home-hdr{background:linear-gradient(135deg,#003f8a 0%,#0073ea 100%);padding:calc(max(var(--st),60px)+10px) 22px 28px;flex-shrink:0;position:relative;overflow:hidden}
 .home-hdr::after{content:'';position:absolute;right:-40px;top:-40px;width:200px;height:200px;background:rgba(255,255,255,.06);border-radius:50%}
 .hdr-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .hdr-brand{display:flex;align-items:center;gap:10px}
