@@ -40,6 +40,7 @@ app.use('/api/events',      require('./routes/events'));
 app.use('/api/scheduling',  require('./routes/scheduling'));
 app.use('/api/crm',         require('./routes/crm'));
 app.use('/api/invoices',    require('./routes/invoices'));
+app.use('/api/instagram',   require('./routes/instagram'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');
