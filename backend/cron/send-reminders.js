@@ -3,7 +3,7 @@ const db = require('../src/db/database');
 const { sendPushToUser } = require('../src/services/pushNotifications');
 
 const due = db.prepare(
-  "SELECT * FROM bot_reminders WHERE push_sent = 0 AND remind_at <= datetime('now')"
+  "SELECT * FROM bot_reminders WHERE push_sent = 0 AND datetime(remind_at) <= datetime('now')"
 ).all();
 
 for (const rem of due) {

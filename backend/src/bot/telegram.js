@@ -1623,7 +1623,7 @@ if (!token) {
       const due = db.prepare(`
         SELECT r.*, tl.chat_id FROM bot_reminders r
         JOIN telegram_links tl ON r.user_id = tl.user_id
-        WHERE r.sent = 0 AND r.remind_at <= datetime('now')
+        WHERE r.sent = 0 AND datetime(r.remind_at) <= datetime('now')
       `).all();
       for (const rem of due) {
         try {
