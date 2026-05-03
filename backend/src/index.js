@@ -73,21 +73,9 @@ app.get('/api/wh-info', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Reminder push notifications ───────────────────────────────────────────────
-const { sendPushToUser } = require('./services/pushNotifications');
+// Ensure push_sent column exists (reminders are now sent via cron/send-reminders.js)
 const db = require('./db/database');
 try { db.exec('ALTER TABLE bot_reminders ADD COLUMN push_sent INTEGER DEFAULT 0'); } catch (_) {}
-setInterval(() => {
-  try {
-    const due = db.prepare(
-      "SELECT * FROM bot_reminders WHERE push_sent = 0 AND remind_at <= datetime('now')"
-    ).all();
-    for (const rem of due) {
-      sendPushToUser(rem.user_id, '⏰ Reminder', rem.content);
-      db.prepare('UPDATE bot_reminders SET push_sent = 1 WHERE id = ?').run(rem.id);
-    }
-  } catch (e) { console.error('[Push] reminder check error:', e.message); }
-}, 60 * 1000); // check every minute
 
 // ── Serve PWA mobile app ──────────────────────────────────────────────────────
 const PWA_DIR = path.join(__dirname, '../../pwa');
