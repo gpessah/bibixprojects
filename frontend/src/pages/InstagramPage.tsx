@@ -162,7 +162,7 @@ export default function InstagramPage() {
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
                     <h3 className="font-semibold text-gray-900 mb-4">Actions by Type</h3>
                     <div className="space-y-3">
-                      {stats.byType.map(r => (
+                      {(stats.byType || []).map(r => (
                         <div key={r.type} className="flex items-center gap-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_COLOR[r.type] || 'bg-gray-100 text-gray-600'}`}>
                             {TYPE_LABEL[r.type] || r.type}
@@ -173,20 +173,20 @@ export default function InstagramPage() {
                           <span className="text-sm font-semibold text-gray-700 w-8 text-right">{r.n}</span>
                         </div>
                       ))}
-                      {stats.byType.length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
+                      {(stats.byType || []).length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
                     </div>
                   </div>
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
                     <h3 className="font-semibold text-gray-900 mb-4">Top Users Engaged</h3>
                     <div className="space-y-2">
-                      {stats.topUsers.map((u, i) => (
+                      {(stats.topUsers || []).map((u, i) => (
                         <div key={u.username} className="flex items-center gap-3">
                           <span className="text-xs text-gray-400 w-4">{i + 1}</span>
                           <span className="text-sm font-medium text-gray-700 flex-1">@{u.username}</span>
                           <span className="text-xs font-semibold bg-gray-100 px-2 py-0.5 rounded-full">{u.n}</span>
                         </div>
                       ))}
-                      {stats.topUsers.length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
+                      {(stats.topUsers || []).length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
                     </div>
                   </div>
                 </div>
