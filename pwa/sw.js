@@ -15,3 +15,38 @@ self.addEventListener('fetch', e => {
     }))
   );
 });
+
+// Handle incoming push notifications
+self.addEventListener('push', e => {
+  let title = 'Bibix';
+  let body = 'You have a new notification';
+  let data = {};
+  try {
+    const payload = e.data ? e.data.json() : {};
+    title = payload.title || title;
+    body  = payload.body  || body;
+    data  = payload.data  || {};
+  } catch (_) {}
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: '/app/icon.svg',
+      badge: '/app/icon.svg',
+      data,
+      vibrate: [200, 100, 200],
+    })
+  );
+});
+
+// Tap on notification opens the app
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) {
+        if (c.url.includes('/app') && 'focus' in c) return c.focus();
+      }
+      return clients.openWindow('/app/');
+    })
+  );
+});
