@@ -25,6 +25,22 @@ router.post('/subscribe', authenticate, (req, res) => {
   res.json({ success: true });
 });
 
+// Diagnostics + test push
+router.get('/status', authenticate, (req, res) => {
+  const subs = db.prepare('SELECT id, created_at FROM push_subscriptions WHERE user_id = ?').all(req.user.id);
+  res.json({
+    vapidConfigured: !!process.env.VAPID_PUBLIC_KEY,
+    subscriptions: subs.length,
+    subscriptionDetails: subs,
+  });
+});
+
+router.post('/test', authenticate, (req, res) => {
+  const { sendPushToUser } = require('../services/pushNotifications');
+  sendPushToUser(req.user.id, '🔔 Test Notification', 'Push notifications are working!');
+  res.json({ sent: true });
+});
+
 // Remove a push subscription
 router.post('/unsubscribe', authenticate, (req, res) => {
   const { endpoint } = req.body;
