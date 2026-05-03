@@ -1,5 +1,5 @@
 // Bibix Projects Service Worker
-const CACHE = 'bibix-v1';
+const CACHE = 'bibix-v2';
 
 self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
@@ -34,16 +34,21 @@ self.addEventListener('notificationclick', e => {
 
 // ── Fetch caching ─────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
+  // Only handle http/https requests
+  if (!e.request.url.startsWith('http')) return;
+  // Skip API calls
   if (e.request.url.includes('/api/')) return;
+  // For page navigations, always fetch from network (never use cache for HTML)
   if (e.request.mode === 'navigate') {
-    e.respondWith(fetch(e.request).catch(() => caches.match('/index.html')));
+    e.respondWith(fetch(e.request));
     return;
   }
+  // For assets, try cache first then network
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached;
       return fetch(e.request).then(res => {
-        if (res.ok) {
+        if (res.ok && res.type !== 'opaque') {
           const clone = res.clone();
           caches.open(CACHE).then(c => c.put(e.request, clone));
         }
