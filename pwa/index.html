@@ -236,6 +236,9 @@ html,body{height:100%;background:var(--bg);font-family:-apple-system,BlinkMacSys
       <div class="gc c-red" onclick="push('bibixbot')">
         <div class="gc-ico">🤖</div><div class="gc-lbl">AI Tools</div>
       </div>
+      <div class="gc c-teal" onclick="push('my-tasks')">
+        <div class="gc-ico">✅</div><div class="gc-lbl">My Tasks</div>
+      </div>
     </div>
   </div>
 </div>
@@ -346,6 +349,49 @@ html,body{height:100%;background:var(--bg);font-family:-apple-system,BlinkMacSys
   </div>
 </div>
 
+<!-- MY TASKS -->
+<div class="scr" id="s-my-tasks">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">My Tasks</div></div>
+  <div class="inner np" id="my-tasks-list"><div class="loading"><div class="spin"></div></div></div>
+</div>
+
+<!-- TASK DETAIL / EDIT -->
+<div class="scr" id="s-task-detail">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title" id="td-title">Task</div><button class="tb-action" id="td-save" onclick="saveTaskEdit()">Save</button></div>
+  <div class="inner">
+    <input class="task-name-inp" id="td-name" type="text" placeholder="Task name…" autocomplete="off">
+    <div id="td-cols"></div>
+  </div>
+</div>
+
+<!-- INVOICE EDIT -->
+<div class="scr" id="s-invoice-edit">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Edit Invoice</div><button class="tb-action" onclick="updateInvoice()">Save</button></div>
+  <div class="inner">
+    <div class="form-group"><label>Client Name</label><input type="text" id="ie-client" placeholder="Client name"></div>
+    <div class="form-group"><label>Description</label><textarea id="ie-desc" placeholder="Services rendered…"></textarea></div>
+    <div class="form-group"><label>Amount</label><input type="number" id="ie-amount" placeholder="0.00" step="0.01"></div>
+    <div class="form-group"><label>Due Date</label><input type="date" id="ie-due"></div>
+    <div class="form-group"><label>Status</label>
+      <select id="ie-status">
+        <option value="draft">Draft</option>
+        <option value="sent">Sent</option>
+        <option value="paid">Paid</option>
+        <option value="cancelled">Cancelled</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<!-- REMINDER EDIT -->
+<div class="scr" id="s-reminder-edit">
+  <div class="tb"><button class="tb-back" onclick="goBack()">‹</button><div class="tb-title">Edit Reminder</div><button class="tb-action" onclick="saveReminderEdit()">Save</button></div>
+  <div class="inner">
+    <div class="form-group"><label>What to remind</label><textarea id="re-content" placeholder="Remind me to…"></textarea></div>
+    <div class="form-group"><label>Date & Time</label><input type="datetime-local" id="re-dt"></div>
+  </div>
+</div>
+
 </div>
 <div id="toast"></div>
 
@@ -407,6 +453,7 @@ function goHome() {
 // ── Screen enter hooks ────────────────────────────────────────────────────────
 function onEnter(id) {
   if (id === 'reminders-list') loadReminders();
+  if (id === 'my-tasks')       loadMyTasks();
   if (id === 'invoices')       loadInvoices();
   if (id === 'crm')            loadCRM();
   if (id === 'calendar')       loadCalendar();
@@ -495,11 +542,11 @@ function loadReminders() {
         var d = new Date(r.remind_at);
         var due = d < new Date() ? 'badge-red' : 'badge-green';
         var lbl = d < new Date() ? 'Overdue' : 'Upcoming';
-        return '<div class="li">' +
+        return '<div class="li" onclick="openReminderEdit(' + JSON.stringify(r).replace(/"/g, '&quot;') + ')">' +
           '<div class="li-ico" style="background:#e8f3ff">🔔</div>' +
           '<div class="li-txt"><div class="li-title">' + esc(r.content) + '</div>' +
           '<div class="li-sub">' + d.toLocaleString() + ' &nbsp;<span class="badge ' + due + '">' + lbl + '</span></div></div>' +
-          '<button class="li-del" onclick="delReminder(\'' + r.id + '\',this)">×</button></div>';
+          '<button class="li-del" onclick="event.stopPropagation();delReminder(\'' + r.id + '\',this)">×</button></div>';
       }).join('') + '</div>';
     })
     .catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
@@ -523,7 +570,7 @@ function loadInvoices() {
       el.innerHTML = '<div class="list-wrap">' + list.map(function(inv) {
         var status = inv.status || 'draft';
         var cls = status === 'paid' ? 'badge-green' : status === 'sent' ? 'badge-orange' : 'badge-red';
-        return '<div class="li">' +
+        return '<div class="li" onclick="openInvoiceEdit(' + JSON.stringify(inv).replace(/"/g, '&quot;') + ')">' +
           '<div class="li-ico" style="background:#fff4e3">🧾</div>' +
           '<div class="li-txt"><div class="li-title">' + esc(inv.client_name || inv.title || 'Invoice #' + inv.number) + '</div>' +
           '<div class="li-sub"><span class="badge ' + cls + '">' + status + '</span></div></div>' +
@@ -533,7 +580,28 @@ function loadInvoices() {
     .catch(function() { el.innerHTML = '<div class="empty"><div class="empty-ico">🧾</div><div class="empty-t">No invoices yet</div><div style="color:var(--muted);font-size:13px">Tap + New to create one</div></div>'; });
 }
 
-function openInvoiceForm() { push('invoice-form'); }
+function openInvoiceForm() {
+  push('invoice-form');
+  // Try to load client names from CRM for autofill
+  api('GET', '/api/crm/contacts?limit=100').then(function(data) {
+    var contacts = data.contacts || data || [];
+    if (!contacts.length) return;
+    var clientInput = document.getElementById('inv-client');
+    if (!clientInput) return;
+    // Add datalist for autocomplete
+    var listId = 'crm-clients-list';
+    var existing = document.getElementById(listId);
+    if (existing) existing.remove();
+    var dl = document.createElement('datalist');
+    dl.id = listId;
+    contacts.forEach(function(c) {
+      var name = c.name || ((c.first_name || '') + ' ' + (c.last_name || '')).trim();
+      if (name) { var opt = document.createElement('option'); opt.value = name; dl.appendChild(opt); }
+    });
+    document.body.appendChild(dl);
+    clientInput.setAttribute('list', listId);
+  }).catch(function(){});
+}
 
 function saveInvoice() {
   var client = document.getElementById('inv-client').value.trim();
@@ -889,6 +957,184 @@ function saveTask() {
 function esc(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── My Tasks ──────────────────────────────────────────────────────────────────
+var _taskEditId = null;
+var _taskEditBoard = null;
+var _taskEditColVals = {};
+
+function loadMyTasks() {
+  var el = document.getElementById('my-tasks-list');
+  el.innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  api('GET', '/api/workspaces').then(function(wsList) {
+    if (!wsList.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">✅</div><div class="empty-t">No workspaces</div></div>'; return; }
+    var boardRequests = wsList.map(function(ws) { return api('GET', '/api/boards/workspace/' + ws.id).catch(function() { return []; }); });
+    return Promise.all(boardRequests).then(function(allBoards) {
+      var boardList = [].concat.apply([], allBoards);
+      if (!boardList.length) { el.innerHTML = '<div class="empty"><div class="empty-ico">✅</div><div class="empty-t">No boards yet</div></div>'; return; }
+      var detailRequests = boardList.map(function(b) { return api('GET', '/api/boards/' + b.id).catch(function() { return null; }); });
+      return Promise.all(detailRequests).then(function(details) {
+        var html = '';
+        details.forEach(function(board) {
+          if (!board || !board.items || !board.items.length) return;
+          html += '<div class="sec" style="padding:0 16px">' + esc(board.name) + '</div>';
+          html += '<div class="list-wrap">';
+          board.items.forEach(function(item) {
+            var grp = (board.groups || []).find(function(g) { return g.id === item.group_id; });
+            var grpColor = grp ? grp.color : '#ccc';
+            html += '<div class="li" onclick="openTaskEdit(\'' + esc(item.id) + '\',\'' + esc(board.id) + '\')">' +
+              '<div class="li-ico" style="background:' + grpColor + '22"><div class="gdot" style="background:' + grpColor + '"></div></div>' +
+              '<div class="li-txt"><div class="li-title">' + esc(item.name) + '</div>' +
+              '<div class="li-sub">' + (grp ? esc(grp.name) : '') + '</div></div>' +
+              '<div class="li-chev">›</div></div>';
+          });
+          html += '</div>';
+        });
+        if (!html) html = '<div class="empty"><div class="empty-ico">✅</div><div class="empty-t">No tasks yet</div></div>';
+        el.innerHTML = html;
+      });
+    });
+  }).catch(function(e) { el.innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>'; });
+}
+
+function openTaskEdit(itemId, boardId) {
+  _taskEditId = itemId;
+  _taskEditColVals = {};
+  push('task-detail');
+  document.getElementById('td-name').value = '';
+  document.getElementById('td-cols').innerHTML = '<div class="loading"><div class="spin"></div></div>';
+  document.getElementById('td-save').disabled = true;
+  Promise.all([
+    api('GET', '/api/boards/' + boardId),
+    api('GET', '/api/items/' + itemId)
+  ]).then(function(res) {
+    var board = res[0];
+    var item = res[1];
+    _taskEditBoard = board;
+    document.getElementById('td-title').textContent = 'Edit Task';
+    document.getElementById('td-name').value = item.name || '';
+    document.getElementById('td-save').disabled = false;
+    // Render column fields with current values
+    var vals = {};
+    (item.values || []).forEach(function(v) { vals[v.column_id] = v.value; });
+    var SKIP = ['timeline','attachments'];
+    var cols = (board.columns || []).filter(function(c) { return SKIP.indexOf(c.type) === -1; });
+    if (!cols.length) { document.getElementById('td-cols').innerHTML = ''; return; }
+    api('GET', '/api/auth/users').catch(function() { return []; }).then(function(users) {
+      document.getElementById('td-cols').innerHTML = cols.map(function(col) {
+        var s = col.settings || {};
+        var cid = col.id;
+        var val = vals[cid] || '';
+        if (col.type === 'status' || col.type === 'priority') {
+          var opts = s.options || (col.type === 'priority'
+            ? [{label:'Critical'},{label:'High'},{label:'Medium'},{label:'Low'}]
+            : [{label:'Done'},{label:'Working on it'},{label:'Stuck'},{label:'Not started'}]);
+          return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select data-cid="' + esc(cid) + '"><option value="">— None —</option>' + opts.map(function(o) { return '<option' + (val === o.label ? ' selected' : '') + '>' + esc(o.label) + '</option>'; }).join('') + '</select></div>';
+        }
+        if (col.type === 'person') {
+          return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><select data-cid="' + esc(cid) + '"><option value="">— None —</option>' + users.map(function(u) { return '<option value="' + esc(u.id) + '"' + (val === u.id ? ' selected' : '') + '>' + esc(u.name) + '</option>'; }).join('') + '</select></div>';
+        }
+        if (col.type === 'date') {
+          return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="date" data-cid="' + esc(cid) + '" value="' + esc(val) + '"></div>';
+        }
+        if (col.type === 'number') {
+          return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="number" inputmode="numeric" data-cid="' + esc(cid) + '" value="' + esc(val) + '"></div>';
+        }
+        if (col.type === 'checkbox') {
+          return '<div class="cf" style="flex-direction:row;align-items:center;justify-content:space-between"><div class="cf-lbl" style="margin:0">' + esc(col.name) + '</div><input type="checkbox" data-cid="' + esc(cid) + '"' + (val === 'true' ? ' checked' : '') + ' style="width:22px;height:22px;accent-color:var(--blue)"></div>';
+        }
+        return '<div class="cf"><div class="cf-lbl">' + esc(col.name) + '</div><input type="text" data-cid="' + esc(cid) + '" value="' + esc(val) + '"></div>';
+      }).join('');
+      // Pre-populate colVals with existing values
+      _taskEditColVals = Object.assign({}, vals);
+      // Bind change handlers
+      document.getElementById('td-cols').querySelectorAll('[data-cid]').forEach(function(inp) {
+        inp.addEventListener('change', function() {
+          _taskEditColVals[inp.dataset.cid] = inp.type === 'checkbox' ? (inp.checked ? 'true' : '') : inp.value;
+        });
+      });
+    });
+  }).catch(function(e) {
+    document.getElementById('td-cols').innerHTML = '<div class="empty"><div class="empty-ico">⚠️</div><div class="empty-t">' + esc(e.message) + '</div></div>';
+  });
+}
+
+function saveTaskEdit() {
+  var name = document.getElementById('td-name').value.trim();
+  if (!name) { toast('Enter a task name', 'err'); return; }
+  var btn = document.getElementById('td-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  api('PUT', '/api/items/' + _taskEditId, { name: name })
+    .then(function() {
+      var saves = [];
+      if (_taskEditBoard && _taskEditBoard.columns) {
+        _taskEditBoard.columns.forEach(function(col) {
+          if (_taskEditColVals[col.id] !== undefined) {
+            saves.push(api('PUT', '/api/items/' + _taskEditId + '/values', { column_id: col.id, value: _taskEditColVals[col.id] }).catch(function(){}));
+          }
+        });
+      }
+      return Promise.all(saves);
+    })
+    .then(function() {
+      toast('✅ Task updated!', 'ok');
+      goBack();
+    })
+    .catch(function(e) {
+      toast(e.message, 'err');
+      btn.disabled = false; btn.textContent = 'Save';
+    });
+}
+
+// ── Invoice edit ──────────────────────────────────────────────────────────────
+var _editInvoiceId = null;
+
+function openInvoiceEdit(inv) {
+  _editInvoiceId = inv.id;
+  document.getElementById('ie-client').value = inv.client_name || '';
+  document.getElementById('ie-desc').value   = inv.notes || inv.description || '';
+  document.getElementById('ie-amount').value = inv.total || inv.amount || '';
+  document.getElementById('ie-due').value    = inv.due_date ? inv.due_date.slice(0,10) : '';
+  document.getElementById('ie-status').value = inv.status || 'draft';
+  push('invoice-edit');
+}
+
+function updateInvoice() {
+  if (!_editInvoiceId) return;
+  api('PUT', '/api/invoices/' + _editInvoiceId, {
+    client_name: document.getElementById('ie-client').value.trim(),
+    notes:       document.getElementById('ie-desc').value.trim(),
+    total:       parseFloat(document.getElementById('ie-amount').value) || 0,
+    due_date:    document.getElementById('ie-due').value || null,
+    status:      document.getElementById('ie-status').value,
+  }).then(function() {
+    toast('✅ Invoice updated!', 'ok');
+    goBack();
+    loadInvoices();
+  }).catch(function(e) { toast(e.message, 'err'); });
+}
+
+// ── Reminder edit ─────────────────────────────────────────────────────────────
+var _editReminderId = null;
+
+function openReminderEdit(r) {
+  _editReminderId = r.id;
+  document.getElementById('re-content').value = r.content || '';
+  var d = new Date(r.remind_at);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  document.getElementById('re-dt').value = d.toISOString().slice(0,16);
+  push('reminder-edit');
+}
+
+function saveReminderEdit() {
+  if (!_editReminderId) return;
+  var content = document.getElementById('re-content').value.trim();
+  var dt      = document.getElementById('re-dt').value;
+  if (!content || !dt) { toast('Fill in all fields', 'err'); return; }
+  api('PUT', '/api/bibixbot/reminders/' + _editReminderId, { content: content, remind_at: new Date(dt).toISOString() })
+    .then(function() { toast('✅ Reminder updated!', 'ok'); goBack(); loadReminders(); })
+    .catch(function(e) { toast(e.message, 'err'); });
 }
 
 // ── Service worker ────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Instagram } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Database } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../ui/Avatar';
@@ -41,6 +41,8 @@ export default function Sidebar() {
 
   const ICONS = ['📋','🚀','💡','🎯','🔥','📊','🏆','⚡','🛠️','🎨','📱','🌍'];
   const isAdmin = user?.role === 'admin';
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [marketingOpen, setMarketingOpen] = useState(false);
 
   return (
     <aside className="w-64 bg-monday-sidebar flex flex-col h-full overflow-hidden">
@@ -82,13 +84,31 @@ export default function Sidebar() {
           <FileText size={16} /> Invoices
         </Link>
         {hasPermission('instagram') && (
-          <Link to="/instagram" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
-            <Instagram size={16} /> Instagram
-          </Link>
+          <div>
+            <button
+              onClick={() => setMarketingOpen(o => !o)}
+              className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm w-full">
+              <Megaphone size={16} />
+              <span className="flex-1 text-left">Marketing</span>
+              {marketingOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {marketingOpen && (
+              <div className="ml-6">
+                <Link to="/marketing/instagram" className="flex items-center gap-3 px-4 py-2 text-white/60 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+                  <Instagram size={14} /> Instagram
+                </Link>
+              </div>
+            )}
+          </div>
         )}
         <Link to="/admin" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
           <Shield size={16} /> User Management
         </Link>
+        {isSuperAdmin && (
+          <Link to="/backups" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+            <Database size={16} /> Backups
+          </Link>
+        )}
 
         <div className="mt-4 px-2">
           <div className="flex items-center justify-between px-2 mb-1">
