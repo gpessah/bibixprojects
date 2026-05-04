@@ -27,8 +27,12 @@ router.post('/register', (req, res) => {
   const password_hash = bcrypt.hashSync(password, 10);
   const avatar_color = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
 
-  db.prepare('INSERT INTO users (id, name, email, password_hash, avatar_color) VALUES (?, ?, ?, ?, ?)')
-    .run(id, name, email, password_hash, avatar_color);
+  // First user ever registered becomes super_admin automatically
+  const userCount = db.prepare('SELECT COUNT(*) as n FROM users').get().n;
+  const role = userCount === 0 ? 'super_admin' : 'user';
+
+  db.prepare('INSERT INTO users (id, name, email, password_hash, avatar_color, role) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, name, email, password_hash, avatar_color, role);
 
   const wsId = uuidv4();
   db.prepare('INSERT INTO workspaces (id, name, description, created_by) VALUES (?, ?, ?, ?)')
@@ -66,8 +70,8 @@ router.post('/register', (req, res) => {
     });
   }
 
-  const token = jwt.sign({ id, name, email }, JWT_SECRET, { expiresIn: '7d' });
-  res.json({ token, user: { id, name, email, avatar_color } });
+  const token = jwt.sign({ id, name, email, role }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, user: { id, name, email, avatar_color, role } });
 });
 
 router.post('/login', (req, res) => {

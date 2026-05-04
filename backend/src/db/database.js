@@ -7,21 +7,59 @@ const SCHEMA_PATH = path.join(__dirname, 'schema.sql');
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
-// ── Startup backup — copy DB before opening so restarts never destroy data ───
 const BACKUP_DIR = path.join(path.dirname(DB_PATH), 'backups');
-try {
-  fs.mkdirSync(BACKUP_DIR, { recursive: true });
-  if (fs.existsSync(DB_PATH)) {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    fs.copyFileSync(DB_PATH, path.join(BACKUP_DIR, `monday.db.${stamp}`));
-    // Keep only the 10 most recent startup backups
-    const files = fs.readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith('monday.db.'))
-      .sort()
-      .reverse();
-    files.slice(10).forEach(f => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch {} });
+fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+// ── Validate SQLite file (must start with "SQLite format 3") ─────────────────
+function isValidSQLite(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const stat = fs.statSync(filePath);
+    if (stat.size < 4096) return false;
+    const buf = Buffer.alloc(16);
+    const fd = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buf, 0, 16, 0);
+    fs.closeSync(fd);
+    return buf.toString('utf8', 0, 15) === 'SQLite format 3';
+  } catch { return false; }
+}
+
+// ── Auto-restore if DB is corrupted ──────────────────────────────────────────
+if (fs.existsSync(DB_PATH) && !isValidSQLite(DB_PATH)) {
+  console.error('[DB] CORRUPTION DETECTED — attempting auto-restore from backup...');
+  const candidates = fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.startsWith('monday.db.'))
+    .sort().reverse();
+  let restored = false;
+  for (const f of candidates) {
+    const bp = path.join(BACKUP_DIR, f);
+    if (isValidSQLite(bp)) {
+      fs.copyFileSync(bp, DB_PATH);
+      console.error(`[DB] Restored from backup: ${f}`);
+      restored = true;
+      break;
+    }
   }
-} catch (e) { console.warn('[DB] Backup warning:', e.message); }
+  if (!restored) {
+    console.error('[DB] No valid backup found — starting with fresh database.');
+    fs.unlinkSync(DB_PATH);
+  }
+}
+
+// ── Startup backup — only if DB is valid ─────────────────────────────────────
+try {
+  if (isValidSQLite(DB_PATH)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const dest = path.join(BACKUP_DIR, `monday.db.startup.${stamp}`);
+    fs.copyFileSync(DB_PATH, dest);
+    // Keep only the 10 most recent startup backups (startup.* files only)
+    const startupFiles = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('monday.db.startup.'))
+      .sort().reverse();
+    startupFiles.slice(10).forEach(f => { try { fs.unlinkSync(path.join(BACKUP_DIR, f)); } catch {} });
+    console.log(`[DB] Startup backup saved: ${path.basename(dest)}`);
+  }
+} catch (e) { console.warn('[DB] Startup backup warning:', e.message); }
 
 // node-sqlite3-wasm creates a lock directory; clean it up on startup
 // so crashed/killed processes don't leave a stale lock
