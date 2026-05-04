@@ -897,7 +897,22 @@ if ('serviceWorker' in navigator) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-if (token && user) { onLogin(); }
+if (token && user) {
+  // Validate token with server before trusting it
+  api('GET', '/api/auth/me')
+    .then(function(me) {
+      user = me;
+      localStorage.setItem('bx_usr', JSON.stringify(me));
+      onLogin();
+    })
+    .catch(function() {
+      // Token invalid (DB reset, account deleted, etc.) — clear and show login
+      token = null; user = null;
+      localStorage.removeItem('bx_tok');
+      localStorage.removeItem('bx_usr');
+      // Login screen is already shown by default
+    });
+}
 </script>
 </body>
 </html>
