@@ -1,8 +1,12 @@
 // Bibix Projects Service Worker
-const CACHE = 'bibix-v2';
+const CACHE = 'bibix-v3';
 
 self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', e => e.waitUntil(
+  caches.keys().then(keys =>
+    Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
+  ).then(() => self.clients.claim())
+));
 
 // ── Push notifications ────────────────────────────────────────────────────────
 self.addEventListener('push', e => {
