@@ -6,33 +6,33 @@ const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 
 // ── Tables ────────────────────────────────────────────────────────────────────
-db.exec(`
-  CREATE TABLE IF NOT EXISTS instagram_actions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    username TEXT,
-    follower_count INTEGER,
-    post_url TEXT,
-    reply_text TEXT,
-    comment_text TEXT,
-    campaign_id TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-  CREATE TABLE IF NOT EXISTS instagram_campaigns (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    status TEXT DEFAULT 'running',
-    actions_count INTEGER DEFAULT 0,
-    new_followers INTEGER DEFAULT 0,
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    ended_at DATETIME,
-    notes TEXT,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`);
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS instagram_actions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      username TEXT,
+      follower_count INTEGER,
+      post_url TEXT,
+      reply_text TEXT,
+      comment_text TEXT,
+      campaign_id TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS instagram_campaigns (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT DEFAULT 'running',
+      actions_count INTEGER DEFAULT 0,
+      new_followers INTEGER DEFAULT 0,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      ended_at DATETIME,
+      notes TEXT
+    );
+  `);
+} catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
 // helper — which user_id to query
 function targetUser(req) {
