@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Signing out…</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="font-family:sans-serif;text-align:center;padding:60px 20px;background:#f0f4f8">
+<script>
+  localStorage.removeItem('bx_tok');
+  localStorage.removeItem('bx_usr');
+  sessionStorage.clear();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(function(regs) {
+      regs.forEach(function(r) { r.unregister(); });
+    });
+  }
+  if ('caches' in window) {
+    caches.keys().then(function(keys) { keys.forEach(function(k) { caches.delete(k); }); });
+  }
+  setTimeout(function() { window.location.href = '/app/'; }, 800);
+</script>
+<p style="color:#0073ea;font-size:18px;font-weight:700">Signing out…</p>
+<p style="color:#7a7e8a;margin-top:8px">Redirecting to login</p>
+</body>
+</html>
