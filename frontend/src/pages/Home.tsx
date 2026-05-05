@@ -256,8 +256,17 @@ function ClockFace({ tz, label }: { tz: string; label: string }) {
 
 function WorldClocks({ userId }: { userId: string }) {
   const storageKey = `world_clocks_${userId}`;
-  const saved = localStorage.getItem(storageKey);
-  const [selected, setSelected] = useState<string[]>(saved ? JSON.parse(saved) : DEFAULT_CITIES);
+  const loadSaved = (): string[] => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return DEFAULT_CITIES;
+      const parsed: string[] = JSON.parse(raw);
+      // Validate: must be city labels that exist in CITIES, not old timezone strings
+      const valid = parsed.filter(l => CITIES.some(c => c.label === l));
+      return valid.length > 0 ? valid : DEFAULT_CITIES;
+    } catch { return DEFAULT_CITIES; }
+  };
+  const [selected, setSelected] = useState<string[]>(loadSaved);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>(selected);
   const [search, setSearch] = useState('');
@@ -300,7 +309,7 @@ function WorldClocks({ userId }: { userId: string }) {
             <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b">
               <div>
                 <h3 className="font-semibold text-gray-900">Select Cities</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{draft.length}/6 selected</p>
+                <p className="text-xs text-gray-400 mt-0.5">{draft.length}/6 selected{draft.length >= 6 ? ' — deselect one to swap' : ''}</p>
               </div>
               <button onClick={() => setEditing(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
