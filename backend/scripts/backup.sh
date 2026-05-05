@@ -34,6 +34,15 @@ if [ "$DB_SIZE" -lt 4096 ]; then
   exit 1
 fi
 
+# Run SQLite integrity check if sqlite3 CLI is available — never back up a corrupt DB
+if command -v sqlite3 >/dev/null 2>&1; then
+  INTEGRITY=$(sqlite3 "$DB_PATH" "PRAGMA integrity_check;" 2>&1 | head -1)
+  if [ "$INTEGRITY" != "ok" ]; then
+    echo "$LOG_TAG ERROR: DB failed integrity check: $INTEGRITY. Skipping backup to avoid saving corruption."
+    exit 1
+  fi
+fi
+
 # ── Daily backup ──────────────────────────────────────────────────────────────
 DAILY_NAME="monday.db.daily.$(date '+%Y-%m-%d')"
 DAILY_PATH="$BACKUP_DIR/$DAILY_NAME"
