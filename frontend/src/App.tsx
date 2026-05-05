@@ -20,8 +20,6 @@ import InvoicePage from './pages/InvoicePage';
 import PublicFormPage from './pages/PublicFormPage';
 import InstagramPage from './pages/InstagramPage';
 import BackupsPage from './pages/BackupsPage';
-import LandingPagesPage from './pages/LandingPagesPage';
-import LandingPageEditor from './pages/LandingPageEditor';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
@@ -54,10 +52,6 @@ export default function App() {
       <Route path="/form/:formId" element={<PublicFormPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Navigate to="/login" replace />} />
-      {/* Full-screen editor (no sidebar) */}
-      <Route path="/marketing/design/landing-pages/:id/edit" element={
-        <ProtectedRoute><LandingPageEditor /></ProtectedRoute>
-      } />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Home />} />
         <Route path="board/:boardId" element={<BoardPage />} />
@@ -70,7 +64,6 @@ export default function App() {
         <Route path="invoices" element={<InvoicePage />} />
         <Route path="instagram" element={<Navigate to="/marketing/instagram" replace />} />
         <Route path="marketing/instagram" element={<ModuleRoute module="instagram"><InstagramPage /></ModuleRoute>} />
-        <Route path="marketing/design/landing-pages" element={<ModuleRoute module="marketing"><LandingPagesPage /></ModuleRoute>} />
         <Route path="backups" element={<BackupsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="admin" element={<AdminPage />} />
