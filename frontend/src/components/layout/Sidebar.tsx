@@ -43,6 +43,7 @@ export default function Sidebar() {
   const isAdmin = user?.role === 'admin';
   const isSuperAdmin = user?.role === 'super_admin';
   const [marketingOpen, setMarketingOpen] = useState(false);
+  const [socialMediaOpen, setSocialMediaOpen] = useState(false);
 
   return (
     <aside className="w-64 bg-monday-sidebar flex flex-col h-full overflow-hidden">
@@ -80,10 +81,12 @@ export default function Sidebar() {
             <ContactRound size={16} /> CRM
           </Link>
         )}
-        <Link to="/invoices" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
-          <FileText size={16} /> Invoices
-        </Link>
-        {hasPermission('instagram') && (
+        {hasPermission('invoices') && (
+          <Link to="/invoices" className="flex items-center gap-3 px-4 py-2.5 text-white/70 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+            <FileText size={16} /> Invoices
+          </Link>
+        )}
+        {hasPermission('marketing') && (
           <div>
             <button
               onClick={() => setMarketingOpen(o => !o)}
@@ -93,10 +96,20 @@ export default function Sidebar() {
               {marketingOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
             {marketingOpen && (
-              <div className="ml-6">
-                <Link to="/marketing/instagram" className="flex items-center gap-3 px-4 py-2 text-white/60 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
-                  <Instagram size={14} /> Instagram
-                </Link>
+              <div className="ml-4">
+                <button
+                  onClick={() => setSocialMediaOpen(o => !o)}
+                  className="flex items-center gap-3 px-4 py-2 text-white/60 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm w-full">
+                  <span className="flex-1 text-left">Social Media</span>
+                  {socialMediaOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </button>
+                {socialMediaOpen && (
+                  <div className="ml-4">
+                    <Link to="/marketing/instagram" className="flex items-center gap-3 px-4 py-2 text-white/50 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+                      <Instagram size={13} /> Instagram
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
           </div>

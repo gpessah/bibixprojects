@@ -17,11 +17,13 @@ const ROLE_META: Record<UserRole, { label: string; color: string; icon: React.Re
 };
 
 const MODULES: { id: AppModule; label: string; description: string; emoji: string }[] = [
-  { id: 'boards',     label: 'Boards & Workspaces', description: 'View and manage project boards', emoji: '📋' },
-  { id: 'calendar',   label: 'Calendar',             description: 'Access the calendar view',       emoji: '📅' },
-  { id: 'bibixbot',   label: 'BibixBot',             description: 'Use the AI assistant',           emoji: '🤖' },
-  { id: 'scheduling', label: 'Scheduling',           description: 'Manage bookings and schedules',  emoji: '🗓️' },
-  { id: 'crm',        label: 'CRM',                  description: 'Contacts, forms and reports',    emoji: '👥' },
+  { id: 'boards',     label: 'Boards & Workspaces', description: 'View and manage project boards',  emoji: '📋' },
+  { id: 'calendar',   label: 'Calendar',             description: 'Access the calendar view',        emoji: '📅' },
+  { id: 'bibixbot',   label: 'BibixBot',             description: 'Use the AI assistant',            emoji: '🤖' },
+  { id: 'scheduling', label: 'Scheduling',           description: 'Manage bookings and schedules',   emoji: '🗓️' },
+  { id: 'crm',        label: 'CRM',                  description: 'Contacts, forms and reports',     emoji: '👥' },
+  { id: 'invoices',   label: 'Invoices',             description: 'Create and manage invoices',      emoji: '🧾' },
+  { id: 'marketing',  label: 'Marketing',            description: 'Social media and campaigns',      emoji: '📣' },
 ];
 
 const AVATAR_COLORS = ['#0073ea','#e2445c','#00c875','#ffcb00','#a25ddc','#037f4c','#bb3354','#ff642e'];
