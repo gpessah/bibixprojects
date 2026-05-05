@@ -91,7 +91,11 @@ function calcTotals(items, taxRate, discount) {
 // ════════════════════════════════════════════════════════════════════════════
 
 router.get('/my-companies', authenticate, (req, res) => {
-  const rows = db.prepare('SELECT * FROM invoice_my_companies WHERE created_by = ? ORDER BY name').all(req.user.id);
+  // super_admin sees all companies, others see only their own
+  const role = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id)?.role;
+  const rows = role === 'super_admin'
+    ? db.prepare('SELECT * FROM invoice_my_companies ORDER BY name').all()
+    : db.prepare('SELECT * FROM invoice_my_companies WHERE created_by = ? ORDER BY name').all(req.user.id);
   res.json(rows);
 });
 
@@ -137,7 +141,11 @@ router.delete('/my-companies/:id', authenticate, (req, res) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 router.get('/clients', authenticate, (req, res) => {
-  const rows = db.prepare('SELECT * FROM invoice_clients WHERE created_by = ? ORDER BY name').all(req.user.id);
+  // super_admin sees all clients, others see only their own
+  const role = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id)?.role;
+  const rows = role === 'super_admin'
+    ? db.prepare('SELECT * FROM invoice_clients ORDER BY name').all()
+    : db.prepare('SELECT * FROM invoice_clients WHERE created_by = ? ORDER BY name').all(req.user.id);
   res.json(rows);
 });
 
