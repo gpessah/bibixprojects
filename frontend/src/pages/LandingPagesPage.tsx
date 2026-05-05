@@ -30,7 +30,7 @@ export default function LandingPagesPage() {
   const load = async () => {
     try {
       const { data } = await api.get('/landing-pages');
-      setPages(data);
+      setPages(Array.isArray(data) ? data : []);
     } catch { toast.error('Failed to load pages'); }
     finally { setLoading(false); }
   };
