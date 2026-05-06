@@ -116,20 +116,20 @@ async function callGemini(prompt, imageBase64, mimeType) {
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
+      body: JSON.stringify({ contents: [{ parts }] }),
     }
   );
 
+  const json = await res.json();
+
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+    const msg = json?.error?.message || JSON.stringify(json);
+    console.error('[Gemini] API error:', res.status, msg);
+    throw new Error(`Gemini ${res.status}: ${msg}`);
   }
 
-  const json = await res.json();
-  const text = (json.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+  const text = (json.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '').trim();
+  console.log('[Gemini] Response text (first 200):', text.slice(0, 200));
   return JSON.parse(text);
 }
 
