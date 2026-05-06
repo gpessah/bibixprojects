@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@azure/msal-node": "^5.1.4",
-    "@google/generative-ai": "^0.24.1",
     "@microsoft/microsoft-graph-client": "^3.0.7",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

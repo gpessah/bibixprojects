@@ -3,11 +3,8 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { authenticate } = require('../middleware/auth');
 const fetch = require('node-fetch');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const router = express.Router();
-
-const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS landing_pages (
@@ -107,18 +104,32 @@ Each section object: { "id": "unique-string", "type": "sectiontype", "data": { .
 Always include hero as first and footer as last. Total 4-6 sections.`;
 
 async function callGemini(prompt, imageBase64, mimeType) {
-  if (!genAI) throw new Error('Gemini API key not configured');
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
-    generationConfig: { responseMimeType: 'application/json' },
-  });
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
 
   const parts = [];
   if (imageBase64) parts.push({ inlineData: { data: imageBase64, mimeType: mimeType || 'image/jpeg' } });
   parts.push({ text: prompt });
 
-  const result = await model.generateContent(parts);
-  const text = result.response.text().replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+  }
+
+  const json = await res.json();
+  const text = (json.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
   return JSON.parse(text);
 }
 
@@ -171,10 +182,8 @@ router.post('/ai/rewrite-section', authenticate, async (req, res) => {
     const { section, instruction, theme } = req.body;
     if (!section || !instruction) return res.status(400).json({ error: 'section and instruction required' });
     const prompt = `Rewrite this landing page section based on this instruction: "${instruction}"\n\nCurrent section JSON:\n${JSON.stringify(section, null, 2)}\n\nReturn ONLY the updated "data" object as valid JSON (no markdown, no wrapper).`;
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash', generationConfig: { responseMimeType: 'application/json' } });
-    const result = await model.generateContent([{ text: prompt }]);
-    const text = result.response.text().replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    res.json({ data: JSON.parse(text) });
+    const updated = await callGemini(prompt);
+    res.json({ data: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
