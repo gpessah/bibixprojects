@@ -49,7 +49,9 @@ function SetupScreen({ onReady }: { onReady: (sections: Section[], theme: Theme)
         onReady([defaultSection('hero'), defaultSection('footer')], DEFAULT_THEME);
       }
     } catch (e: any) {
-      toast.error(e?.response?.data?.error || 'AI generation failed');
+      const msg = e?.response?.data?.error || e?.message || 'AI generation failed';
+      toast.error(msg);
+      console.error('[AI generate]', e?.response?.status, e?.response?.data, e?.message);
     } finally {
       setLoading(false);
     }
