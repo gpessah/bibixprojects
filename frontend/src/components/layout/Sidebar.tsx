@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Database } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Database, PanelTop } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../ui/Avatar';
@@ -44,6 +44,7 @@ export default function Sidebar() {
   const isSuperAdmin = user?.role === 'super_admin';
   const [marketingOpen, setMarketingOpen] = useState(false);
   const [socialMediaOpen, setSocialMediaOpen] = useState(false);
+  const [designOpen, setDesignOpen] = useState(false);
 
   return (
     <aside className="w-64 bg-monday-sidebar flex flex-col h-full overflow-hidden">
@@ -108,6 +109,19 @@ export default function Sidebar() {
                   <div className="ml-4">
                     <Link to="/marketing/instagram" className="flex items-center gap-3 px-4 py-2 text-white/50 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
                       <Instagram size={13} /> Instagram
+                    </Link>
+                  </div>
+                )}
+                <button
+                  onClick={() => setDesignOpen(o => !o)}
+                  className="flex items-center gap-3 px-4 py-2 text-white/60 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm w-full">
+                  <span className="flex-1 text-left">Design</span>
+                  {designOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </button>
+                {designOpen && (
+                  <div className="ml-4">
+                    <Link to="/marketing/design/landing-pages" className="flex items-center gap-3 px-4 py-2 text-white/50 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+                      <PanelTop size={13} /> Landing Pages
                     </Link>
                   </div>
                 )}
