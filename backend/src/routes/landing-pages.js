@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { authenticate } = require('../middleware/auth');
 const fetch = require('node-fetch');
+const OpenAI = require('openai');
 
 const router = express.Router();
 
@@ -103,36 +104,32 @@ Available section types (use exact field names):
 Each section object: { "id": "unique-string", "type": "sectiontype", "data": { ...fields... } }
 Always include hero as first and footer as last. Total 4-6 sections.`;
 
-async function callGemini(prompt, imageBase64, mimeType) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+async function callAI(prompt, imageBase64, mimeType) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
 
-  const parts = [];
-  if (imageBase64) parts.push({ inlineData: { data: imageBase64, mimeType: mimeType || 'image/jpeg' } });
-  parts.push({ text: prompt });
+  const openai = new OpenAI({ apiKey: apiKey });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts }] }),
-    }
-  );
-
-  const json = await res.json();
-
-  if (!res.ok) {
-    var errMsg = (json.error && json.error.message) || JSON.stringify(json);
-    console.error('[Gemini] API error:', res.status, errMsg);
-    throw new Error('Gemini ' + res.status + ': ' + errMsg);
+  var messageContent;
+  if (imageBase64) {
+    messageContent = [
+      { type: 'image_url', image_url: { url: 'data:' + (mimeType || 'image/jpeg') + ';base64,' + imageBase64 } },
+      { type: 'text', text: prompt }
+    ];
+  } else {
+    messageContent = prompt;
   }
 
-  var candidates = json.candidates || [];
-  var firstPart = candidates[0] && candidates[0].content && candidates[0].content.parts && candidates[0].content.parts[0];
-  var rawText = (firstPart && firstPart.text) || '';
+  var response = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: messageContent }],
+    temperature: 0.7,
+    max_tokens: 4000,
+  });
+
+  var rawText = (response.choices[0] && response.choices[0].message && response.choices[0].message.content) || '';
   var text = rawText.replace(/^```(?:json)?\n?/gm, '').replace(/\n?```$/gm, '').trim();
-  console.log('[Gemini] Response (first 200):', text.slice(0, 200));
+  console.log('[OpenAI] Response (first 200):', text.slice(0, 200));
   return JSON.parse(text);
 }
 
@@ -153,7 +150,7 @@ router.post('/ai/generate', authenticate, async (req, res) => {
     const { description } = req.body;
     if (!description) return res.status(400).json({ error: 'description required' });
     const prompt = `You are a professional landing page designer and copywriter.\nCreate a complete landing page for this business: "${description}"\n${SCHEMA_PROMPT}\nMake the content specific, compelling, and professional. Choose colors that fit the business type.`;
-    const data = await callGemini(prompt);
+    const data = await callAI(prompt);
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -163,7 +160,7 @@ router.post('/ai/analyze-screenshot', authenticate, async (req, res) => {
     const { imageBase64, mimeType } = req.body;
     if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' });
     const prompt = `Analyze this landing page screenshot and recreate its structure as an editable page template.\n${SCHEMA_PROMPT}\nMatch the visual style, color scheme, and content structure visible in the screenshot. Extract any readable text.`;
-    const data = await callGemini(prompt, imageBase64, mimeType);
+    const data = await callAI(prompt, imageBase64, mimeType);
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -175,7 +172,7 @@ router.post('/ai/analyze-url', authenticate, async (req, res) => {
     const html = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000 }).then(r => r.text());
     const text = extractText(html);
     const prompt = `Analyze this webpage content and recreate it as a landing page template.\n${SCHEMA_PROMPT}\nPage content:\n${text}`;
-    const data = await callGemini(prompt);
+    const data = await callAI(prompt);
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -185,7 +182,7 @@ router.post('/ai/rewrite-section', authenticate, async (req, res) => {
     const { section, instruction, theme } = req.body;
     if (!section || !instruction) return res.status(400).json({ error: 'section and instruction required' });
     const prompt = `Rewrite this landing page section based on this instruction: "${instruction}"\n\nCurrent section JSON:\n${JSON.stringify(section, null, 2)}\n\nReturn ONLY the updated "data" object as valid JSON (no markdown, no wrapper).`;
-    const updated = await callGemini(prompt);
+    const updated = await callAI(prompt);
     res.json({ data: updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
