@@ -611,33 +611,26 @@
   }
 
   function dumpCommentDiagnostic(label) {
-    console.log('[Bibix Bulk]', label, '— diagnostic dump:');
-    console.log('  My selectors (all):');
+    const P = '[Bibix Bulk]';
+    console.log(P, label, '— diagnostic dump:');
     COMMENT_ITEM_SELECTORS.forEach((sel) => {
-      console.log('    ', sel, '→', document.querySelectorAll(sel).length);
+      console.log(P, '  selector:', sel, '→', document.querySelectorAll(sel).length, 'matches');
     });
     const dataIds = Array.from(document.querySelectorAll('[data-id]'));
-    console.log('  total [data-id] elements:', dataIds.length);
-    if (dataIds.length) {
-      dataIds.slice(0, 6).forEach((n, i) => console.log('    [data-id]', i, n.getAttribute('data-id'), '|', (n.className || '').toString().slice(0, 60)));
-    }
+    console.log(P, '  total [data-id] elements:', dataIds.length);
+    dataIds.slice(0, 6).forEach((n, i) => console.log(P, '   data-id #' + i + ':', n.getAttribute('data-id'), '|', (n.className || '').toString().slice(0, 60)));
     const dataUrns = Array.from(document.querySelectorAll('[data-urn]'));
-    console.log('  total [data-urn] elements:', dataUrns.length);
-    if (dataUrns.length) {
-      dataUrns.slice(0, 6).forEach((n, i) => console.log('    [data-urn]', i, n.getAttribute('data-urn'), '|', (n.className || '').toString().slice(0, 60)));
-    }
+    console.log(P, '  total [data-urn] elements:', dataUrns.length);
+    dataUrns.slice(0, 6).forEach((n, i) => console.log(P, '   data-urn #' + i + ':', n.getAttribute('data-urn'), '|', (n.className || '').toString().slice(0, 60)));
     const classComment = Array.from(document.querySelectorAll('[class*="comment"]'));
-    console.log('  total elements with "comment" in class:', classComment.length);
-    if (classComment.length) {
-      // Group by first part of class
-      const classes = new Set();
-      classComment.forEach((n) => {
-        ((n.className || '').toString().split(/\s+/)).forEach((c) => {
-          if (c.toLowerCase().includes('comment')) classes.add(c);
-        });
+    console.log(P, '  total elements with "comment" in class:', classComment.length);
+    const classes = new Set();
+    classComment.forEach((n) => {
+      ((n.className || '').toString().split(/\s+/)).forEach((c) => {
+        if (c.toLowerCase().includes('comment')) classes.add(c);
       });
-      console.log('    distinct class tokens with "comment":', Array.from(classes).slice(0, 20));
-    }
+    });
+    console.log(P, '  distinct class tokens with "comment":', Array.from(classes).slice(0, 30));
   }
 
   function commentText(item) {
@@ -946,7 +939,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.1.3)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.7)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
