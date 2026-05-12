@@ -67,31 +67,41 @@
     return null;
   }
 
+  const POST_TEXT_SELECTORS = [
+    '.update-components-text',
+    '.feed-shared-update-v2__description',
+    '.feed-shared-text',
+    '.update-components-update-v2__commentary',
+    '[data-test-id="main-feed-activity-card__commentary"]',
+    '[class*="update-components-text"]',
+    '[class*="feed-shared-text"]',
+    '[class*="update-components-update-v2__commentary"]',
+    '[class*="feed-shared-inline-show-more-text"]',
+    '[class*="break-words"]',
+  ].join(', ');
+
+  function readTextFrom(node) {
+    if (!node) return '';
+    const t = (node.innerText || '').trim();
+    if (t.length < 5) return '';
+    return t.replace(/\s+\n/g, '\n').slice(0, 3000);
+  }
+
   function extractPostText(container) {
     if (!container) return '';
-    // Use ONLY known post-text selectors. Falling back to container.innerText
-    // would include LinkedIn's UI chrome (which is in the user's UI language
-    // — e.g. Hebrew — even when the actual post is in English) and confuse
-    // the language detector. Better to return empty and let the backend
-    // generate from image/author context.
-    const selectors = [
-      '.update-components-text',
-      '.feed-shared-update-v2__description',
-      '.feed-shared-text',
-      '.update-components-update-v2__commentary',
-      '[data-test-id="main-feed-activity-card__commentary"]',
-      '[class*="update-components-text"]',
-      '[class*="feed-shared-text"]',
-      '[class*="update-components-update-v2__commentary"]',
-    ];
-    for (const sel of selectors) {
-      const node = container.querySelector(sel);
-      if (node) {
-        const t = (node.innerText || '').trim();
-        if (t.length > 5) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
-      }
-    }
-    return '';
+    // Pass 1 — known selectors inside the container
+    const node = container.querySelector(POST_TEXT_SELECTORS);
+    const fromContainer = readTextFrom(node);
+    if (fromContainer) return fromContainer;
+    // Pass 2 — search the whole document. In LinkedIn's comment-overlay/modal
+    // view, the post text element may live outside our local container.
+    // Pick the LARGEST visible match — usually the main post body.
+    let best = '';
+    document.querySelectorAll(POST_TEXT_SELECTORS).forEach((n) => {
+      const t = readTextFrom(n);
+      if (t.length > best.length) best = t;
+    });
+    return best;
   }
 
   function extractImageDescription(container) {
@@ -168,7 +178,26 @@
     console.log('[Bibix LinkedIn AI] openPopover called', opts && opts.title);
     closePopover();
     const rect = anchor.getBoundingClientRect();
-    const pop = el('div', { className: 'bibix-popover' });
+    // Inline styles in addition to the .bibix-popover class — guarantees the
+    // popover is visible even if a host site CSS rule tries to hide it.
+    const pop = el('div', { className: 'bibix-popover', style: {
+      position: 'fixed',
+      zIndex: '2147483647',
+      background: '#ffffff',
+      border: '1px solid #e2e8f0',
+      borderRadius: '12px',
+      boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
+      padding: '14px',
+      width: '360px',
+      minHeight: '120px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px',
+      color: '#1f2937',
+      display: 'block',
+      visibility: 'visible',
+      opacity: '1',
+      pointerEvents: 'auto',
+    } });
     const header = el('div', { className: 'bibix-popover-header' }, [
       el('div', { className: 'bibix-popover-title' }, '✨ Bibix AI · ' + opts.title),
       el('button', { className: 'bibix-popover-close', onClick: closePopover }, '×'),
