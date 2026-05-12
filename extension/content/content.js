@@ -225,9 +225,22 @@
     }, 50);
   }
 
+  function alreadyHasBibixButton(node) {
+    if (!node) return false;
+    if (node.querySelector && node.querySelector('.' + BTN_CLASS)) return true;
+    // Also check nearby siblings — LinkedIn occasionally re-mounts wrappers
+    let p = node.parentElement;
+    for (let i = 0; i < 3 && p; i++) {
+      if (p.querySelector && p.querySelector('.' + BTN_CLASS)) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
   // ── Inject buttons next to comment boxes ─────────────────────────────────────
   function injectIntoCommentBox(box) {
     if (!box || box.getAttribute(PROCESSED_ATTR)) return;
+    if (alreadyHasBibixButton(box)) { box.setAttribute(PROCESSED_ATTR, '1'); return; }
     box.setAttribute(PROCESSED_ATTR, '1');
 
     const postContainer = findPostContainer(box);
@@ -277,6 +290,7 @@
 
   function injectIntoReplyBox(box) {
     if (!box || box.getAttribute(PROCESSED_ATTR)) return;
+    if (alreadyHasBibixButton(box)) { box.setAttribute(PROCESSED_ATTR, '1'); return; }
     box.setAttribute(PROCESSED_ATTR, '1');
 
     // Find the comment we're replying to
@@ -315,6 +329,7 @@
   // ── Inject button for "Add your perspective" (Top Voice contributions) ───────
   function injectIntoContributionBox(box) {
     if (!box || box.getAttribute(PROCESSED_ATTR)) return;
+    if (alreadyHasBibixButton(box)) { box.setAttribute(PROCESSED_ATTR, '1'); return; }
     box.setAttribute(PROCESSED_ATTR, '1');
 
     const titleEl = document.querySelector('h1, .article-header__title, .contribution-prompt__title');
@@ -381,19 +396,18 @@
   }
 
   // Universal injection: for every contenteditable that looks like a LinkedIn
-  // comment/reply/contribution editor, place a button right above it. This is
-  // resilient to LinkedIn renaming surrounding class names — we anchor off the
-  // editor element itself.
+  // comment/reply/contribution editor, find a sensible mount target and place
+  // a single button there. Deduplication: skip if any .bibix-ai-btn already
+  // exists in the mount target or its ancestors.
   function injectButtonNearEditor(editor) {
     if (editor.getAttribute(PROCESSED_ATTR) === '1') return;
-    // Don't inject in the "Start a post" composer.
     if (ancestorMatching(editor, looksLikePostShareComposer)) return;
-    // Find a sensible host element to mount the button: the nearest comment
-    // box wrapper, OR walk up a few steps from the editor.
+    if (alreadyHasBibixButton(editor)) { editor.setAttribute(PROCESSED_ATTR, '1'); return; }
+
+    // Prefer a known comment-box wrapper.
     let mountTarget = ancestorMatching(editor, looksLikeCommentBox);
     if (!mountTarget) {
-      // Walk up until we find a block-level container that's bigger than just
-      // the inline editor — gives us a reasonable place to put the button.
+      // No known wrapper class — walk up to a slightly larger container.
       let p = editor.parentElement;
       for (let i = 0; i < 5 && p && p !== document.body; i++) {
         if (p.offsetHeight > editor.offsetHeight + 4) { mountTarget = p; break; }
@@ -402,22 +416,16 @@
       if (!mountTarget) mountTarget = editor.parentElement;
     }
     if (!mountTarget) return;
-    if (mountTarget.getAttribute(PROCESSED_ATTR) === '1') return;
-    mountTarget.setAttribute(PROCESSED_ATTR, '1');
     editor.setAttribute(PROCESSED_ATTR, '1');
 
-    // Decide kind: contribution / reply / comment
     if (ancestorMatching(editor, looksLikeContributionBox)) {
       injectIntoContributionBox(mountTarget);
       return;
     }
     if (looksLikeReplyBox(mountTarget) || ancestorMatching(editor, looksLikeReplyBox)) {
-      // Reset PROCESSED so injectIntoReplyBox can claim it
-      mountTarget.removeAttribute(PROCESSED_ATTR);
       injectIntoReplyBox(mountTarget);
       return;
     }
-    mountTarget.removeAttribute(PROCESSED_ATTR);
     injectIntoCommentBox(mountTarget);
   }
 
@@ -433,13 +441,15 @@
     );
     editors.forEach(injectButtonNearEditor);
 
-    // 2. Also: handle collapsed boxes (placeholders before user clicks them).
-    // Use a broad class regex to catch LinkedIn renames.
+    // 2. Also: handle collapsed comment-box placeholders (visible BEFORE user
+    // clicks them). Tight selector to avoid matching individual comment items.
     document.querySelectorAll(
-      '[class*="comment-box"], [class*="comment-texteditor"], [class*="comments-comments"]'
+      '.comments-comment-box:not(.comments-comment-box--reply), '
+      + '[class*="comments-comment-box"]:not([class*="reply"])'
     ).forEach((box) => {
       if (box.getAttribute(PROCESSED_ATTR) === '1') return;
       if (box.querySelector('[contenteditable="true"]')) return;
+      if (box.querySelector('.' + BTN_CLASS)) return;
       if (ancestorMatching(box, looksLikePostShareComposer)) return;
       injectIntoCommentBox(box);
     });
