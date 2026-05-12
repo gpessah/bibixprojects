@@ -34,4 +34,23 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
-module.exports = { authenticate, requireAdmin, requireSuperAdmin, JWT_SECRET };
+// Accepts either a JWT or an instagram_api_token (used by the browser extension)
+function authenticateFlexible(req, res, next) {
+  var header = req.headers.authorization || '';
+  var token = header.replace(/^Bearer\s+/i, '').trim();
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Try JWT first
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch (_) {}
+
+  // Fall back to instagram_api_token
+  var user = db.prepare('SELECT id, name, email, role FROM users WHERE instagram_api_token = ?').get(token);
+  if (!user) return res.status(401).json({ error: 'Invalid token' });
+  req.user = user;
+  next();
+}
+
+module.exports = { authenticate, authenticateFlexible, requireAdmin, requireSuperAdmin, JWT_SECRET };

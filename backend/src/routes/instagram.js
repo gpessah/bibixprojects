@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authenticateFlexible } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -52,7 +52,7 @@ router.get('/auth/verify', function(req, res) {
 });
 
 // ── Actions ───────────────────────────────────────────────────────────────────
-router.post('/actions', authenticate, (req, res) => {
+router.post("/actions", authenticateFlexible, (req, res) => {
   const { type, username, follower_count, post_url, reply_text, comment_text, campaign_id } = req.body;
   if (!type) return res.status(400).json({ error: 'type required' });
   const id = uuidv4();
@@ -63,7 +63,7 @@ router.post('/actions', authenticate, (req, res) => {
   res.json({ id });
 });
 
-router.post('/actions/bulk', authenticate, (req, res) => {
+router.post('/actions/bulk', authenticateFlexible, (req, res) => {
   const { actions } = req.body;
   if (!Array.isArray(actions)) return res.status(400).json({ error: 'actions array required' });
   const stmt = db.prepare(`
@@ -80,7 +80,7 @@ router.post('/actions/bulk', authenticate, (req, res) => {
   res.json({ inserted: actions.length });
 });
 
-router.get('/actions', authenticate, (req, res) => {
+router.get("/actions", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const { type, limit = 200, offset = 0 } = req.query;
   let q = 'SELECT * FROM instagram_actions WHERE user_id = ?';
@@ -92,7 +92,7 @@ router.get('/actions', authenticate, (req, res) => {
 });
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
-router.post('/campaigns', authenticate, (req, res) => {
+router.post("/campaigns", authenticateFlexible, (req, res) => {
   const { type, notes } = req.body;
   if (!type) return res.status(400).json({ error: 'type required' });
   const id = uuidv4();
@@ -101,7 +101,7 @@ router.post('/campaigns', authenticate, (req, res) => {
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(id));
 });
 
-router.patch('/campaigns/:id', authenticate, (req, res) => {
+router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
   const { status, actions_count, new_followers, notes } = req.body;
   const camp = db.prepare('SELECT * FROM instagram_campaigns WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!camp) return res.status(404).json({ error: 'Not found' });
@@ -116,13 +116,13 @@ router.patch('/campaigns/:id', authenticate, (req, res) => {
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(req.params.id));
 });
 
-router.get('/campaigns', authenticate, (req, res) => {
+router.get("/campaigns", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE user_id = ? ORDER BY started_at DESC').all(uid));
 });
 
 // ── Stats / Dashboard ─────────────────────────────────────────────────────────
-router.get('/stats', authenticate, (req, res) => {
+router.get("/stats", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const { days = 30 } = req.query;
   const since = `datetime('now', '-${Number(days)} days')`;
