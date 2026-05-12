@@ -24,16 +24,19 @@ app.use('/api/linkedin', cors({
   },
   credentials: false,
 }));
-// CORS for the auth endpoint the extension uses to log in
-app.use('/api/auth', cors({
+// CORS for the auth + instagram endpoints the extension uses
+const extensionCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (origin.startsWith('chrome-extension://')) return cb(null, true);
+    if (/^https?:\/\/([a-z0-9-]+\.)*instagram\.com$/i.test(origin)) return cb(null, true);
     if (process.env.NODE_ENV !== 'production') return cb(null, true);
     return cb(null, false);
   },
   credentials: false,
-}));
+});
+app.use('/api/auth', extensionCors);
+app.use('/api/instagram', extensionCors);
 
 app.use(express.json({ limit: '20mb' }));
 
