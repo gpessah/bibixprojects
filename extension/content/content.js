@@ -597,18 +597,55 @@
     let items = Array.from(post.querySelectorAll(COMMENT_ITEM_SELECTOR))
       .filter((c) => c.offsetHeight > 0);
     if (items.length > 0) return items;
-    // Fallback: scan the whole document.
+    // Fallback: scan the whole document by class.
     items = Array.from(document.querySelectorAll(COMMENT_ITEM_SELECTOR))
       .filter((c) => c.offsetHeight > 0);
     if (items.length > 0) return items;
-    // Last-resort heuristic: any element with a data-id starting with
-    // "urn:li:" that contains a profile link and isn't itself a post.
+    // Last-resort heuristic: data-id urn pattern.
     items = Array.from(document.querySelectorAll('[data-id]'))
-      .filter((n) => {
-        const id = n.getAttribute('data-id') || '';
-        if (!/urn:li:(comment|reply)/i.test(id)) return false;
-        return n.offsetHeight > 0;
-      });
+      .filter((n) => /urn:li:(comment|reply)/i.test(n.getAttribute('data-id') || '') && n.offsetHeight > 0);
+    if (items.length > 0) return items;
+    // Final fallback: LinkedIn class names are obfuscated. Find comment items
+    // structurally — every comment has a Like-type button (aria-label or
+    // class-based) AND a Reply-type button nearby. Walk up from each Like
+    // button to find the smallest ancestor that also contains a Reply
+    // button — that's the comment wrapper.
+    return findCommentItemsStructurally();
+  }
+
+  function findCommentItemsStructurally() {
+    // Find all probable Like buttons across the page.
+    const likeBtns = Array.from(document.querySelectorAll(
+      'button[aria-label*="Like" i], button[aria-label*="לייק" i], '
+      + 'button[aria-label*="אהבתי" i], '
+      + 'button[data-control-name*="react" i], button[data-control-name*="like" i], '
+      + 'button.react-button__trigger, button[class*="react-button__trigger"], '
+      + 'button[class*="reactions-react-button"]'
+    ));
+    const seen = new Set();
+    const items = [];
+    likeBtns.forEach((btn) => {
+      if (btn.offsetHeight === 0) return;
+      // Walk up looking for an ancestor that also contains a Reply trigger
+      let p = btn.parentElement;
+      for (let i = 0; i < 12 && p && p !== document.body; i++) {
+        const candidates = Array.from(p.querySelectorAll('button, a[role="button"]'));
+        const hasReply = candidates.some((c) => {
+          if (c === btn) return false;
+          const cls = (c.className || '').toString().toLowerCase();
+          const dcn = (c.getAttribute('data-control-name') || '').toLowerCase();
+          const txt = (c.innerText || '').trim();
+          const lbl = (c.getAttribute('aria-label') || '').trim();
+          return /reply/.test(cls) || /reply/.test(dcn)
+            || /^(reply|respond|responder|antworten|תגובה|השב|להגיב|rispondi|svar)\b/i.test(txt + ' ' + lbl);
+        });
+        if (hasReply && p.offsetHeight > 30 && p.offsetHeight < 800) {
+          if (!seen.has(p)) { seen.add(p); items.push(p); }
+          break;
+        }
+        p = p.parentElement;
+      }
+    });
     return items;
   }
 
@@ -663,14 +700,16 @@
   }
 
   function findLikeButton(item) {
-    // Language-agnostic: identify by class/data hints instead of aria-label text.
     const candidates = buttonsBelongingTo(item).filter((b) => {
       const cls = (b.className || '').toString().toLowerCase();
       const dcn = (b.getAttribute('data-control-name') || '').toLowerCase();
-      if (/react-button__trigger|react-button/.test(cls)) return true;
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      // Class / data hints (language-agnostic)
+      if (/react-button|reactions-react-button/.test(cls)) return true;
       if (/react|like/.test(dcn)) return true;
-      // Position-based fallback: a button that has an SVG inside (typically the heart/thumb icon)
-      // — only as a weak hint, paired with aria-pressed presence
+      // aria-label patterns across common LinkedIn locales
+      if (/\blike\b|\bלייק\b|\bאהבתי\b|me gusta|j['']aime|gefällt mir|mi piace/i.test(aria)) return true;
+      // SVG button with aria-pressed (toggleable react button)
       if (b.getAttribute('aria-pressed') !== null && b.querySelector('svg, [data-test-icon]')) return true;
       return false;
     });
@@ -941,7 +980,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.8)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.9)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
