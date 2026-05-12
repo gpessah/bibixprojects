@@ -235,6 +235,25 @@ router.get('/users', authenticate, (req, res) => {
   res.json(users);
 });
 
+// ── Instagram Extension Token ────────────────────────────────────────────────
+try { db.exec('ALTER TABLE users ADD COLUMN instagram_api_token TEXT'); } catch (_) {}
+
+router.get('/instagram-token', authenticate, (req, res) => {
+  var user = db.prepare('SELECT instagram_api_token FROM users WHERE id = ?').get(req.user.id);
+  var token = user && user.instagram_api_token;
+  if (!token) {
+    token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
+    db.prepare('UPDATE users SET instagram_api_token = ? WHERE id = ?').run(token, req.user.id);
+  }
+  res.json({ token: token });
+});
+
+router.post('/instagram-token/regenerate', authenticate, (req, res) => {
+  var token = uuidv4().replace(/-/g, '') + uuidv4().replace(/-/g, '');
+  db.prepare('UPDATE users SET instagram_api_token = ? WHERE id = ?').run(token, req.user.id);
+  res.json({ token: token });
+});
+
 router.put('/password', authenticate, (req, res) => {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both currentPassword and newPassword are required' });

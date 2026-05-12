@@ -4,7 +4,7 @@ import { useAuthStore } from '../store/authStore';
 import Avatar from '../components/ui/Avatar';
 import api from '../api/client';
 import toast from 'react-hot-toast';
-import { Send, Link2, Unlink, RefreshCw, Copy, CheckCircle, Calendar } from 'lucide-react';
+import { Send, Link2, Unlink, RefreshCw, Copy, CheckCircle, Calendar, Instagram } from 'lucide-react';
 
 const AVATAR_COLORS = ['#0073ea','#e2445c','#00c875','#ffcb00','#a25ddc','#037f4c','#bb3354','#ff642e','#9aadbd','#333333'];
 
@@ -301,6 +301,74 @@ function _unused() {
   return <div className="ml-11"><button onClick={connect} className="flex items-center gap-2 px-4 py-2 bg-[#1a73e8] text-white text-sm rounded-lg"><Calendar size={14} /> Connect</button></div>;
 }
 
+function InstagramTokenSection() {
+  const [token, setToken] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [regenerating, setRegenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    api.get('/auth/instagram-token')
+      .then(({ data }) => setToken(data.token))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const regenerate = async () => {
+    if (!confirm('Generate a new token? The old one will stop working immediately.')) return;
+    setRegenerating(true);
+    try {
+      const { data } = await api.post('/auth/instagram-token/regenerate');
+      setToken(data.token);
+      toast.success('New token generated');
+    } catch { toast.error('Failed to regenerate token'); }
+    finally { setRegenerating(false); }
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(token);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="flex items-center gap-3 mb-1">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#f09433] via-[#e6683c] to-[#bc1888] flex items-center justify-center flex-shrink-0">
+          <Instagram size={15} className="text-white" />
+        </div>
+        <h2 className="font-semibold text-gray-900">Instagram Extension</h2>
+      </div>
+      <p className="text-sm text-gray-500 mb-5 ml-11">
+        Paste this token in the Instagram Extension to sync your data automatically.
+      </p>
+      <div className="ml-11 space-y-3">
+        {loading ? (
+          <div className="animate-pulse h-10 bg-gray-100 rounded-lg w-full" />
+        ) : (
+          <div className="flex gap-2">
+            <input
+              readOnly
+              value={token}
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-700 cursor-text select-all"
+              onClick={e => (e.target as HTMLInputElement).select()}
+            />
+            <button onClick={copy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white hover:border-monday-blue hover:text-monday-blue transition-colors whitespace-nowrap">
+              {copied ? <><CheckCircle size={14} className="text-green-500" /> Copied!</> : <><Copy size={14} /> Copy</>}
+            </button>
+          </div>
+        )}
+        <button onClick={regenerate} disabled={regenerating || loading}
+          className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50">
+          <RefreshCw size={13} className={regenerating ? 'animate-spin' : ''} />
+          {regenerating ? 'Regenerating…' : 'Regenerate token'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ChangePasswordSection() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -446,6 +514,9 @@ export default function SettingsPage() {
         </div>
         <div className="mt-6">
           <GoogleCalendarSection />
+        </div>
+        <div className="mt-6">
+          <InstagramTokenSection />
         </div>
       </div>
     </div>
