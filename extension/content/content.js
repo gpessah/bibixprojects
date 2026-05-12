@@ -39,16 +39,30 @@
 
   // ── Extract post info ────────────────────────────────────────────────────────
   function findPostContainer(node) {
+    // Pass 1 — recognise a known post wrapper by URN, class hint, or <article>
     let p = node;
     while (p && p !== document.body) {
       if (p.matches) {
         const cls = (p.className && typeof p.className === 'string') ? p.className : '';
         const urn = p.getAttribute && p.getAttribute('data-urn');
         if (urn && /urn:li:(activity|share|ugcPost)/i.test(urn)) return p;
-        if (/feed-shared-update|update-v2|feed-shared-post|scaffold-finite-scroll__content/i.test(cls)) return p;
+        if (/feed-shared-update|update-v2|feed-shared-post/i.test(cls)) return p;
         if (p.tagName === 'ARTICLE') return p;
       }
       p = p.parentElement;
+    }
+    // Pass 2 — size heuristic. Walk up until we find an ancestor that's tall
+    // enough to plausibly contain the post (~3x the comment editor height).
+    const editorHeight = (node.offsetHeight || 40);
+    const minPostHeight = Math.max(160, editorHeight * 3);
+    p = node.parentElement;
+    let depth = 0;
+    while (p && p !== document.body && depth < 25) {
+      if (p.offsetHeight >= minPostHeight && (p.innerText || '').trim().length > 30) {
+        return p;
+      }
+      p = p.parentElement;
+      depth++;
     }
     return null;
   }
@@ -65,7 +79,22 @@
       const t = (textNode.innerText || '').trim();
       if (t) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
     }
-    return '';
+    // Fallback — clone the container, strip out the comments area, then read
+    // whatever innerText remains. Keeps post body, drops noise.
+    try {
+      const clone = container.cloneNode(true);
+      clone.querySelectorAll(
+        '[class*="comments-comments-list"], [class*="comments-comment-box"], '
+        + '[class*="social-actions"], [class*="reactions-rail"], [class*="social-detail"], '
+        + 'button, time, .bibix-ai-btn'
+      ).forEach((n) => n.remove());
+      const raw = (clone.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 3000);
+      // If the "text" is just UI labels, return empty
+      if (raw.length < 12) return '';
+      return raw;
+    } catch (_) {
+      return '';
+    }
   }
 
   function extractImageDescription(container) {
