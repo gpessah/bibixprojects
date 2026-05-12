@@ -167,8 +167,10 @@
   let activePopover = null;
   let outsideClickHandler = null;
   function closePopover() {
-    if (portalHost && portalHost.isConnected) {
-      while (portalHost.firstChild) portalHost.removeChild(portalHost.firstChild);
+    if (activeDialog) {
+      try { if (activeDialog.open) activeDialog.close(); } catch (_) {}
+      activeDialog.remove();
+      activeDialog = null;
     }
     activePopover = null;
     if (outsideClickHandler) {
@@ -177,51 +179,28 @@
     }
   }
 
-  // Portal host: a top-level div parented directly to <html>, lives outside
-  // any transformed/contain'd ancestor LinkedIn might apply.
-  let portalHost = null;
-  function getPortalHost() {
-    if (portalHost && portalHost.isConnected) return portalHost;
-    portalHost = document.createElement('div');
-    portalHost.id = 'bibix-portal-root';
-    Object.assign(portalHost.style, {
-      position: 'fixed',
-      top: '0',
-      left: '0',
-      width: '100vw',
-      height: '100vh',
-      zIndex: '2147483647',
-      pointerEvents: 'none',
-    });
-    document.documentElement.appendChild(portalHost);
-    return portalHost;
-  }
+  // Active <dialog> element. Using a native <dialog> via showModal() puts
+  // our popover into the browser's top layer, which always renders above
+  // every regular element — and competes correctly with LinkedIn's own
+  // <dialog>-based fullscreen image viewer (last opened wins by DOM order).
+  let activeDialog = null;
 
   function openPopover(anchor, opts) {
     console.log('[Bibix LinkedIn AI] openPopover called', opts && opts.title);
     closePopover();
-    // Backdrop — covers the viewport, dims it, captures outside clicks.
-    const backdrop = el('div', { style: {
-      position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
-      background: 'rgba(15, 23, 42, 0.45)',
-      pointerEvents: 'auto',
-      zIndex: '1',
-    } });
-    backdrop.addEventListener('mousedown', (e) => {
-      if (e.target === backdrop) closePopover();
-    });
-    // Centered modal — fixed coords against the viewport, no anchoring math.
-    const pop = el('div', { className: 'bibix-popover', style: {
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
       position: 'fixed',
       top: '50%',
       left: '50%',
       transform: 'translate(-50%, -50%)',
-      zIndex: '2',
+      margin: '0',
+      padding: '18px',
       background: '#ffffff',
       border: '1px solid #e2e8f0',
       borderRadius: '14px',
       boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
-      padding: '18px',
       width: '440px',
       maxWidth: 'calc(100vw - 32px)',
       maxHeight: 'calc(100vh - 48px)',
@@ -229,11 +208,16 @@
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: '13px',
       color: '#1f2937',
-      display: 'block',
-      visibility: 'visible',
-      opacity: '1',
-      pointerEvents: 'auto',
-    } });
+      zIndex: '2147483647',
+    });
+    // Style the ::backdrop (dialog's built-in dimmer) via a stylesheet hook.
+    // The class .bibix-popover already styles the dialog backdrop via CSS.
+    pop.addEventListener('click', (e) => {
+      // Native <dialog> sends a click event on the dialog itself when the
+      // user clicks the ::backdrop. Detect that and close.
+      if (e.target === pop) closePopover();
+    });
+    pop.addEventListener('close', () => closePopover());
     const header = el('div', { className: 'bibix-popover-header' }, [
       el('div', { className: 'bibix-popover-title' }, '✨ Bibix AI · ' + opts.title),
       el('button', { className: 'bibix-popover-close', onClick: closePopover }, '×'),
@@ -261,10 +245,10 @@
     pop.appendChild(body);
     pop.appendChild(actions);
 
-    const host = getPortalHost();
-    host.appendChild(backdrop);
-    host.appendChild(pop);
-    activePopover = backdrop; // close removes the whole subtree
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) { /* fallback: just attach */ }
+    activeDialog = pop;
+    activePopover = pop;
 
     async function generate() {
       errBox.hidden = true;
