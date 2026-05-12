@@ -9,14 +9,27 @@
   const PROCESSED_ATTR = 'data-bibix-processed';
   const BTN_CLASS = 'bibix-ai-btn';
 
+  const ORPHANED_MSG = 'Extension was updated — please reload this LinkedIn tab (Cmd+R) and try again.';
   function send(type, payload) {
     return new Promise((resolve) => {
+      if (!chrome || !chrome.runtime || !chrome.runtime.sendMessage || !chrome.runtime.id) {
+        return resolve({ ok: false, error: ORPHANED_MSG });
+      }
       try {
         chrome.runtime.sendMessage({ type, payload }, (res) => {
-          if (chrome.runtime.lastError) resolve({ ok: false, error: chrome.runtime.lastError.message });
-          else resolve(res);
+          if (chrome.runtime.lastError) {
+            const msg = chrome.runtime.lastError.message || '';
+            if (/context invalidated|receiving end does not exist/i.test(msg)) {
+              resolve({ ok: false, error: ORPHANED_MSG });
+            } else resolve({ ok: false, error: msg });
+          } else resolve(res);
         });
-      } catch (e) { resolve({ ok: false, error: e.message }); }
+      } catch (e) {
+        const msg = (e && e.message) || '';
+        if (/sendMessage|invalidated|undefined/i.test(msg)) {
+          resolve({ ok: false, error: ORPHANED_MSG });
+        } else resolve({ ok: false, error: msg });
+      }
     });
   }
 
