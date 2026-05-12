@@ -111,7 +111,15 @@ router.post("/campaigns", authenticateFlexible, (req, res) => {
 });
 
 router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
-  const { status, actions_count, new_followers, notes } = req.body;
+  var b = req.body;
+  var status        = b.status || null;
+  var actions_count = b.actions_count || b.completed || null;
+  // followerStats can be { gained: N } or { after: N, before: M } or just a number
+  var new_followers = b.new_followers != null ? b.new_followers
+    : (b.followerStats && b.followerStats.gained != null) ? b.followerStats.gained
+    : (b.followerStats && b.followerStats.after != null && b.followerStats.before != null) ? (b.followerStats.after - b.followerStats.before)
+    : null;
+  var notes         = b.notes || null;
   const camp = db.prepare('SELECT * FROM instagram_campaigns WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!camp) return res.status(404).json({ error: 'Not found' });
   db.prepare(`UPDATE instagram_campaigns SET
