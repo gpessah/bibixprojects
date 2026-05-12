@@ -175,7 +175,7 @@ function buildCommentPrompt(opts) {
   const lines = [
     'You are an expert LinkedIn engagement assistant. Write a comment to leave under the following LinkedIn post.',
     '',
-    'LANGUAGE: Auto-detect the post\'s language and write your comment in the SAME language (Hebrew → Hebrew, Spanish → Spanish, French → French, etc.). If the post mixes languages, use the dominant one.',
+    'LANGUAGE: Detect the language of the POST BODY ONLY (the quoted post text below) and write your comment in that language. Ignore any UI labels, author name, or other surrounding text — they may be in a different language than the post itself. If the post body is empty or unclear, default to English.',
     `LENGTH: ${LENGTH_GUIDE[length] || LENGTH_GUIDE.brief}.`,
     `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
   ];
@@ -210,7 +210,7 @@ function buildReplyPrompt(opts) {
   if (isOwnPost && settings.reply_ack_only_own_posts) {
     return [
       'You are replying as the original author of a LinkedIn post to a commenter.',
-      'LANGUAGE: Auto-detect the comment\'s language and reply in the SAME language.',
+      'LANGUAGE: Detect the language of the COMMENT TEXT ONLY (the quoted block below) and reply in that language. Ignore UI labels or author info that may be in a different language. If the comment is unclear, default to English.',
       `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
       'Keep it to a short acknowledgement — thank or react to the commenter\'s point in 1 sentence. Do not restate the original post.',
       commentAuthor ? `Commenter first name: "${commentAuthor.split(' ')[0]}".` : '',
@@ -226,7 +226,7 @@ function buildReplyPrompt(opts) {
 
   return [
     'You are replying on LinkedIn to a comment under someone else\'s post.',
-    'LANGUAGE: Auto-detect the comment\'s language and reply in the SAME language.',
+    'LANGUAGE: Detect the language of the COMMENT TEXT ONLY (the quoted block below) and reply in that language. Ignore UI labels or author info. If unclear, default to English.',
     `LENGTH: ${LENGTH_GUIDE[length] || LENGTH_GUIDE.brief}.`,
     `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
     settings.reply_open_ended ? 'End with an open-ended question.' : '',

@@ -69,32 +69,29 @@
 
   function extractPostText(container) {
     if (!container) return '';
-    // Try the known post-text selectors first
-    const textNode = container.querySelector(
-      '.update-components-text, .feed-shared-update-v2__description, .feed-shared-text, '
-      + '.update-components-update-v2__commentary, [class*="update-components-text"], '
-      + '[class*="feed-shared-text"], [data-test-id="main-feed-activity-card__commentary"]'
-    );
-    if (textNode) {
-      const t = (textNode.innerText || '').trim();
-      if (t) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
+    // Use ONLY known post-text selectors. Falling back to container.innerText
+    // would include LinkedIn's UI chrome (which is in the user's UI language
+    // — e.g. Hebrew — even when the actual post is in English) and confuse
+    // the language detector. Better to return empty and let the backend
+    // generate from image/author context.
+    const selectors = [
+      '.update-components-text',
+      '.feed-shared-update-v2__description',
+      '.feed-shared-text',
+      '.update-components-update-v2__commentary',
+      '[data-test-id="main-feed-activity-card__commentary"]',
+      '[class*="update-components-text"]',
+      '[class*="feed-shared-text"]',
+      '[class*="update-components-update-v2__commentary"]',
+    ];
+    for (const sel of selectors) {
+      const node = container.querySelector(sel);
+      if (node) {
+        const t = (node.innerText || '').trim();
+        if (t.length > 5) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
+      }
     }
-    // Fallback — clone the container, strip out the comments area, then read
-    // whatever innerText remains. Keeps post body, drops noise.
-    try {
-      const clone = container.cloneNode(true);
-      clone.querySelectorAll(
-        '[class*="comments-comments-list"], [class*="comments-comment-box"], '
-        + '[class*="social-actions"], [class*="reactions-rail"], [class*="social-detail"], '
-        + 'button, time, .bibix-ai-btn'
-      ).forEach((n) => n.remove());
-      const raw = (clone.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 3000);
-      // If the "text" is just UI labels, return empty
-      if (raw.length < 12) return '';
-      return raw;
-    } catch (_) {
-      return '';
-    }
+    return '';
   }
 
   function extractImageDescription(container) {
