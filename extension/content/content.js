@@ -39,28 +39,28 @@
 
   // ── Extract post info ────────────────────────────────────────────────────────
   function findPostContainer(node) {
-    // Pass 1 — recognise a known post wrapper by URN, class hint, or <article>
-    let p = node;
-    while (p && p !== document.body) {
-      if (p.matches) {
-        const cls = (p.className && typeof p.className === 'string') ? p.className : '';
-        const urn = p.getAttribute && p.getAttribute('data-urn');
-        if (urn && /urn:li:(activity|share|ugcPost)/i.test(urn)) return p;
-        if (/feed-shared-update|update-v2|feed-shared-post/i.test(cls)) return p;
-        if (p.tagName === 'ARTICLE') return p;
-      }
-      p = p.parentElement;
-    }
-    // Pass 2 — size heuristic. Walk up until we find an ancestor that's tall
-    // enough to plausibly contain the post (~3x the comment editor height).
+    // Pass 1 — use closest() to find a known post wrapper. Stops at the
+    // CLOSEST matching ancestor (not the largest), which is what we want.
+    const known = node.closest && node.closest(
+      '[data-urn*="urn:li:activity"], [data-urn*="urn:li:ugcPost"], [data-urn*="urn:li:share"], '
+      + '.feed-shared-update-v2, [class*="feed-shared-update"], [class*="feed-shared-post"], '
+      + 'article'
+    );
+    if (known) return known;
+
+    // Pass 2 — bounded size heuristic. Walk up until an ancestor is plausibly
+    // a single post (160–1200px tall). Stop hard at 1200px so we never grab
+    // the whole feed column.
     const editorHeight = (node.offsetHeight || 40);
     const minPostHeight = Math.max(160, editorHeight * 3);
-    p = node.parentElement;
+    let p = node.parentElement;
     let depth = 0;
-    while (p && p !== document.body && depth < 25) {
-      if (p.offsetHeight >= minPostHeight && (p.innerText || '').trim().length > 30) {
+    while (p && p !== document.body && depth < 15) {
+      const h = p.offsetHeight || 0;
+      if (h >= minPostHeight && h <= 1500 && (p.innerText || '').trim().length > 30) {
         return p;
       }
+      if (h > 1500) return null; // overshooting — better to fail than use the whole feed
       p = p.parentElement;
       depth++;
     }
@@ -249,6 +249,14 @@
         const imageDescription = extractImageDescription(container);
         const author = extractAuthor(container);
         const url = extractPostUrl(container);
+        console.log('[Bibix LinkedIn AI] generating with:', {
+          author,
+          postTextPreview: (postText || '').slice(0, 160),
+          imageDescriptionPreview: (imageDescription || '').slice(0, 160),
+          url,
+          containerTag: container && container.tagName,
+          containerCls: container && (container.className || '').toString().slice(0, 120),
+        });
         if (!postText && !imageDescription && !author) {
           openPopover(btn, {
             title: 'Comment',
