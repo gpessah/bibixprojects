@@ -16,14 +16,16 @@
   transition: transform 0.1s, box-shadow 0.15s;
   font-family: inherit;
   line-height: 1;
+  position: relative;
+  z-index: 100;
 }
 .bibix-ai-btn:hover { transform: translateY(-1px); box-shadow: 0 3px 8px rgba(67, 56, 202, 0.4); }
 .bibix-ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .bibix-ai-btn .bibix-spark { font-size: 14px; }
 
 .bibix-popover {
-  position: absolute;
-  z-index: 99999;
+  position: fixed;
+  z-index: 2147483647;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -33,6 +35,7 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 13px;
   color: #1f2937;
+  pointer-events: auto;
 }
 .bibix-popover-header {
   display: flex; align-items: center; justify-content: space-between;

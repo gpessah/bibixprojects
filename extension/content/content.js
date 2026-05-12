@@ -190,10 +190,11 @@
 
     document.body.appendChild(pop);
     activePopover = pop;
-    const top = window.scrollY + rect.bottom + 6;
-    const left = Math.min(window.scrollX + rect.left, window.scrollX + window.innerWidth - 380);
+    // Popover uses position:fixed, so use viewport coords (no scroll offset).
+    const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 280));
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 380));
     pop.style.top = top + 'px';
-    pop.style.left = Math.max(8, left) + 'px';
+    pop.style.left = left + 'px';
 
     async function generate() {
       errBox.hidden = true;
