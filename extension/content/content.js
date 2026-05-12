@@ -331,41 +331,69 @@
   }
 
   function findEditorHost(editor) {
-    // Walk up looking for a comment-box-ish wrapper. Returns null if none.
     return ancestorMatching(editor, looksLikeCommentBox);
   }
 
+  // Universal injection: for every contenteditable that looks like a LinkedIn
+  // comment/reply/contribution editor, place a button right above it. This is
+  // resilient to LinkedIn renaming surrounding class names — we anchor off the
+  // editor element itself.
+  function injectButtonNearEditor(editor) {
+    if (editor.getAttribute(PROCESSED_ATTR) === '1') return;
+    // Don't inject in the "Start a post" composer.
+    if (ancestorMatching(editor, looksLikePostShareComposer)) return;
+    // Find a sensible host element to mount the button: the nearest comment
+    // box wrapper, OR walk up a few steps from the editor.
+    let mountTarget = ancestorMatching(editor, looksLikeCommentBox);
+    if (!mountTarget) {
+      // Walk up until we find a block-level container that's bigger than just
+      // the inline editor — gives us a reasonable place to put the button.
+      let p = editor.parentElement;
+      for (let i = 0; i < 5 && p && p !== document.body; i++) {
+        if (p.offsetHeight > editor.offsetHeight + 4) { mountTarget = p; break; }
+        p = p.parentElement;
+      }
+      if (!mountTarget) mountTarget = editor.parentElement;
+    }
+    if (!mountTarget) return;
+    if (mountTarget.getAttribute(PROCESSED_ATTR) === '1') return;
+    mountTarget.setAttribute(PROCESSED_ATTR, '1');
+    editor.setAttribute(PROCESSED_ATTR, '1');
+
+    // Decide kind: contribution / reply / comment
+    if (ancestorMatching(editor, looksLikeContributionBox)) {
+      injectIntoContributionBox(mountTarget);
+      return;
+    }
+    if (looksLikeReplyBox(mountTarget) || ancestorMatching(editor, looksLikeReplyBox)) {
+      // Reset PROCESSED so injectIntoReplyBox can claim it
+      mountTarget.removeAttribute(PROCESSED_ATTR);
+      injectIntoReplyBox(mountTarget);
+      return;
+    }
+    mountTarget.removeAttribute(PROCESSED_ATTR);
+    injectIntoCommentBox(mountTarget);
+  }
+
   function scan() {
+    // 1. Find every plausible comment editor on the page.
     const editors = document.querySelectorAll(
-      '.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]'
+      '.ql-editor[contenteditable="true"], '
+      + 'div[contenteditable="true"][role="textbox"], '
+      + 'div[contenteditable="true"][aria-label*="comment" i], '
+      + 'div[contenteditable="true"][aria-label*="reply" i], '
+      + 'div[contenteditable="true"][aria-placeholder*="comment" i], '
+      + 'div[contenteditable="true"][data-placeholder*="comment" i]'
     );
-    editors.forEach((editor) => {
-      // Skip editors that are inside the "Start a post" composer
-      if (ancestorMatching(editor, looksLikePostShareComposer)) return;
+    editors.forEach(injectButtonNearEditor);
 
-      // Contribution prompt for Top Voice ("Add your perspective")
-      const contribAncestor = ancestorMatching(editor, looksLikeContributionBox);
-      if (contribAncestor) {
-        if (contribAncestor.getAttribute(PROCESSED_ATTR) !== '1') injectIntoContributionBox(contribAncestor);
-        return;
-      }
-
-      const host = findEditorHost(editor);
-      if (!host || host.getAttribute(PROCESSED_ATTR) === '1') return;
-
-      if (looksLikeReplyBox(host) || ancestorMatching(host, looksLikeReplyBox, 4)) {
-        injectIntoReplyBox(host);
-      } else {
-        injectIntoCommentBox(host);
-      }
-    });
-
-    // Also inject for collapsed comment-box placeholders that haven't yet
-    // rendered a contenteditable (LinkedIn lazy-mounts these on focus).
-    document.querySelectorAll('.comments-comment-box, [class*="comments-comment-box"]').forEach((box) => {
+    // 2. Also: handle collapsed boxes (placeholders before user clicks them).
+    // Use a broad class regex to catch LinkedIn renames.
+    document.querySelectorAll(
+      '[class*="comment-box"], [class*="comment-texteditor"], [class*="comments-comments"]'
+    ).forEach((box) => {
       if (box.getAttribute(PROCESSED_ATTR) === '1') return;
-      if (box.querySelector('[contenteditable="true"]')) return; // handled above
-      // Skip if inside the post share composer
+      if (box.querySelector('[contenteditable="true"]')) return;
       if (ancestorMatching(box, looksLikePostShareComposer)) return;
       injectIntoCommentBox(box);
     });
@@ -390,5 +418,12 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.1.1)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.1.3)');
+  // Periodic count log to aid debugging in production.
+  setInterval(() => {
+    const n = document.querySelectorAll('.' + BTN_CLASS).length;
+    if (n > 0) return; // only log when zero, to surface visibility issues
+    const editors = document.querySelectorAll('[contenteditable="true"]').length;
+    if (editors > 0) console.log('[Bibix LinkedIn AI] No buttons injected — editors on page:', editors);
+  }, 5000);
 })();
