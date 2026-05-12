@@ -613,19 +613,47 @@
     return findCommentItemsStructurally();
   }
 
-  function findCommentItemsStructurally() {
-    // Find all probable Like buttons across the page.
-    const likeBtns = Array.from(document.querySelectorAll(
-      'button[aria-label*="Like" i], button[aria-label*="לייק" i], '
-      + 'button[aria-label*="אהבתי" i], '
-      + 'button[data-control-name*="react" i], button[data-control-name*="like" i], '
-      + 'button.react-button__trigger, button[class*="react-button__trigger"], '
-      + 'button[class*="reactions-react-button"]'
+  function findLikeButtonsGlobal() {
+    const P = '[Bibix Bulk]';
+    // Strategy 1 — aria-label patterns (multilingual)
+    let likeBtns = Array.from(document.querySelectorAll(
+      'button[aria-label*="Like" i], button[aria-label*="React" i], '
+      + 'button[aria-label*="לייק" i], button[aria-label*="אהבתי" i], button[aria-label*="הגב" i], '
+      + 'button[aria-label*="Me gusta" i], button[aria-label*="J\'aime" i], '
+      + 'button[aria-label*="Gefällt" i], button[aria-label*="Mi piace" i]'
     ));
+    console.log(P, 'like via aria-label:', likeBtns.length);
+    // Strategy 2 — data-control-name
+    if (likeBtns.length === 0) {
+      likeBtns = Array.from(document.querySelectorAll(
+        'button[data-control-name*="react" i], button[data-control-name*="like" i]'
+      ));
+      console.log(P, 'like via data-control-name:', likeBtns.length);
+    }
+    // Strategy 3 — class name patterns
+    if (likeBtns.length === 0) {
+      likeBtns = Array.from(document.querySelectorAll(
+        'button[class*="react-button"], button[class*="reactions"], button[class*="like-button"]'
+      ));
+      console.log(P, 'like via class hints:', likeBtns.length);
+    }
+    // Strategy 4 — last resort: any button with aria-pressed (toggleable) +
+    // an SVG icon inside. Captures icon-only like/react buttons.
+    if (likeBtns.length === 0) {
+      likeBtns = Array.from(document.querySelectorAll('button[aria-pressed]'))
+        .filter((b) => b.querySelector('svg, [data-test-icon]'));
+      console.log(P, 'like via aria-pressed+svg:', likeBtns.length);
+    }
+    return likeBtns.filter((b) => b.offsetHeight > 0 && b.offsetWidth > 0);
+  }
+
+  function findCommentItemsStructurally() {
+    const P = '[Bibix Bulk]';
+    const likeBtns = findLikeButtonsGlobal();
+    console.log(P, 'likeBtns visible:', likeBtns.length);
     const seen = new Set();
     const items = [];
     likeBtns.forEach((btn) => {
-      if (btn.offsetHeight === 0) return;
       // Walk up looking for an ancestor that also contains a Reply trigger
       let p = btn.parentElement;
       for (let i = 0; i < 12 && p && p !== document.body; i++) {
@@ -646,6 +674,7 @@
         p = p.parentElement;
       }
     });
+    console.log(P, 'structural items found:', items.length);
     return items;
   }
 
@@ -980,7 +1009,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.9)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.10)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
