@@ -612,14 +612,31 @@
 
   function dumpCommentDiagnostic(label) {
     console.log('[Bibix Bulk]', label, '— diagnostic dump:');
+    console.log('  My selectors (all):');
     COMMENT_ITEM_SELECTORS.forEach((sel) => {
-      const n = document.querySelectorAll(sel).length;
-      if (n > 0) console.log('  matched', n, 'with selector:', sel);
+      console.log('    ', sel, '→', document.querySelectorAll(sel).length);
     });
-    const dataIds = Array.from(document.querySelectorAll('[data-id]')).slice(0, 5);
+    const dataIds = Array.from(document.querySelectorAll('[data-id]'));
+    console.log('  total [data-id] elements:', dataIds.length);
     if (dataIds.length) {
-      console.log('  sample [data-id] values:');
-      dataIds.forEach((n) => console.log('   ', n.getAttribute('data-id'), '|', (n.className || '').toString().slice(0, 60)));
+      dataIds.slice(0, 6).forEach((n, i) => console.log('    [data-id]', i, n.getAttribute('data-id'), '|', (n.className || '').toString().slice(0, 60)));
+    }
+    const dataUrns = Array.from(document.querySelectorAll('[data-urn]'));
+    console.log('  total [data-urn] elements:', dataUrns.length);
+    if (dataUrns.length) {
+      dataUrns.slice(0, 6).forEach((n, i) => console.log('    [data-urn]', i, n.getAttribute('data-urn'), '|', (n.className || '').toString().slice(0, 60)));
+    }
+    const classComment = Array.from(document.querySelectorAll('[class*="comment"]'));
+    console.log('  total elements with "comment" in class:', classComment.length);
+    if (classComment.length) {
+      // Group by first part of class
+      const classes = new Set();
+      classComment.forEach((n) => {
+        ((n.className || '').toString().split(/\s+/)).forEach((c) => {
+          if (c.toLowerCase().includes('comment')) classes.add(c);
+        });
+      });
+      console.log('    distinct class tokens with "comment":', Array.from(classes).slice(0, 20));
     }
   }
 
