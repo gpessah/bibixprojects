@@ -41,6 +41,16 @@ function targetUser(req) {
   return req.user.id;
 }
 
+// ── Extension auth verify (uses instagram_api_token, not JWT) ────────────────
+router.get('/auth/verify', function(req, res) {
+  var authHeader = req.headers['authorization'] || '';
+  var token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token) return res.status(401).json({ error: 'No token' });
+  var user = db.prepare('SELECT id, name, email, role FROM users WHERE instagram_api_token = ?').get(token);
+  if (!user) return res.status(401).json({ error: 'Invalid token' });
+  res.json({ ok: true, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+});
+
 // ── Actions ───────────────────────────────────────────────────────────────────
 router.post('/actions', authenticate, (req, res) => {
   const { type, username, follower_count, post_url, reply_text, comment_text, campaign_id } = req.body;
