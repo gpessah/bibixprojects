@@ -65,10 +65,18 @@
       const t = (textNode.innerText || '').trim();
       if (t) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
     }
-    // Fallback: use container.innerText but trim navigation/UI noise
-    const raw = (container.innerText || '').trim();
-    // Strip obvious UI words at edges
-    return raw.replace(/\s+/g, ' ').slice(0, 3000);
+    return '';
+  }
+
+  function extractImageDescription(container) {
+    if (!container) return '';
+    const imgs = container.querySelectorAll('img');
+    const alts = [];
+    imgs.forEach((img) => {
+      const a = (img.getAttribute('alt') || '').trim();
+      if (a && a.length > 3 && !/^(profile|photo)$/i.test(a) && !alts.includes(a)) alts.push(a);
+    });
+    return alts.slice(0, 2).join('; ').slice(0, 500);
   }
 
   function extractAuthor(container) {
@@ -209,18 +217,19 @@
         // rendered the post DOM that was lazy at injection time.
         const container = findPostContainer(box) || postContainer;
         const postText = extractPostText(container);
+        const imageDescription = extractImageDescription(container);
         const author = extractAuthor(container);
         const url = extractPostUrl(container);
-        if (!postText || !postText.trim()) {
+        if (!postText && !imageDescription && !author) {
           openPopover(btn, {
             title: 'Comment',
-            runGenerate: () => Promise.resolve({ ok: false, error: 'Could not read this post\'s text. Try opening the post in a dedicated page (click the timestamp) and try again.' }),
+            runGenerate: () => Promise.resolve({ ok: false, error: 'Could not read this post. Try opening it in a dedicated page (click the timestamp) and try again.' }),
           });
           return;
         }
         openPopover(btn, {
           title: 'Comment',
-          runGenerate: () => send('generateComment', { postText, authorName: author, postUrl: url }),
+          runGenerate: () => send('generateComment', { postText, imageDescription, authorName: author, postUrl: url }),
           onInsert: (text) => insertText(editor, text),
         });
       },

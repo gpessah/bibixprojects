@@ -285,14 +285,22 @@ router.post('/generate-comment', authenticate, async (req, res) => {
   try {
     const settings = getSettings(req.user.id);
     if (!settings.enabled) return res.status(403).json({ error: 'LinkedIn assistant disabled in your settings' });
-    const { postText, authorName, postUrl, overrides } = req.body || {};
-    if (!postText || !postText.trim()) return res.status(400).json({ error: 'postText required' });
+    const { postText, authorName, postUrl, overrides, imageDescription } = req.body || {};
+    // Allow image-only / caption-less posts — we'll generate using author + image context.
+    const hasText = postText && postText.trim();
+    const hasContext = hasText || imageDescription || authorName;
+    if (!hasContext) return res.status(400).json({ error: 'No post content to comment on' });
 
     const o = overrides || {};
     const tone = o.tone || settings.tone;
     const length = o.comment_length || settings.comment_length;
+    const effectivePostText = hasText
+      ? postText
+      : imageDescription
+        ? `[Image-only post${imageDescription ? ' — image shows: ' + imageDescription : ''}]`
+        : `[Image-only post by ${authorName || 'this person'} with no caption]`;
     const promptOpts = {
-      postText, authorName,
+      postText: effectivePostText, authorName,
       tone, length,
       mentionAuthor: 'mention_author' in o ? !!o.mention_author : !!settings.mention_author,
       useEmojis:     'use_emojis'     in o ? !!o.use_emojis     : !!settings.use_emojis,
