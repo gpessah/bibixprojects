@@ -23,6 +23,27 @@
 .bibix-ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .bibix-ai-btn .bibix-spark { font-size: 14px; }
 
+/* Bulk-actions trigger button, injected into each post's social-action bar */
+.bibix-bulk-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, #4338ca, #6366f1);
+  color: #fff !important;
+  border: none;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 4px 6px;
+  box-shadow: 0 1px 3px rgba(67, 56, 202, 0.3);
+  font-family: inherit;
+  line-height: 1;
+}
+.bibix-bulk-btn:hover { box-shadow: 0 3px 8px rgba(67, 56, 202, 0.4); }
+.bibix-bulk-btn .bibix-spark { font-size: 13px; }
+
 .bibix-popover {
   position: fixed;
   z-index: 2147483647;

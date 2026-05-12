@@ -506,6 +506,284 @@
       if (ancestorMatching(box, looksLikePostShareComposer)) return;
       injectIntoCommentBox(box);
     });
+
+    // 3. Inject Bulk Actions button into each post's social-action bar.
+    injectBulkButtons();
+  }
+
+  // ── Bulk Actions: auto-reply / random-like across many comments ────────────
+  const BULK_BTN_CLASS = 'bibix-bulk-btn';
+  const BULK_PROCESSED = 'data-bibix-bulk-processed';
+  let bulkAborted = false;
+
+  function rand(min, max) { return Math.floor(min + Math.random() * (max - min)); }
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function injectBulkButtons() {
+    // Find each post wrapper that has a social-actions bar (Like/Comment/Repost row)
+    document.querySelectorAll(
+      '[data-urn*="urn:li:activity"], [data-urn*="urn:li:ugcPost"], [data-urn*="urn:li:share"], '
+      + '.feed-shared-update-v2, [class*="feed-shared-update"], article'
+    ).forEach((post) => {
+      if (post.getAttribute(BULK_PROCESSED) === '1') return;
+      const bar = post.querySelector(
+        '.feed-shared-social-action-bar, .social-actions-bar, [class*="social-action"], '
+        + '[class*="social-actions"], .update-v2-social-activity'
+      );
+      if (!bar) return;
+      // Skip if already injected
+      if (bar.querySelector('.' + BULK_BTN_CLASS)) { post.setAttribute(BULK_PROCESSED, '1'); return; }
+      post.setAttribute(BULK_PROCESSED, '1');
+
+      const btn = el('button', {
+        className: BULK_BTN_CLASS,
+        type: 'button',
+        title: 'Bibix Bulk Actions — auto-reply / auto-like multiple comments',
+        onClick: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          openBulkDialog(post);
+        },
+      }, [el('span', { className: 'bibix-spark' }, '✨'), 'Bulk']);
+      bar.appendChild(btn);
+    });
+  }
+
+  // -- Comment discovery on a post --
+  function findCommentItems(post) {
+    // LinkedIn comment item wrappers across recent classes.
+    return Array.from(post.querySelectorAll(
+      '.comments-comment-item, .comments-comment-entity, [class*="comments-comment-item"]'
+    )).filter((c) => c.offsetHeight > 0);
+  }
+
+  function commentText(item) {
+    const t = item.querySelector(
+      '.comments-comment-item__main-content, .update-components-text, '
+      + '.comments-comment-item-content-body, [class*="comments-comment-item__main-content"]'
+    );
+    return t ? (t.innerText || '').trim() : '';
+  }
+
+  function commentAuthor(item) {
+    const a = item.querySelector(
+      '.comments-post-meta__name-text, .comments-post-meta__actor-link, '
+      + '[class*="comments-post-meta__name"]'
+    );
+    return a ? (a.innerText || '').trim().split('\n')[0] : '';
+  }
+
+  function findLikeButton(item) {
+    // Look for a "react/like" button that's NOT already pressed.
+    const buttons = item.querySelectorAll('button');
+    for (const b of buttons) {
+      const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('aria-pressed') || '')).toLowerCase();
+      const cls = (b.className || '').toString().toLowerCase();
+      if (/react.*like|^like$|like\b/i.test(label) && b.getAttribute('aria-pressed') !== 'true' && !/active|selected/.test(cls)) {
+        // Make sure this button is for the comment, not a nested reply
+        if (item.querySelector('.comments-comment-list__container') && item.querySelector('.comments-comment-list__container').contains(b)) continue;
+        return b;
+      }
+    }
+    return null;
+  }
+
+  function findReplyTrigger(item) {
+    const buttons = item.querySelectorAll('button, a');
+    for (const b of buttons) {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      const label = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (txt === 'reply' || /^reply\b/.test(label)) return b;
+    }
+    return null;
+  }
+
+  function findSubmitInside(box) {
+    if (!box) return null;
+    const buttons = box.querySelectorAll('button');
+    for (const b of buttons) {
+      const txt = (b.innerText || '').trim().toLowerCase();
+      const label = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (/(post|reply|comment|publicar|enviar)/i.test(txt) && !b.disabled) return b;
+      if (/(submit|post comment|post reply)/i.test(label) && !b.disabled) return b;
+    }
+    return null;
+  }
+
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  async function scrollAndLoadComments(post, targetCount) {
+    // LinkedIn lazy-loads comments; click "See more comments" buttons until we
+    // have enough or run out.
+    for (let i = 0; i < 6; i++) {
+      const items = findCommentItems(post);
+      if (items.length >= targetCount) return items;
+      const more = post.querySelector(
+        'button.comments-comments-list__load-more-comments-button, '
+        + 'button[aria-label*="more comment" i], '
+        + 'button[aria-label*="previous reply" i]'
+      );
+      if (!more) break;
+      more.click();
+      await wait(rand(1200, 2200));
+    }
+    return findCommentItems(post);
+  }
+
+  function openBulkDialog(post) {
+    closePopover();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '420px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#4338ca,#6366f1);-webkit-background-clip:text;background-clip:text;color:transparent">
+        ✨ Bibix Bulk Actions
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        Acts on the comments under this post. Random 5–15s delays. Click Cancel anytime to stop.
+      </div>
+      <div style="margin-bottom:14px;padding:12px;border:1px solid #e2e8f0;border-radius:10px">
+        <div style="font-weight:600;margin-bottom:6px">🤖 Auto-Reply</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">Generate AI replies to the first N comments and post them.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="bibix-reply-count" type="number" min="1" max="25" value="3" style="width:60px;padding:6px;border:1px solid #e2e8f0;border-radius:6px">
+          <span style="font-size:12px;color:#64748b">comments</span>
+          <button id="bibix-go-reply" style="margin-left:auto;background:linear-gradient(135deg,#4338ca,#6366f1);color:#fff;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Start replying</button>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;padding:12px;border:1px solid #e2e8f0;border-radius:10px">
+        <div style="font-weight:600;margin-bottom:6px">👍 Random Likes</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px">Like N randomly-chosen comments.</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="bibix-like-count" type="number" min="1" max="25" value="5" style="width:60px;padding:6px;border:1px solid #e2e8f0;border-radius:6px">
+          <span style="font-size:12px;color:#64748b">comments</span>
+          <button id="bibix-go-like" style="margin-left:auto;background:linear-gradient(135deg,#10b981,#059669);color:#fff;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Start liking</button>
+        </div>
+      </div>
+      <div id="bibix-bulk-status" style="font-size:12px;color:#475569;min-height:18px;margin-bottom:10px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bibix-bulk-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const status = pop.querySelector('#bibix-bulk-status');
+    const setStatus = (s) => { if (status) status.textContent = s; };
+    pop.querySelector('#bibix-bulk-close').addEventListener('click', () => { bulkAborted = true; closePopover(); });
+    pop.addEventListener('click', (e) => { if (e.target === pop) { bulkAborted = true; closePopover(); } });
+    pop.querySelector('#bibix-go-reply').addEventListener('click', async () => {
+      bulkAborted = false;
+      const n = Math.max(1, Math.min(25, Number(pop.querySelector('#bibix-reply-count').value) || 3));
+      await runBulkReply(post, n, setStatus);
+    });
+    pop.querySelector('#bibix-go-like').addEventListener('click', async () => {
+      bulkAborted = false;
+      const n = Math.max(1, Math.min(25, Number(pop.querySelector('#bibix-like-count').value) || 5));
+      await runBulkLike(post, n, setStatus);
+    });
+  }
+
+  async function runBulkReply(post, count, setStatus) {
+    setStatus(`Loading comments…`);
+    const items = await scrollAndLoadComments(post, count);
+    const targets = items.slice(0, count);
+    if (targets.length === 0) { setStatus('No comments found.'); return; }
+    setStatus(`Found ${targets.length} comments. Starting…`);
+    const postText = extractPostText(findPostContainer(post) || post);
+    const postUrl = extractPostUrl(post);
+
+    let done = 0, errors = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (bulkAborted) { setStatus(`Stopped after ${done}/${targets.length}.`); return; }
+      const item = targets[i];
+      const author = commentAuthor(item);
+      const text = commentText(item);
+      setStatus(`Replying to ${i + 1}/${targets.length}${author ? ' — ' + author : ''}…`);
+      try {
+        // 1. Generate reply via background worker
+        const gen = await send('generateReply', {
+          commentText: text, commentAuthor: author, postText, isOwnPost: false, postUrl,
+        });
+        if (!gen.ok) throw new Error(gen.error || 'AI error');
+        const replyText = gen.data.text;
+
+        // 2. Click the comment's Reply trigger to open its inline editor
+        const trigger = findReplyTrigger(item);
+        if (!trigger) throw new Error('Could not find Reply button');
+        trigger.click();
+        // 3. Wait for the editor to appear
+        let editor = null;
+        for (let t = 0; t < 30; t++) {
+          editor = item.querySelector('[contenteditable="true"][role="textbox"], .ql-editor[contenteditable="true"]');
+          if (editor) break;
+          await wait(150);
+        }
+        if (!editor) throw new Error('Reply editor never appeared');
+        // 4. Insert generated text
+        insertText(editor, replyText);
+        await wait(rand(600, 1100));
+        // 5. Find and click the Post/Reply submit button
+        const box = ancestorMatching(editor, looksLikeCommentBox) || editor.parentElement;
+        const submit = findSubmitInside(box);
+        if (!submit) throw new Error('Could not find Post/Reply submit button');
+        submit.click();
+        done++;
+        setStatus(`Posted ${done}/${targets.length}. Waiting…`);
+      } catch (e) {
+        errors++;
+        console.warn('[Bibix Bulk] reply error:', e.message);
+        setStatus(`Skipped ${i + 1} (${e.message}). Continuing…`);
+      }
+      // Random delay between actions (5–15s) to look human
+      if (i < targets.length - 1) await wait(rand(5000, 15000));
+    }
+    setStatus(`Done. ${done} posted, ${errors} skipped.`);
+  }
+
+  async function runBulkLike(post, count, setStatus) {
+    setStatus(`Loading comments…`);
+    const items = await scrollAndLoadComments(post, count * 2);
+    // Filter to ones we haven't liked yet
+    const candidates = items.filter((it) => findLikeButton(it));
+    if (candidates.length === 0) { setStatus('No likeable comments found (maybe all already liked).'); return; }
+    const targets = shuffle(candidates).slice(0, count);
+    setStatus(`Found ${candidates.length} candidates. Liking ${targets.length}…`);
+
+    let done = 0, errors = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (bulkAborted) { setStatus(`Stopped after ${done}/${targets.length}.`); return; }
+      const item = targets[i];
+      const author = commentAuthor(item);
+      setStatus(`Liking ${i + 1}/${targets.length}${author ? ' — ' + author : ''}…`);
+      try {
+        const btn = findLikeButton(item);
+        if (!btn) throw new Error('No like button');
+        btn.click();
+        done++;
+      } catch (e) {
+        errors++;
+        console.warn('[Bibix Bulk] like error:', e.message);
+      }
+      // Likes can be a bit faster than replies — still humanlike (1.5–4s)
+      if (i < targets.length - 1) await wait(rand(1500, 4000));
+    }
+    setStatus(`Done. ${done} liked, ${errors} skipped.`);
   }
 
   let scanTimer = null;
