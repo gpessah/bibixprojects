@@ -313,17 +313,19 @@
     // Best fallback: append directly inside the box
     const host = actions || box;
 
-    // Also add a Bulk Actions button right next to AI Comment if we can
-    // identify a post container.
-    if (postContainer && postContainer.getAttribute(BULK_PROCESSED) !== '1') {
-      postContainer.setAttribute(BULK_PROCESSED, '1');
+    // Always inject a Bulk Actions button alongside AI Comment. Use the post
+    // container if we found one, otherwise fall back to the comment box —
+    // the dialog itself does a document-wide search for comments either way.
+    const bulkPost = postContainer || box;
+    if (bulkPost && bulkPost.getAttribute(BULK_PROCESSED) !== '1' && !host.querySelector('.' + BULK_BTN_CLASS)) {
+      bulkPost.setAttribute(BULK_PROCESSED, '1');
       const bulkBtn = el('button', {
         className: BULK_BTN_CLASS,
         type: 'button',
         title: 'Bibix Bulk Actions — auto-reply / auto-like multiple comments',
         onClick: (e) => {
           e.preventDefault(); e.stopPropagation();
-          openBulkDialog(postContainer);
+          openBulkDialog(bulkPost);
         },
       }, [el('span', { className: 'bibix-spark' }, '✨'), 'Bulk']);
       host.insertBefore(bulkBtn, host.firstChild);
@@ -939,7 +941,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.7)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.8)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
