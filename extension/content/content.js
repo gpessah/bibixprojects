@@ -313,6 +313,22 @@
     // Best fallback: append directly inside the box
     const host = actions || box;
 
+    // Also add a Bulk Actions button right next to AI Comment if we can
+    // identify a post container.
+    if (postContainer && postContainer.getAttribute(BULK_PROCESSED) !== '1') {
+      postContainer.setAttribute(BULK_PROCESSED, '1');
+      const bulkBtn = el('button', {
+        className: BULK_BTN_CLASS,
+        type: 'button',
+        title: 'Bibix Bulk Actions — auto-reply / auto-like multiple comments',
+        onClick: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          openBulkDialog(postContainer);
+        },
+      }, [el('span', { className: 'bibix-spark' }, '✨'), 'Bulk']);
+      host.insertBefore(bulkBtn, host.firstChild);
+    }
+
     const btn = el('button', {
       className: BTN_CLASS,
       type: 'button',
