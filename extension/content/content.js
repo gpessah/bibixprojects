@@ -167,16 +167,18 @@
   let activePopover = null;
   let outsideClickHandler = null;
   function closePopover() {
-    if (activePopover) { activePopover.remove(); activePopover = null; }
+    if (portalHost && portalHost.isConnected) {
+      while (portalHost.firstChild) portalHost.removeChild(portalHost.firstChild);
+    }
+    activePopover = null;
     if (outsideClickHandler) {
-      document.removeEventListener('mousedown', outsideClickHandler, true);
+      document.removeEventListener('keydown', outsideClickHandler);
       outsideClickHandler = null;
     }
   }
 
-  // Portal host: a top-level div parented directly to <html>. Lives outside
-  // any transformed/contain'd ancestor LinkedIn might create, so popovers
-  // positioned with fixed coords always end up at the right viewport spot.
+  // Portal host: a top-level div parented directly to <html>, lives outside
+  // any transformed/contain'd ancestor LinkedIn might apply.
   let portalHost = null;
   function getPortalHost() {
     if (portalHost && portalHost.isConnected) return portalHost;
@@ -186,8 +188,8 @@
       position: 'fixed',
       top: '0',
       left: '0',
-      width: '0',
-      height: '0',
+      width: '100vw',
+      height: '100vh',
       zIndex: '2147483647',
       pointerEvents: 'none',
     });
@@ -198,19 +200,32 @@
   function openPopover(anchor, opts) {
     console.log('[Bibix LinkedIn AI] openPopover called', opts && opts.title);
     closePopover();
-    const rect = anchor.getBoundingClientRect();
-    // Inline styles in addition to the .bibix-popover class — guarantees the
-    // popover is visible even if a host site CSS rule tries to hide it.
+    // Backdrop — covers the viewport, dims it, captures outside clicks.
+    const backdrop = el('div', { style: {
+      position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
+      background: 'rgba(15, 23, 42, 0.45)',
+      pointerEvents: 'auto',
+      zIndex: '1',
+    } });
+    backdrop.addEventListener('mousedown', (e) => {
+      if (e.target === backdrop) closePopover();
+    });
+    // Centered modal — fixed coords against the viewport, no anchoring math.
     const pop = el('div', { className: 'bibix-popover', style: {
       position: 'fixed',
-      zIndex: '2147483647',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: '2',
       background: '#ffffff',
       border: '1px solid #e2e8f0',
-      borderRadius: '12px',
-      boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
-      padding: '14px',
-      width: '360px',
-      minHeight: '120px',
+      borderRadius: '14px',
+      boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      padding: '18px',
+      width: '440px',
+      maxWidth: 'calc(100vw - 32px)',
+      maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       fontSize: '13px',
       color: '#1f2937',
@@ -246,17 +261,10 @@
     pop.appendChild(body);
     pop.appendChild(actions);
 
-    getPortalHost().appendChild(pop);
-    activePopover = pop;
-    // Popover uses position:fixed inside the portal host (which itself has no
-    // transformed ancestor), so viewport coords from getBoundingClientRect
-    // place the popover correctly under the button regardless of any
-    // CSS transform applied to LinkedIn's surrounding chrome.
-    const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 280));
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - 380));
-    pop.style.top = top + 'px';
-    pop.style.left = left + 'px';
-    console.log('[Bibix LinkedIn AI] popover anchored at', { top, left, rect: { left: rect.left, top: rect.top, bottom: rect.bottom } });
+    const host = getPortalHost();
+    host.appendChild(backdrop);
+    host.appendChild(pop);
+    activePopover = backdrop; // close removes the whole subtree
 
     async function generate() {
       errBox.hidden = true;
@@ -278,17 +286,11 @@
     }
     generate();
 
-    // Outside-click to dismiss. Use a persistent listener (re-attached on
-    // each open) so a single spurious mousedown doesn't kill the popover.
-    setTimeout(() => {
-      outsideClickHandler = (e) => {
-        if (!activePopover) return;
-        if (activePopover.contains(e.target)) return;
-        if (e.target === anchor || anchor.contains(e.target)) return;
-        closePopover();
-      };
-      document.addEventListener('mousedown', outsideClickHandler, true);
-    }, 250);
+    // Esc key also dismisses
+    outsideClickHandler = (e) => {
+      if (e.key === 'Escape') closePopover();
+    };
+    document.addEventListener('keydown', outsideClickHandler);
   }
 
   function alreadyHasBibixButton(node) {
