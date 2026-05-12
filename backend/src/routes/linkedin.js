@@ -175,6 +175,7 @@ function buildCommentPrompt(opts) {
   const lines = [
     'You are an expert LinkedIn engagement assistant. Write a comment to leave under the following LinkedIn post.',
     '',
+    'LANGUAGE: Auto-detect the post\'s language and write your comment in the SAME language (Hebrew → Hebrew, Spanish → Spanish, French → French, etc.). If the post mixes languages, use the dominant one.',
     `LENGTH: ${LENGTH_GUIDE[length] || LENGTH_GUIDE.brief}.`,
     `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
   ];
@@ -209,6 +210,7 @@ function buildReplyPrompt(opts) {
   if (isOwnPost && settings.reply_ack_only_own_posts) {
     return [
       'You are replying as the original author of a LinkedIn post to a commenter.',
+      'LANGUAGE: Auto-detect the comment\'s language and reply in the SAME language.',
       `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
       'Keep it to a short acknowledgement — thank or react to the commenter\'s point in 1 sentence. Do not restate the original post.',
       commentAuthor ? `Commenter first name: "${commentAuthor.split(' ')[0]}".` : '',
@@ -224,6 +226,7 @@ function buildReplyPrompt(opts) {
 
   return [
     'You are replying on LinkedIn to a comment under someone else\'s post.',
+    'LANGUAGE: Auto-detect the comment\'s language and reply in the SAME language.',
     `LENGTH: ${LENGTH_GUIDE[length] || LENGTH_GUIDE.brief}.`,
     `TONE: ${TONE_GUIDE[tone] || TONE_GUIDE.gracious}.`,
     settings.reply_open_ended ? 'End with an open-ended question.' : '',
@@ -243,6 +246,7 @@ function buildContributionPrompt(opts) {
   const { topic, perspectiveTitle, settings } = opts;
   return [
     'You are writing a LinkedIn "Add your perspective" contribution to a collaborative article — these contributions help earn the "Top Voice" badge.',
+    'LANGUAGE: Auto-detect the article topic/prompt language and write in the SAME language.',
     'LENGTH: 350–600 characters (target ~450). Must fit under 750 characters.',
     `TONE: ${TONE_GUIDE[settings.tone] || TONE_GUIDE.gracious}, but professional and insight-rich.`,
     'Structure: open with a 2–4 word hook on a single line, then a substantive insight that adds practical value beyond restating the prompt. Mention a specific example, mechanism, or number if natural.',
