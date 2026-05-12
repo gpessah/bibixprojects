@@ -7,10 +7,33 @@ const cors = require('cors');
 const app = express();
 
 // In production the Express server serves both API and the built React app,
-// so CORS is only needed in local development (Vite dev server on a different port).
+// so CORS for the main frontend is only needed in local development (Vite dev server on a different port).
 if (process.env.NODE_ENV !== 'production') {
   app.use(cors());
 }
+
+// Always allow the Chrome extension + LinkedIn (the extension content script runs on linkedin.com)
+// to hit the /api/linkedin endpoints, regardless of NODE_ENV.
+app.use('/api/linkedin', cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (origin.startsWith('chrome-extension://')) return cb(null, true);
+    if (/^https?:\/\/([a-z0-9-]+\.)*linkedin\.com$/i.test(origin)) return cb(null, true);
+    if (process.env.NODE_ENV !== 'production') return cb(null, true);
+    return cb(null, false);
+  },
+  credentials: false,
+}));
+// CORS for the auth endpoint the extension uses to log in
+app.use('/api/auth', cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (origin.startsWith('chrome-extension://')) return cb(null, true);
+    if (process.env.NODE_ENV !== 'production') return cb(null, true);
+    return cb(null, false);
+  },
+  credentials: false,
+}));
 
 app.use(express.json({ limit: '20mb' }));
 
@@ -41,6 +64,7 @@ app.use('/api/scheduling',  require('./routes/scheduling'));
 app.use('/api/crm',         require('./routes/crm'));
 app.use('/api/invoices',    require('./routes/invoices'));
 app.use('/api/instagram',      require('./routes/instagram'));
+app.use('/api/linkedin',       require('./routes/linkedin'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');

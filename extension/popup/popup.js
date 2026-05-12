@@ -1,0 +1,181 @@
+const TONES = [
+  { id: 'excited',              label: '🎉 Excited' },
+  { id: 'happy',                label: '😊 Happy' },
+  { id: 'gracious',             label: '🤗 Gracious' },
+  { id: 'supportive',           label: '👏 Supportive' },
+  { id: 'polite',               label: '🙏 Polite' },
+  { id: 'witty',                label: '😉 Witty' },
+  { id: 'comic',                label: '😄 Comic' },
+  { id: 'respectfully_opposed', label: '😐 Respectfully Opposed' },
+  { id: 'provocative',          label: '😈 Provocative' },
+  { id: 'controversial',        label: '🔥 Controversial' },
+  { id: 'disappointed',         label: '😞 Disappointed' },
+  { id: 'sad',                  label: '😢 Sad' },
+];
+const LENGTH_LABELS = ['Brief', 'Medium', 'Long'];
+const LENGTH_IDS = ['brief', 'medium', 'long'];
+
+const $ = (sel) => document.querySelector(sel);
+
+function send(type, payload) {
+  return new Promise((resolve) => chrome.runtime.sendMessage({ type, payload }, resolve));
+}
+
+function showSaved() {
+  const el = $('#save-indicator');
+  el.hidden = false;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.classList.remove('show'); el.hidden = true; }, 1200);
+}
+
+let currentSettings = null;
+let saveTimer = null;
+function queueSave(patch) {
+  Object.assign(currentSettings, patch);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const res = await send('saveSettings', patch);
+    if (res.ok) { currentSettings = res.data; showSaved(); }
+  }, 350);
+}
+
+function setActiveTab(name) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.hidden = p.dataset.panel !== name);
+}
+
+function populateTones() {
+  const sel = $('#tone-select');
+  sel.innerHTML = TONES.map(t => `<option value="${t.id}">${t.label}</option>`).join('');
+}
+
+function bindCommentTab() {
+  const slider = $('#length-slider');
+  slider.addEventListener('input', () => {
+    const idx = Number(slider.value);
+    $('#length-value').textContent = LENGTH_LABELS[idx];
+    queueSave({ comment_length: LENGTH_IDS[idx] });
+  });
+  $('#tone-select').addEventListener('change', e => queueSave({ tone: e.target.value }));
+  $('#opt-mention').addEventListener('change',     e => queueSave({ mention_author: e.target.checked ? 1 : 0 }));
+  $('#opt-emojis').addEventListener('change',      e => queueSave({ use_emojis: e.target.checked ? 1 : 0 }));
+  $('#opt-open-ended').addEventListener('change',  e => queueSave({ open_ended: e.target.checked ? 1 : 0 }));
+  $('#opt-services').addEventListener('change', e => {
+    queueSave({ offer_services: e.target.checked ? 1 : 0 });
+    $('#industry-wrap').hidden = !e.target.checked;
+  });
+  $('#opt-industry').addEventListener('input', e => queueSave({ industry: e.target.value }));
+  $('#enabled-toggle').addEventListener('change', e => queueSave({ enabled: e.target.checked ? 1 : 0 }));
+
+  $('#btn-test-generate').addEventListener('click', async () => {
+    const btn = $('#btn-test-generate');
+    const out = $('#test-output');
+    btn.disabled = true; btn.textContent = '…';
+    out.hidden = false; out.textContent = 'Generating sample comment…';
+    const sample = 'Just shipped our biggest product update yet — months of work from the team. Curious what you all think of where this is heading.';
+    const res = await send('generateComment', {
+      postText: sample, authorName: 'Jane Doe', postUrl: 'https://www.linkedin.com/feed/',
+    });
+    btn.disabled = false; btn.textContent = 'Test ✨';
+    out.textContent = res.ok ? res.data.text : `Error: ${res.error || 'unknown'}`;
+  });
+}
+
+function bindReplyTab() {
+  $('#reply-short').addEventListener('change', e => queueSave({ reply_keep_short: e.target.checked ? 1 : 0 }));
+  $('#reply-open').addEventListener('change',  e => queueSave({ reply_open_ended:  e.target.checked ? 1 : 0 }));
+  $('#reply-ack').addEventListener('change',   e => queueSave({ reply_ack_only_own_posts: e.target.checked ? 1 : 0 }));
+}
+
+function bindAccountTab() {
+  $('#acct-display-name').addEventListener('input',  e => queueSave({ display_name: e.target.value }));
+  $('#acct-headline').addEventListener('input',      e => queueSave({ headline: e.target.value }));
+  $('#acct-services-desc').addEventListener('input', e => queueSave({ services_description: e.target.value }));
+  $('#btn-logout').addEventListener('click', async () => {
+    await send('logout');
+    location.reload();
+  });
+}
+
+function applySettingsToUI(s) {
+  currentSettings = s;
+  const idx = LENGTH_IDS.indexOf(s.comment_length || 'brief');
+  $('#length-slider').value = idx < 0 ? 0 : idx;
+  $('#length-value').textContent = LENGTH_LABELS[idx < 0 ? 0 : idx];
+  $('#tone-select').value = s.tone || 'gracious';
+  $('#opt-mention').checked    = !!s.mention_author;
+  $('#opt-emojis').checked     = !!s.use_emojis;
+  $('#opt-open-ended').checked = !!s.open_ended;
+  $('#opt-services').checked   = !!s.offer_services;
+  $('#industry-wrap').hidden   = !s.offer_services;
+  $('#opt-industry').value     = s.industry || '';
+  $('#enabled-toggle').checked = !!s.enabled;
+
+  $('#reply-short').checked = !!s.reply_keep_short;
+  $('#reply-open').checked  = !!s.reply_open_ended;
+  $('#reply-ack').checked   = !!s.reply_ack_only_own_posts;
+
+  $('#acct-display-name').value  = s.display_name || '';
+  $('#acct-headline').value      = s.headline || '';
+  $('#acct-services-desc').value = s.services_description || '';
+}
+
+async function loadMainView() {
+  $('#view-login').hidden = true;
+  $('#view-main').hidden = false;
+  const me = await send('me');
+  if (me.ok && me.data.user) {
+    $('#acct-name').textContent = me.data.user.name || me.data.user.email || '—';
+    $('#acct-email').textContent = me.data.user.email || '';
+    $('#acct-role').textContent = me.data.user.role || 'user';
+  }
+  const apiRes = await send('getApiBase');
+  if (apiRes.ok && apiRes.data.apiBase) {
+    $('#open-monday').href = apiRes.data.apiBase + '/marketing/linkedin';
+  }
+  const res = await send('getSettings');
+  if (res.ok) applySettingsToUI(res.data);
+  else if (res.status === 401) showLoginView();
+}
+
+function showLoginView() {
+  $('#view-main').hidden = true;
+  $('#view-login').hidden = false;
+  chrome.storage.local.get('apiBase').then(({ apiBase }) => {
+    $('#login-api').value = apiBase || 'http://localhost:3001';
+  });
+}
+
+function bindLogin() {
+  $('#btn-login').addEventListener('click', async () => {
+    const apiBase = $('#login-api').value.trim().replace(/\/$/, '');
+    const email = $('#login-email').value.trim();
+    const password = $('#login-password').value;
+    if (!email || !password) { $('#login-error').textContent = 'Email and password required.'; return; }
+    $('#login-error').textContent = '';
+    $('#btn-login').disabled = true; $('#btn-login').textContent = 'Signing in…';
+    const res = await send('login', { email, password, apiBase });
+    $('#btn-login').disabled = false; $('#btn-login').textContent = 'Sign in';
+    if (res.ok) await loadMainView();
+    else $('#login-error').textContent = res.error || 'Login failed';
+  });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  populateTones();
+  bindCommentTab();
+  bindReplyTab();
+  bindAccountTab();
+  bindLogin();
+
+  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setActiveTab(b.dataset.tab)));
+  setActiveTab('comment');
+
+  const me = await send('me');
+  if (me.ok && me.data.hasToken) {
+    await loadMainView();
+  } else {
+    showLoginView();
+  }
+});

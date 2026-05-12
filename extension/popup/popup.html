@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bibix LinkedIn Booster</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="header">
+    <div class="header-title">Bibix<strong>LINKEDIN</strong></div>
+  </header>
+
+  <!-- LOGIN VIEW -->
+  <section id="view-login" class="view" hidden>
+    <h2>Sign in to your Monday workspace</h2>
+    <label>Backend URL
+      <input type="text" id="login-api" placeholder="https://your-monday.example.com" />
+    </label>
+    <label>Email
+      <input type="email" id="login-email" placeholder="you@example.com" />
+    </label>
+    <label>Password
+      <input type="password" id="login-password" />
+    </label>
+    <button id="btn-login" class="primary">Sign in</button>
+    <div id="login-error" class="error"></div>
+  </section>
+
+  <!-- MAIN VIEW -->
+  <section id="view-main" class="view" hidden>
+    <nav class="tabs">
+      <button class="tab" data-tab="comment">Comment</button>
+      <button class="tab" data-tab="reply">Reply</button>
+      <button class="tab" data-tab="account">Account</button>
+    </nav>
+
+    <!-- COMMENT TAB -->
+    <div class="tab-panel" data-panel="comment">
+      <div class="field">
+        <div class="field-label">Comment Length: <strong id="length-value">Brief</strong>
+          <span class="info" title="How long the AI comment should be">ⓘ</span>
+        </div>
+        <input type="range" id="length-slider" min="0" max="2" step="1" value="0" />
+      </div>
+
+      <div class="field">
+        <label class="field-label">Tone <span class="info" title="The emotional voice the comment should have">ⓘ</span></label>
+        <select id="tone-select"></select>
+      </div>
+
+      <label class="row"><input type="checkbox" id="opt-mention" /> Mention Post Author <span class="info" title="Address the author by first name">ⓘ</span></label>
+      <label class="row"><input type="checkbox" id="opt-emojis" /> Use Emojis <span class="info" title="Adds 1–2 tasteful emojis">ⓘ</span></label>
+      <label class="row"><input type="checkbox" id="opt-open-ended" /> Open Ended <span class="info" title="Ends with a question to invite replies">ⓘ</span></label>
+      <label class="row"><input type="checkbox" id="opt-services" /> Offer Services <span class="info" title="Subtly mentions you can help, using your About info">ⓘ</span></label>
+
+      <div class="field" id="industry-wrap" hidden>
+        <label class="field-label">Industry</label>
+        <input type="text" id="opt-industry" placeholder="Marketing & Advertising" />
+      </div>
+
+      <footer class="footer-toggle">
+        <label class="switch">
+          <input type="checkbox" id="enabled-toggle" />
+          <span class="slider"></span>
+        </label>
+        <button id="btn-test-generate" class="primary small">Test ✨</button>
+      </footer>
+      <div id="test-output" class="test-output" hidden></div>
+    </div>
+
+    <!-- REPLY TAB -->
+    <div class="tab-panel" data-panel="reply" hidden>
+      <label class="row"><input type="checkbox" id="reply-short" /> Keep It Short <span class="info">ⓘ</span></label>
+      <label class="row"><input type="checkbox" id="reply-open" /> Open Ended <span class="info">ⓘ</span></label>
+      <label class="row"><input type="checkbox" id="reply-ack" /> On My Own Posts — Acknowledge Only <span class="info">ⓘ</span></label>
+      <p class="hint">Your reply settings are also used when generating contributions for Top-Voice badges.</p>
+    </div>
+
+    <!-- ACCOUNT TAB -->
+    <div class="tab-panel" data-panel="account" hidden>
+      <div class="account-card">
+        <div class="account-name" id="acct-name">—</div>
+        <div class="account-email" id="acct-email">—</div>
+        <div class="account-role" id="acct-role">—</div>
+      </div>
+      <div class="field">
+        <label class="field-label">Display name (used when offering services)</label>
+        <input type="text" id="acct-display-name" />
+      </div>
+      <div class="field">
+        <label class="field-label">Headline</label>
+        <input type="text" id="acct-headline" placeholder="e.g. Growth marketer at Bibix" />
+      </div>
+      <div class="field">
+        <label class="field-label">Services description</label>
+        <textarea id="acct-services-desc" rows="2" placeholder="Briefly describe what you offer"></textarea>
+      </div>
+      <a id="open-monday" href="#" target="_blank" class="link">Open in Monday →</a>
+      <button id="btn-logout" class="secondary">Sign out</button>
+    </div>
+
+    <div id="save-indicator" class="save-indicator" hidden>Saved ✓</div>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>
