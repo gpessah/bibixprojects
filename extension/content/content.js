@@ -612,27 +612,55 @@
     return a ? (a.innerText || '').trim().split('\n')[0] : '';
   }
 
+  // Restrict to buttons that belong to *this* comment, not to its nested
+  // replies (which live inside a child comment-list container).
+  function buttonsBelongingTo(item) {
+    const all = Array.from(item.querySelectorAll('button, a[role="button"]'));
+    // Identify any nested reply containers within this item
+    const nestedContainers = Array.from(item.querySelectorAll(
+      '[class*="comments-comment-list__container"], [class*="comments-replies"], [class*="comment-replies"]'
+    ));
+    return all.filter((b) => !nestedContainers.some((c) => c.contains(b)));
+  }
+
   function findLikeButton(item) {
-    // Look for a "react/like" button that's NOT already pressed.
-    const buttons = item.querySelectorAll('button');
-    for (const b of buttons) {
-      const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.getAttribute('aria-pressed') || '')).toLowerCase();
+    // Language-agnostic: identify by class/data hints instead of aria-label text.
+    const candidates = buttonsBelongingTo(item).filter((b) => {
       const cls = (b.className || '').toString().toLowerCase();
-      if (/react.*like|^like$|like\b/i.test(label) && b.getAttribute('aria-pressed') !== 'true' && !/active|selected/.test(cls)) {
-        // Make sure this button is for the comment, not a nested reply
-        if (item.querySelector('.comments-comment-list__container') && item.querySelector('.comments-comment-list__container').contains(b)) continue;
-        return b;
-      }
+      const dcn = (b.getAttribute('data-control-name') || '').toLowerCase();
+      if (/react-button__trigger|react-button/.test(cls)) return true;
+      if (/react|like/.test(dcn)) return true;
+      // Position-based fallback: a button that has an SVG inside (typically the heart/thumb icon)
+      // — only as a weak hint, paired with aria-pressed presence
+      if (b.getAttribute('aria-pressed') !== null && b.querySelector('svg, [data-test-icon]')) return true;
+      return false;
+    });
+    for (const b of candidates) {
+      if (b.getAttribute('aria-pressed') === 'true') continue;
+      const cls = (b.className || '').toString().toLowerCase();
+      if (/active|selected|liked/.test(cls)) continue;
+      return b;
     }
     return null;
   }
 
   function findReplyTrigger(item) {
-    const buttons = item.querySelectorAll('button, a');
-    for (const b of buttons) {
-      const txt = (b.innerText || '').trim().toLowerCase();
-      const label = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (txt === 'reply' || /^reply\b/.test(label)) return b;
+    // Language-agnostic: prefer class/data hints; fall back to text only for
+    // English UIs.
+    const candidates = buttonsBelongingTo(item);
+    // Pass 1 — class/data hints
+    for (const b of candidates) {
+      const cls = (b.className || '').toString().toLowerCase();
+      const dcn = (b.getAttribute('data-control-name') || '').toLowerCase();
+      if (/reply-action|reply-button|comments-comment-social-bar__reply/.test(cls)) return b;
+      if (/reply/.test(dcn)) return b;
+    }
+    // Pass 2 — multilingual text/aria-label patterns (English/Hebrew/Spanish/etc.)
+    const REPLY_WORDS = /^(reply|respond|respondre|responder|antworten|תגובה|השב|להגיב|rispondi|svar)\b/i;
+    for (const b of candidates) {
+      const txt = (b.innerText || '').trim();
+      const label = (b.getAttribute('aria-label') || '').trim();
+      if (REPLY_WORDS.test(txt) || REPLY_WORDS.test(label)) return b;
     }
     return null;
   }
@@ -640,11 +668,17 @@
   function findSubmitInside(box) {
     if (!box) return null;
     const buttons = box.querySelectorAll('button');
+    // Pass 1 — class hints (language-agnostic)
     for (const b of buttons) {
-      const txt = (b.innerText || '').trim().toLowerCase();
-      const label = (b.getAttribute('aria-label') || '').toLowerCase();
-      if (/(post|reply|comment|publicar|enviar)/i.test(txt) && !b.disabled) return b;
-      if (/(submit|post comment|post reply)/i.test(label) && !b.disabled) return b;
+      const cls = (b.className || '').toString().toLowerCase();
+      if (/comments-comment-box__submit|submit-button|post-button/.test(cls) && !b.disabled) return b;
+    }
+    // Pass 2 — multilingual text/aria-label patterns
+    const SUBMIT_WORDS = /^(post|reply|comment|publicar|enviar|publish|publicar|publier|פרסם|פרסום|תגובה)\b/i;
+    for (const b of buttons) {
+      const txt = (b.innerText || '').trim();
+      const label = (b.getAttribute('aria-label') || '').trim();
+      if ((SUBMIT_WORDS.test(txt) || SUBMIT_WORDS.test(label)) && !b.disabled) return b;
     }
     return null;
   }
@@ -803,7 +837,23 @@
     const items = await scrollAndLoadComments(post, count * 2);
     // Filter to ones we haven't liked yet
     const candidates = items.filter((it) => findLikeButton(it));
-    if (candidates.length === 0) { setStatus('No likeable comments found (maybe all already liked).'); return; }
+    if (candidates.length === 0) {
+      // Dump diagnostic info to console
+      const sample = items[0];
+      if (sample) {
+        const btns = buttonsBelongingTo(sample);
+        console.log('[Bibix Bulk] No like button found. Sample comment has', btns.length, 'buttons:');
+        btns.forEach((b, i) => console.log(' ', i, {
+          cls: (b.className || '').toString().slice(0, 80),
+          dcn: b.getAttribute('data-control-name'),
+          aria: b.getAttribute('aria-label'),
+          pressed: b.getAttribute('aria-pressed'),
+          text: (b.innerText || '').slice(0, 40),
+        }));
+      }
+      setStatus('No likeable comments found. See console for details.');
+      return;
+    }
     const targets = shuffle(candidates).slice(0, count);
     setStatus(`Found ${candidates.length} candidates. Liking ${targets.length}…`);
 
