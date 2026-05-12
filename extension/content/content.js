@@ -578,11 +578,22 @@
   }
 
   // -- Comment discovery on a post --
+  const COMMENT_ITEM_SELECTOR = (
+    '.comments-comment-item, .comments-comment-entity, '
+    + '[class*="comments-comment-item"], [class*="comments-comment-entity"], '
+    + 'article[class*="comment"]'
+  );
   function findCommentItems(post) {
-    // LinkedIn comment item wrappers across recent classes.
-    return Array.from(post.querySelectorAll(
-      '.comments-comment-item, .comments-comment-entity, [class*="comments-comment-item"]'
-    )).filter((c) => c.offsetHeight > 0);
+    // Search post-local first
+    let items = Array.from(post.querySelectorAll(COMMENT_ITEM_SELECTOR))
+      .filter((c) => c.offsetHeight > 0);
+    if (items.length > 0) return items;
+    // Fallback: scan the whole document. In LinkedIn's modal/overlay views,
+    // comments often live outside the post wrapper my code identifies.
+    items = Array.from(document.querySelectorAll(COMMENT_ITEM_SELECTOR))
+      .filter((c) => c.offsetHeight > 0);
+    console.log('[Bibix Bulk] post-local found 0 comments, doc-wide found', items.length);
+    return items;
   }
 
   function commentText(item) {
@@ -653,12 +664,14 @@
     for (let i = 0; i < 6; i++) {
       const items = findCommentItems(post);
       if (items.length >= targetCount) return items;
-      const more = post.querySelector(
+      const more = document.querySelector(
         'button.comments-comments-list__load-more-comments-button, '
         + 'button[aria-label*="more comment" i], '
-        + 'button[aria-label*="previous reply" i]'
+        + 'button[aria-label*="previous reply" i], '
+        + 'button[aria-label*="load more" i]'
       );
       if (!more) break;
+      more.scrollIntoView({ block: 'center' });
       more.click();
       await wait(rand(1200, 2200));
     }
