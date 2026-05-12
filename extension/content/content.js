@@ -174,6 +174,27 @@
     }
   }
 
+  // Portal host: a top-level div parented directly to <html>. Lives outside
+  // any transformed/contain'd ancestor LinkedIn might create, so popovers
+  // positioned with fixed coords always end up at the right viewport spot.
+  let portalHost = null;
+  function getPortalHost() {
+    if (portalHost && portalHost.isConnected) return portalHost;
+    portalHost = document.createElement('div');
+    portalHost.id = 'bibix-portal-root';
+    Object.assign(portalHost.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      width: '0',
+      height: '0',
+      zIndex: '2147483647',
+      pointerEvents: 'none',
+    });
+    document.documentElement.appendChild(portalHost);
+    return portalHost;
+  }
+
   function openPopover(anchor, opts) {
     console.log('[Bibix LinkedIn AI] openPopover called', opts && opts.title);
     closePopover();
@@ -225,13 +246,17 @@
     pop.appendChild(body);
     pop.appendChild(actions);
 
-    document.body.appendChild(pop);
+    getPortalHost().appendChild(pop);
     activePopover = pop;
-    // Popover uses position:fixed, so use viewport coords (no scroll offset).
+    // Popover uses position:fixed inside the portal host (which itself has no
+    // transformed ancestor), so viewport coords from getBoundingClientRect
+    // place the popover correctly under the button regardless of any
+    // CSS transform applied to LinkedIn's surrounding chrome.
     const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - 280));
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - 380));
     pop.style.top = top + 'px';
     pop.style.left = left + 'px';
+    console.log('[Bibix LinkedIn AI] popover anchored at', { top, left, rect: { left: rect.left, top: rect.top, bottom: rect.bottom } });
 
     async function generate() {
       errBox.hidden = true;
