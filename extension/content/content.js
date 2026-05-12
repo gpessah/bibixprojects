@@ -41,12 +41,13 @@
   function findPostContainer(node) {
     let p = node;
     while (p && p !== document.body) {
-      if (p.matches && (
-        p.matches('[data-urn^="urn:li:activity"]') ||
-        p.matches('.feed-shared-update-v2') ||
-        p.matches('.scaffold-finite-scroll__content article') ||
-        p.matches('article')
-      )) return p;
+      if (p.matches) {
+        const cls = (p.className && typeof p.className === 'string') ? p.className : '';
+        const urn = p.getAttribute && p.getAttribute('data-urn');
+        if (urn && /urn:li:(activity|share|ugcPost)/i.test(urn)) return p;
+        if (/feed-shared-update|update-v2|feed-shared-post|scaffold-finite-scroll__content/i.test(cls)) return p;
+        if (p.tagName === 'ARTICLE') return p;
+      }
       p = p.parentElement;
     }
     return null;
@@ -54,11 +55,20 @@
 
   function extractPostText(container) {
     if (!container) return '';
+    // Try the known post-text selectors first
     const textNode = container.querySelector(
-      '.update-components-text, .feed-shared-update-v2__description, .feed-shared-text, .update-components-update-v2__commentary'
+      '.update-components-text, .feed-shared-update-v2__description, .feed-shared-text, '
+      + '.update-components-update-v2__commentary, [class*="update-components-text"], '
+      + '[class*="feed-shared-text"], [data-test-id="main-feed-activity-card__commentary"]'
     );
-    let text = textNode ? textNode.innerText : container.innerText;
-    return (text || '').trim().replace(/\s+\n/g, '\n').slice(0, 3000);
+    if (textNode) {
+      const t = (textNode.innerText || '').trim();
+      if (t) return t.replace(/\s+\n/g, '\n').slice(0, 3000);
+    }
+    // Fallback: use container.innerText but trim navigation/UI noise
+    const raw = (container.innerText || '').trim();
+    // Strip obvious UI words at edges
+    return raw.replace(/\s+/g, ' ').slice(0, 3000);
   }
 
   function extractAuthor(container) {
@@ -195,9 +205,19 @@
         e.preventDefault();
         e.stopPropagation();
         const editor = findEditorWithin(box);
-        const postText = extractPostText(postContainer);
-        const author = extractAuthor(postContainer);
-        const url = extractPostUrl(postContainer);
+        // Re-resolve post container at click time — by now LinkedIn may have
+        // rendered the post DOM that was lazy at injection time.
+        const container = findPostContainer(box) || postContainer;
+        const postText = extractPostText(container);
+        const author = extractAuthor(container);
+        const url = extractPostUrl(container);
+        if (!postText || !postText.trim()) {
+          openPopover(btn, {
+            title: 'Comment',
+            runGenerate: () => Promise.resolve({ ok: false, error: 'Could not read this post\'s text. Try opening the post in a dedicated page (click the timestamp) and try again.' }),
+          });
+          return;
+        }
         openPopover(btn, {
           title: 'Comment',
           runGenerate: () => send('generateComment', { postText, authorName: author, postUrl: url }),
@@ -291,7 +311,13 @@
 
   function looksLikeCommentBox(node) {
     const cls = (node.className && typeof node.className === 'string') ? node.className : '';
-    return /comments?-comment-box|comments?-comment-texteditor|comments?-comments?-box|comment-box|share-creation-state|contribution-prompt/i.test(cls);
+    // Match comment-related wrappers but NOT the "Start a post" composer or contribution boxes
+    return /comments?-comment-box|comments?-comment-texteditor|comments?-comments?-box/i.test(cls);
+  }
+
+  function looksLikePostShareComposer(node) {
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    return /share-creation-state|share-box-modal|share-box|sharing-box/i.test(cls);
   }
 
   function looksLikeReplyBox(node) {
@@ -305,9 +331,8 @@
   }
 
   function findEditorHost(editor) {
-    // Find a reasonable container to inject the button into. Walk up looking
-    // for the comment-box-ish wrapper; fall back to the editor's parent.
-    return ancestorMatching(editor, looksLikeCommentBox) || editor.parentElement;
+    // Walk up looking for a comment-box-ish wrapper. Returns null if none.
+    return ancestorMatching(editor, looksLikeCommentBox);
   }
 
   function scan() {
@@ -315,12 +340,20 @@
       '.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]'
     );
     editors.forEach((editor) => {
+      // Skip editors that are inside the "Start a post" composer
+      if (ancestorMatching(editor, looksLikePostShareComposer)) return;
+
+      // Contribution prompt for Top Voice ("Add your perspective")
+      const contribAncestor = ancestorMatching(editor, looksLikeContributionBox);
+      if (contribAncestor) {
+        if (contribAncestor.getAttribute(PROCESSED_ATTR) !== '1') injectIntoContributionBox(contribAncestor);
+        return;
+      }
+
       const host = findEditorHost(editor);
       if (!host || host.getAttribute(PROCESSED_ATTR) === '1') return;
 
-      if (looksLikeContributionBox(host) || looksLikeContributionBox(editor.closest('[class*="contribution"]') || document.body)) {
-        injectIntoContributionBox(host);
-      } else if (looksLikeReplyBox(host) || ancestorMatching(host, looksLikeReplyBox, 4)) {
+      if (looksLikeReplyBox(host) || ancestorMatching(host, looksLikeReplyBox, 4)) {
         injectIntoReplyBox(host);
       } else {
         injectIntoCommentBox(host);
@@ -332,7 +365,8 @@
     document.querySelectorAll('.comments-comment-box, [class*="comments-comment-box"]').forEach((box) => {
       if (box.getAttribute(PROCESSED_ATTR) === '1') return;
       if (box.querySelector('[contenteditable="true"]')) return; // handled above
-      // Placeholder — inject anyway so the button is visible even before user clicks
+      // Skip if inside the post share composer
+      if (ancestorMatching(box, looksLikePostShareComposer)) return;
       injectIntoCommentBox(box);
     });
   }
