@@ -276,21 +276,85 @@
     host.insertBefore(btn, host.firstChild);
   }
 
-  // ── Discovery: poll the DOM for new injection points ────────────────────────
+  // ── Discovery: walk up from every contenteditable to find a "comment box"
+  // host element. This is resilient to LinkedIn renaming classes — it works
+  // off the universal contenteditable role rather than specific class names.
+
+  function ancestorMatching(node, predicate, maxDepth = 12) {
+    let cur = node;
+    for (let i = 0; i < maxDepth && cur && cur !== document.body; i++) {
+      if (predicate(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  function looksLikeCommentBox(node) {
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    return /comments?-comment-box|comments?-comment-texteditor|comments?-comments?-box|comment-box|share-creation-state|contribution-prompt/i.test(cls);
+  }
+
+  function looksLikeReplyBox(node) {
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    return /comment-box--reply|reply-editor|comments-reply/i.test(cls);
+  }
+
+  function looksLikeContributionBox(node) {
+    const cls = (node.className && typeof node.className === 'string') ? node.className : '';
+    return /contribution-prompt|perspective|article-contrib/i.test(cls);
+  }
+
+  function findEditorHost(editor) {
+    // Find a reasonable container to inject the button into. Walk up looking
+    // for the comment-box-ish wrapper; fall back to the editor's parent.
+    return ancestorMatching(editor, looksLikeCommentBox) || editor.parentElement;
+  }
+
   function scan() {
-    // Top-level comment boxes (under a post)
-    document.querySelectorAll('.comments-comment-box:not(.comments-comment-box--reply)').forEach(injectIntoCommentBox);
-    // Reply comment boxes (nested under a comment)
-    document.querySelectorAll('.comments-comment-box--reply').forEach(injectIntoReplyBox);
-    // Contribution boxes on collaborative articles
-    document.querySelectorAll('.contribution-prompt__editor, [class*="contribution-prompt"] .ql-container').forEach(injectIntoContributionBox);
+    const editors = document.querySelectorAll(
+      '.ql-editor[contenteditable="true"], div[contenteditable="true"][role="textbox"]'
+    );
+    editors.forEach((editor) => {
+      const host = findEditorHost(editor);
+      if (!host || host.getAttribute(PROCESSED_ATTR) === '1') return;
+
+      if (looksLikeContributionBox(host) || looksLikeContributionBox(editor.closest('[class*="contribution"]') || document.body)) {
+        injectIntoContributionBox(host);
+      } else if (looksLikeReplyBox(host) || ancestorMatching(host, looksLikeReplyBox, 4)) {
+        injectIntoReplyBox(host);
+      } else {
+        injectIntoCommentBox(host);
+      }
+    });
+
+    // Also inject for collapsed comment-box placeholders that haven't yet
+    // rendered a contenteditable (LinkedIn lazy-mounts these on focus).
+    document.querySelectorAll('.comments-comment-box, [class*="comments-comment-box"]').forEach((box) => {
+      if (box.getAttribute(PROCESSED_ATTR) === '1') return;
+      if (box.querySelector('[contenteditable="true"]')) return; // handled above
+      // Placeholder — inject anyway so the button is visible even before user clicks
+      injectIntoCommentBox(box);
+    });
   }
 
   let scanTimer = null;
   function scheduleScan() { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 200); }
+
+  document.addEventListener('focusin', (e) => {
+    if (e.target && e.target.matches && e.target.matches('[contenteditable="true"]')) {
+      scheduleScan();
+    }
+  }, true);
+
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.body, { childList: true, subtree: true });
   scheduleScan();
+  // Re-scan a few times during initial page load — LinkedIn's SPA mounts
+  // post DOM in waves, and we want buttons to appear without waiting for
+  // user interaction.
+  setTimeout(scheduleScan, 500);
+  setTimeout(scheduleScan, 1500);
+  setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.1.1)');
 })();
