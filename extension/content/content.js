@@ -578,22 +578,49 @@
   }
 
   // -- Comment discovery on a post --
-  const COMMENT_ITEM_SELECTOR = (
-    '.comments-comment-item, .comments-comment-entity, '
-    + '[class*="comments-comment-item"], [class*="comments-comment-entity"], '
-    + 'article[class*="comment"]'
-  );
+  const COMMENT_ITEM_SELECTORS = [
+    '.comments-comment-item',
+    '.comments-comment-entity',
+    '[class*="comments-comment-item"]',
+    '[class*="comments-comment-entity"]',
+    '[class*="comments-comments-entity"]',
+    '[class*="comment-entity-v"]',
+    '[data-id*="urn:li:comment"]',
+    'article[class*="comment"]',
+  ];
+  const COMMENT_ITEM_SELECTOR = COMMENT_ITEM_SELECTORS.join(', ');
+
   function findCommentItems(post) {
     // Search post-local first
     let items = Array.from(post.querySelectorAll(COMMENT_ITEM_SELECTOR))
       .filter((c) => c.offsetHeight > 0);
     if (items.length > 0) return items;
-    // Fallback: scan the whole document. In LinkedIn's modal/overlay views,
-    // comments often live outside the post wrapper my code identifies.
+    // Fallback: scan the whole document.
     items = Array.from(document.querySelectorAll(COMMENT_ITEM_SELECTOR))
       .filter((c) => c.offsetHeight > 0);
-    console.log('[Bibix Bulk] post-local found 0 comments, doc-wide found', items.length);
+    if (items.length > 0) return items;
+    // Last-resort heuristic: any element with a data-id starting with
+    // "urn:li:" that contains a profile link and isn't itself a post.
+    items = Array.from(document.querySelectorAll('[data-id]'))
+      .filter((n) => {
+        const id = n.getAttribute('data-id') || '';
+        if (!/urn:li:(comment|reply)/i.test(id)) return false;
+        return n.offsetHeight > 0;
+      });
     return items;
+  }
+
+  function dumpCommentDiagnostic(label) {
+    console.log('[Bibix Bulk]', label, '— diagnostic dump:');
+    COMMENT_ITEM_SELECTORS.forEach((sel) => {
+      const n = document.querySelectorAll(sel).length;
+      if (n > 0) console.log('  matched', n, 'with selector:', sel);
+    });
+    const dataIds = Array.from(document.querySelectorAll('[data-id]')).slice(0, 5);
+    if (dataIds.length) {
+      console.log('  sample [data-id] values:');
+      dataIds.forEach((n) => console.log('   ', n.getAttribute('data-id'), '|', (n.className || '').toString().slice(0, 60)));
+    }
   }
 
   function commentText(item) {
@@ -779,7 +806,11 @@
     setStatus(`Loading comments…`);
     const items = await scrollAndLoadComments(post, count);
     const targets = items.slice(0, count);
-    if (targets.length === 0) { setStatus('No comments found.'); return; }
+    if (targets.length === 0) {
+      dumpCommentDiagnostic('No comments found for reply');
+      setStatus('No comments found. See console for details.');
+      return;
+    }
     setStatus(`Found ${targets.length} comments. Starting…`);
     const postText = extractPostText(findPostContainer(post) || post);
     const postUrl = extractPostUrl(post);
@@ -838,11 +869,12 @@
     // Filter to ones we haven't liked yet
     const candidates = items.filter((it) => findLikeButton(it));
     if (candidates.length === 0) {
-      // Dump diagnostic info to console
-      const sample = items[0];
-      if (sample) {
+      if (items.length === 0) {
+        dumpCommentDiagnostic('No comments found for like');
+      } else {
+        const sample = items[0];
         const btns = buttonsBelongingTo(sample);
-        console.log('[Bibix Bulk] No like button found. Sample comment has', btns.length, 'buttons:');
+        console.log('[Bibix Bulk] Found', items.length, 'comments but no like button. Sample buttons:');
         btns.forEach((b, i) => console.log(' ', i, {
           cls: (b.className || '').toString().slice(0, 80),
           dcn: b.getAttribute('data-control-name'),
