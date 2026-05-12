@@ -155,9 +155,17 @@
 
   // ── Popover ──────────────────────────────────────────────────────────────────
   let activePopover = null;
-  function closePopover() { if (activePopover) { activePopover.remove(); activePopover = null; } }
+  let outsideClickHandler = null;
+  function closePopover() {
+    if (activePopover) { activePopover.remove(); activePopover = null; }
+    if (outsideClickHandler) {
+      document.removeEventListener('mousedown', outsideClickHandler, true);
+      outsideClickHandler = null;
+    }
+  }
 
   function openPopover(anchor, opts) {
+    console.log('[Bibix LinkedIn AI] openPopover called', opts && opts.title);
     closePopover();
     const rect = anchor.getBoundingClientRect();
     const pop = el('div', { className: 'bibix-popover' });
@@ -216,11 +224,17 @@
     }
     generate();
 
+    // Outside-click to dismiss. Use a persistent listener (re-attached on
+    // each open) so a single spurious mousedown doesn't kill the popover.
     setTimeout(() => {
-      document.addEventListener('mousedown', (e) => {
-        if (activePopover && !activePopover.contains(e.target) && e.target !== anchor) closePopover();
-      }, { once: true });
-    }, 50);
+      outsideClickHandler = (e) => {
+        if (!activePopover) return;
+        if (activePopover.contains(e.target)) return;
+        if (e.target === anchor || anchor.contains(e.target)) return;
+        closePopover();
+      };
+      document.addEventListener('mousedown', outsideClickHandler, true);
+    }, 250);
   }
 
   function alreadyHasBibixButton(node) {
@@ -250,6 +264,7 @@
       className: BTN_CLASS,
       type: 'button',
       onClick: (e) => {
+        console.log('[Bibix LinkedIn AI] AI Comment button clicked');
         e.preventDefault();
         e.stopPropagation();
         const editor = findEditorWithin(box);
