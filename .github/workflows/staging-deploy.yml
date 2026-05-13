@@ -1,0 +1,26 @@
+name: Deploy to staging
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH and run staging-deploy.sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH into staging and run deploy script
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key:      ${{ secrets.STAGING_SSH_KEY }}
+          port:     ${{ secrets.STAGING_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            bash $HOME/bibixprojects-staging/backend/scripts/staging-deploy.sh
