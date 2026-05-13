@@ -113,7 +113,7 @@ router.post("/campaigns", authenticateFlexible, (req, res) => {
 router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
   var b = req.body;
   var status        = b.status || null;
-  var actions_count = b.actions_count || b.completed || null;
+  var actions_count = b.actions_count != null ? b.actions_count : (b.completed != null ? b.completed : null);
   // followerStats can be { gained: N } or { after: N, before: M } or just a number
   var new_followers = b.new_followers != null ? b.new_followers
     : (b.followerStats && b.followerStats.gained != null) ? b.followerStats.gained
@@ -146,8 +146,9 @@ router.get("/stats", authenticateFlexible, (req, res) => {
 
   const total   = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND datetime(created_at) >= ${since}`).get(uid).n;
   const byType  = db.prepare(`SELECT type, COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND datetime(created_at) >= ${since} GROUP BY type`).all(uid);
-  const follows = byType.find(r => r.type === 'follow')?.n || 0;
-  const newFollowers = db.prepare(`SELECT COALESCE(SUM(new_followers),0) as n FROM instagram_campaigns WHERE user_id = ? AND datetime(started_at) >= ${since}`).get(uid).n;
+  const follows = (byType.find(r => r.type === 'follow') || {}).n || 0;
+  // Count new_follower events recorded by the extension's scan notifications
+  const newFollowers = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND type = 'new_follower' AND datetime(created_at) >= ${since}`).get(uid).n;
   const followBack = follows > 0 ? Math.round((newFollowers / follows) * 100) : 0;
 
   // Daily activity for chart
