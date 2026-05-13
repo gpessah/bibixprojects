@@ -127,7 +127,7 @@ router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
     actions_count = COALESCE(?, actions_count),
     new_followers = COALESCE(?, new_followers),
     notes = COALESCE(?, notes),
-    ended_at = CASE WHEN ? IN ('completed','stopped') THEN CURRENT_TIMESTAMP ELSE ended_at END
+    ended_at = CASE WHEN ? IN ('completed','stopped','done') THEN CURRENT_TIMESTAMP ELSE ended_at END
     WHERE id = ?
   `).run(status||null, actions_count??null, new_followers??null, notes||null, status||null, req.params.id);
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(req.params.id));
@@ -135,7 +135,19 @@ router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
 
 router.get("/campaigns", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE user_id = ? ORDER BY started_at DESC').all(uid));
+  // Compute actions_count from the actions table (campaign_id link) when stored value is 0/null
+  const rows = db.prepare(`
+    SELECT ic.*,
+      CASE
+        WHEN ic.actions_count > 0 THEN ic.actions_count
+        ELSE (SELECT COUNT(*) FROM instagram_actions ia
+              WHERE ia.campaign_id = ic.id AND ia.user_id = ic.user_id)
+      END AS actions_count
+    FROM instagram_campaigns ic
+    WHERE ic.user_id = ?
+    ORDER BY ic.started_at DESC
+  `).all(uid);
+  res.json(rows);
 });
 
 // ── Stats / Dashboard ─────────────────────────────────────────────────────────
