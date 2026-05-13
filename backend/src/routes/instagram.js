@@ -149,7 +149,7 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   const follows = (byType.find(r => r.type === 'follow') || {}).n || 0;
   // Count new_follower events recorded by the extension's scan notifications
   const newFollowers = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND type = 'new_follower' AND datetime(created_at) >= ${since}`).get(uid).n;
-  const followBack = follows > 0 ? Math.round((newFollowers / follows) * 100) : 0;
+  const followBack = total > 0 ? Math.round((newFollowers / total) * 100) : 0;
 
   // Daily activity for chart
   const daily = db.prepare(`
