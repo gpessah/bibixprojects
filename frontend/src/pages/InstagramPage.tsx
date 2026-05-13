@@ -9,6 +9,8 @@ interface Action {
   id: string; type: string; username: string | null; follower_count: number | null;
   post_url: string | null; reply_text: string | null; comment_text: string | null;
   campaign_id: string | null; created_at: string;
+  my_profile: string | null; full_name: string | null;
+  post_owner: string | null; action_date: string | null;
 }
 interface Campaign {
   id: string; type: string; status: string; actions_count: number;
@@ -26,13 +28,37 @@ interface AdminUser {
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  like: '❤️ Like', reply: '💬 Reply', follow: '➕ Follow',
-  unfollow: '➖ Unfollow', notification_scan: '🔔 Scan',
+  // your actions
+  like:                  '❤️ Liked comment',
+  comment_reply:         '💬 Replied',
+  follow:                '👤 Followed',
+  unfollow:              '👋 Unfollowed',
+  dm_reply:              '✉️ DM Reply',
+  // from notifications
+  new_follower:          '➕ New Follower',
+  received_like_post:    '❤️ Got Like (post)',
+  received_like_comment: '❤️ Got Like (comment)',
+  received_comment:      '💬 Got Comment',
+  received_reply:        '↩️ Got Reply',
+  received_mention:      '📣 Got Mentioned',
+  // legacy
+  reply:                 '💬 Reply',
+  notification_scan:     '🔔 Scan',
 };
 const TYPE_COLOR: Record<string, string> = {
-  like: 'bg-pink-100 text-pink-700', reply: 'bg-blue-100 text-blue-700',
-  follow: 'bg-green-100 text-green-700', unfollow: 'bg-gray-100 text-gray-600',
-  notification_scan: 'bg-purple-100 text-purple-700',
+  like:                  'bg-pink-100 text-pink-700',
+  comment_reply:         'bg-blue-100 text-blue-700',
+  follow:                'bg-green-100 text-green-700',
+  unfollow:              'bg-gray-100 text-gray-600',
+  dm_reply:              'bg-emerald-100 text-emerald-700',
+  new_follower:          'bg-green-100 text-green-800',
+  received_like_post:    'bg-rose-100 text-rose-700',
+  received_like_comment: 'bg-rose-100 text-rose-700',
+  received_comment:      'bg-blue-100 text-blue-700',
+  received_reply:        'bg-indigo-100 text-indigo-700',
+  received_mention:      'bg-purple-100 text-purple-700',
+  reply:                 'bg-blue-100 text-blue-700',
+  notification_scan:     'bg-purple-100 text-purple-700',
 };
 const STATUS_COLOR: Record<string, string> = {
   running: 'bg-blue-100 text-blue-700', completed: 'bg-green-100 text-green-700',
@@ -198,43 +224,84 @@ export default function InstagramPage() {
         {/* ── HISTORY ── */}
         {tab === 'history' && (
           <div>
+            {/* Action-type filter pills — your actions + notification types */}
             <div className="flex gap-2 mb-4 flex-wrap">
-              {['', 'like', 'reply', 'follow', 'unfollow', 'notification_scan'].map(t => (
-                <button key={t} onClick={() => setTypeFilter(t)}
-                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${typeFilter === t ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
-                  {t ? (TYPE_LABEL[t] || t) : 'All'}
+              {[
+                { v: '',                     l: 'All' },
+                { v: 'like',                 l: '❤️ Liked comment' },
+                { v: 'comment_reply',        l: '💬 Replied' },
+                { v: 'follow',               l: '👤 Followed' },
+                { v: 'unfollow',             l: '👋 Unfollowed' },
+                { v: 'dm_reply',             l: '✉️ DM Reply' },
+                { v: 'new_follower',         l: '➕ New Follower' },
+                { v: 'received_like_post',   l: '❤️ Got Like (post)' },
+                { v: 'received_like_comment',l: '❤️ Got Like (comment)' },
+                { v: 'received_comment',     l: '💬 Got Comment' },
+                { v: 'received_reply',       l: '↩️ Got Reply' },
+                { v: 'received_mention',     l: '📣 Got Mentioned' },
+              ].map(t => (
+                <button key={t.v} onClick={() => setTypeFilter(t.v)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${typeFilter === t.v ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                  {t.l}
                 </button>
               ))}
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <table className="w-full text-sm">
+
+            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+              <table className="w-full text-sm min-w-[900px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Type</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Username</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Followers</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Details</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Date</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Date</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">My Profile</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Action</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Target User</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Full Name</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Followers</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Reply / Comment</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Post Owner</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Post</th>
                   </tr>
                 </thead>
                 <tbody>
                   {actions.map(a => (
                     <tr key={a.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-3 text-gray-400 whitespace-nowrap">
+                        {fmt(a.action_date || a.created_at)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                        {a.my_profile ? `@${a.my_profile}` : '—'}
+                      </td>
                       <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_COLOR[a.type] || 'bg-gray-100 text-gray-600'}`}>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[a.type] || 'bg-gray-100 text-gray-600'}`}>
                           {TYPE_LABEL[a.type] || a.type}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-700">{a.username ? `@${a.username}` : '—'}</td>
-                      <td className="px-4 py-3 text-gray-500">{a.follower_count?.toLocaleString() ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-500 max-w-xs truncate">
-                        {a.reply_text || a.comment_text || (a.post_url ? <a href={a.post_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Post ↗</a> : '—')}
+                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                        {a.username
+                          ? <a href={`https://instagram.com/${a.username}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">@{a.username}</a>
+                          : '—'}
                       </td>
-                      <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{fmt(a.created_at)}</td>
+                      <td className="px-4 py-3 text-gray-600">{a.full_name || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                        {a.follower_count != null ? Number(a.follower_count).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate" title={a.reply_text || a.comment_text || ''}>
+                        {a.reply_text || a.comment_text || '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                        {a.post_owner
+                          ? <a href={`https://instagram.com/${a.post_owner}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">@{a.post_owner}</a>
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-3">
+                        {a.post_url
+                          ? <a href={a.post_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline whitespace-nowrap">Open ↗</a>
+                          : '—'}
+                      </td>
                     </tr>
                   ))}
                   {actions.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-400">No actions recorded yet</td></tr>
+                    <tr><td colSpan={9} className="px-4 py-12 text-center text-gray-400">No actions recorded yet</td></tr>
                   )}
                 </tbody>
               </table>

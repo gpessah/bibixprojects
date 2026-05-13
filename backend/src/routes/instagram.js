@@ -18,6 +18,10 @@ try {
       reply_text TEXT,
       comment_text TEXT,
       campaign_id TEXT,
+      my_profile TEXT,
+      full_name TEXT,
+      post_owner TEXT,
+      action_date DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS instagram_campaigns (
@@ -33,6 +37,11 @@ try {
     );
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
+
+// Migrate existing DBs — ignore errors if columns already exist
+['my_profile TEXT', 'full_name TEXT', 'post_owner TEXT', 'action_date DATETIME'].forEach(col => {
+  try { db.exec(`ALTER TABLE instagram_actions ADD COLUMN ${col}`); } catch (_) {}
+});
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -55,20 +64,25 @@ router.get('/auth/verify', function(req, res) {
 router.post("/actions", authenticateFlexible, (req, res) => {
   var b = req.body;
   // Accept both backend field names and extension field names
-  var type          = b.type          || b.action        || null;
-  var username      = b.username      || b.targetUsername || null;
-  var follower_count = b.follower_count || b.followers     || null;
-  var post_url      = b.post_url      || b.postUrl        || null;
-  var reply_text    = b.reply_text    || b.replyText      || null;
-  var comment_text  = b.comment_text  || null;
-  var campaign_id   = b.campaign_id   || null;
+  var type           = b.type           || b.action         || null;
+  var username       = b.username       || b.targetUsername  || null;
+  var follower_count = b.follower_count  || b.followers      || null;
+  var post_url       = b.post_url       || b.postUrl         || null;
+  var reply_text     = b.reply_text     || b.replyText       || null;
+  var comment_text   = b.comment_text   || null;
+  var campaign_id    = b.campaign_id    || null;
+  var my_profile     = b.my_profile     || b.myProfile       || null;
+  var full_name      = b.full_name      || b.fullName        || null;
+  var post_owner     = b.post_owner     || b.postOwner       || null;
+  var action_date    = b.action_date    || b.date            || null;
 
   if (!type) return res.status(400).json({ error: 'type required' });
   var id = uuidv4();
   db.prepare(`
-    INSERT INTO instagram_actions (id,user_id,type,username,follower_count,post_url,reply_text,comment_text,campaign_id)
-    VALUES (?,?,?,?,?,?,?,?,?)
-  `).run(id, req.user.id, type, username, follower_count, post_url, reply_text, comment_text, campaign_id);
+    INSERT INTO instagram_actions
+      (id,user_id,type,username,follower_count,post_url,reply_text,comment_text,campaign_id,my_profile,full_name,post_owner,action_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(id, req.user.id, type, username, follower_count, post_url, reply_text, comment_text, campaign_id, my_profile, full_name, post_owner, action_date);
   res.json({ id });
 });
 
