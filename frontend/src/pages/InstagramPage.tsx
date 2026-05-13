@@ -249,7 +249,9 @@ export default function InstagramPage() {
   const [creatingPost, setCreatingPost]   = useState(false);
 
   const loadScheduled = () =>
-    api.get(`/instagram/scheduled-posts${qs}`).then((r: { data: ScheduledPost[] }) => setScheduled(r.data));
+    api.get(`/instagram/scheduled-posts${qs}`)
+      .then((r: { data: unknown }) => setScheduled(Array.isArray(r.data) ? r.data as ScheduledPost[] : []))
+      .catch(() => setScheduled([]));
 
   useEffect(() => { if (tab === 'schedule') loadScheduled(); }, [tab, asUser]);
 
@@ -288,9 +290,16 @@ export default function InstagramPage() {
     const p   = followerProfile ? `&my_profile=${encodeURIComponent(followerProfile)}` : '';
     const sep = qs ? `${qs}&` : '?';
     api.get(`/instagram/followers/changes${sep}days=${followerDays}${p}`)
-      .then((r: { data: FollowerChanges }) => setChanges(r.data));
+      .then((r: { data: Partial<FollowerChanges> }) => setChanges({
+        latest:   r.data?.latest   || null,
+        baseline: r.data?.baseline || null,
+        gained:   Array.isArray(r.data?.gained) ? r.data.gained : [],
+        lost:     Array.isArray(r.data?.lost)   ? r.data.lost   : [],
+      }))
+      .catch(() => setChanges({ latest: null, baseline: null, gained: [], lost: [] }));
     api.get(`/instagram/followers/snapshots${qs}${p ? (qs ? '&' : '?') + `my_profile=${encodeURIComponent(followerProfile)}` : ''}`)
-      .then((r: { data: Snapshot[] }) => setSnapshots(r.data));
+      .then((r: { data: unknown }) => setSnapshots(Array.isArray(r.data) ? r.data as Snapshot[] : []))
+      .catch(() => setSnapshots([]));
   }, [tab, asUser, followerDays, followerProfile]);
 
   const TABS = [
