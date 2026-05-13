@@ -1,50 +1,60 @@
-import { useEffect, useState } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
 type Tab = 'dashboard' | 'history' | 'campaigns';
 
 interface Action {
-  id: string; type: string; username: string | null; follower_count: number | null;
-  post_url: string | null; reply_text: string | null; comment_text: string | null;
-  campaign_id: string | null; created_at: string;
-  my_profile: string | null; full_name: string | null;
-  post_owner: string | null; action_date: string | null;
+  id: string;
+  type: string;
+  username: string | null;
+  follower_count: number | null;
+  post_url: string | null;
+  reply_text: string | null;
+  comment_text: string | null;
+  campaign_id: string | null;
+  created_at: string;
+  my_profile: string | null;
+  full_name: string | null;
+  post_owner: string | null;
+  action_date: string | null;
 }
+
 interface Campaign {
   id: string; type: string; status: string; actions_count: number;
   new_followers: number; started_at: string; ended_at: string | null; notes: string | null;
 }
+
 interface Stats {
   total: number; follows: number; newFollowers: number; followBack: number;
   byType: { type: string; n: number }[];
   daily: { day: string; type: string; n: number }[];
   topUsers: { username: string; n: number }[];
 }
+
 interface AdminUser {
   id: string; name: string; email: string; total_actions: number;
   total_campaigns: number; last_action: string | null;
 }
 
+// ── Labels & colours ──────────────────────────────────────────────────────────
 const TYPE_LABEL: Record<string, string> = {
-  // your actions
   like:                  '❤️ Liked comment',
   comment_reply:         '💬 Replied',
   follow:                '👤 Followed',
   unfollow:              '👋 Unfollowed',
   dm_reply:              '✉️ DM Reply',
-  // from notifications
   new_follower:          '➕ New Follower',
   received_like_post:    '❤️ Got Like (post)',
   received_like_comment: '❤️ Got Like (comment)',
   received_comment:      '💬 Got Comment',
   received_reply:        '↩️ Got Reply',
   received_mention:      '📣 Got Mentioned',
-  // legacy
   reply:                 '💬 Reply',
   notification_scan:     '🔔 Scan',
 };
+
 const TYPE_COLOR: Record<string, string> = {
   like:                  'bg-pink-100 text-pink-700',
   comment_reply:         'bg-blue-100 text-blue-700',
@@ -60,27 +70,88 @@ const TYPE_COLOR: Record<string, string> = {
   reply:                 'bg-blue-100 text-blue-700',
   notification_scan:     'bg-purple-100 text-purple-700',
 };
+
 const STATUS_COLOR: Record<string, string> = {
-  running: 'bg-blue-100 text-blue-700', completed: 'bg-green-100 text-green-700',
-  stopped: 'bg-gray-100 text-gray-600',
+  running:   'bg-blue-100 text-blue-700',
+  completed: 'bg-green-100 text-green-700',
+  stopped:   'bg-gray-100 text-gray-600',
+  done:      'bg-green-100 text-green-700',
 };
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt(d: string) {
-  return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(d).toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
+function fmtShort(d: string) {
+  return new Date(d).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function parseFollowers(val: number | null): number | null {
+  if (val == null) return null;
+  return val;
+}
+
+function displayUsername(u: string | null) {
+  if (!u || u === 'unknown') return null;
+  return u;
+}
+
+// ── Export CSV ────────────────────────────────────────────────────────────────
+function exportCSV(rows: Action[]) {
+  const headers = ['Date', 'My Profile', 'Action', 'Target Username', 'Full Name', 'Followers', 'Reply', 'Post Owner', 'Post URL'];
+  const lines = rows.map(r => [
+    fmt(r.action_date || r.created_at),
+    r.my_profile || '',
+    TYPE_LABEL[r.type] || r.type,
+    displayUsername(r.username) || '',
+    r.full_name || '',
+    r.follower_count != null ? r.follower_count : '',
+    r.reply_text || r.comment_text || '',
+    r.post_owner || '',
+    r.post_url || '',
+  ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+  const csv = [headers.join(','), ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `bibix-ig-history-${Date.now()}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function InstagramPage() {
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'super_admin' || user?.role === 'admin';
-  const [tab, setTab] = useState<Tab>('dashboard');
-  const [days, setDays] = useState(30);
-  const [asUser, setAsUser] = useState('');
+
+  const [tab, setTab]               = useState<Tab>('dashboard');
+  const [days, setDays]             = useState(30);
+  const [asUser, setAsUser]         = useState('');
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [actions, setActions] = useState<Action[]>([]);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [typeFilter, setTypeFilter] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [stats, setStats]           = useState<Stats | null>(null);
+  const [actions, setActions]       = useState<Action[]>([]);
+  const [campaigns, setCampaigns]   = useState<Campaign[]>([]);
+  const [loading, setLoading]       = useState(false);
+
+  // ── History filters ──────────────────────────────────────────────────────
+  const [fAction,       setFAction]       = useState('');
+  const [fProfile,      setFProfile]      = useState('');
+  const [fUser,         setFUser]         = useState('');
+  const [fPostOwner,    setFPostOwner]    = useState('');
+  const [fDateFrom,     setFDateFrom]     = useState('');
+  const [fDateTo,       setFDateTo]       = useState('');
+  const [fFollowersOp,  setFFollowersOp]  = useState('');
+  const [fFollowersVal, setFFollowersVal] = useState('');
+  const [fFollowersVal2,setFFollowersVal2]= useState('');
+
+  // ── Pagination ───────────────────────────────────────────────────────────
+  const [page,    setPage]    = useState(1);
+  const [perPage, setPerPage] = useState(50);
 
   const qs = asUser ? `?as_user=${asUser}` : '';
 
@@ -95,23 +166,76 @@ export default function InstagramPage() {
   }, [days, asUser]);
 
   useEffect(() => {
-    const q = typeFilter ? `${qs ? qs + '&' : '?'}type=${typeFilter}&limit=300` : `${qs || ''}${qs ? '&' : '?'}limit=300`;
-    api.get(`/instagram/actions${q}`).then((r: { data: Action[] }) => setActions(r.data));
-  }, [asUser, typeFilter]);
+    // Load all actions for client-side filtering (matches chrome extension behaviour)
+    const q = `${qs ? qs + '&' : '?'}limit=2000`;
+    api.get(`/instagram/actions${q}`).then((r: { data: Action[] }) => {
+      setActions(r.data);
+      setPage(1);
+    });
+  }, [asUser]);
 
   useEffect(() => {
     api.get(`/instagram/campaigns${qs}`).then((r: { data: Campaign[] }) => setCampaigns(r.data));
   }, [asUser]);
 
-  const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <BarChart2 size={15} /> },
-    { id: 'history',   label: 'History',   icon: <Clock size={15} /> },
-    { id: 'campaigns', label: 'Campaigns', icon: <Zap size={15} /> },
+  // Reset to page 1 whenever filters change
+  useEffect(() => { setPage(1); }, [fAction, fProfile, fUser, fPostOwner, fDateFrom, fDateTo, fFollowersOp, fFollowersVal, fFollowersVal2]);
+
+  // ── Derived: unique filter options ────────────────────────────────────────
+  const profiles   = useMemo(() => [...new Set(actions.map(a => a.my_profile).filter(Boolean))].sort() as string[], [actions]);
+  const postOwners = useMemo(() => [...new Set(actions.map(a => a.post_owner).filter(Boolean))].sort() as string[], [actions]);
+
+  // ── Client-side filtering ─────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    const fromTs = fDateFrom ? new Date(fDateFrom).getTime()               : null;
+    const toTs   = fDateTo   ? new Date(fDateTo + 'T23:59:59').getTime()   : null;
+    const fv1    = parseFloat(fFollowersVal);
+    const fv2    = parseFloat(fFollowersVal2);
+
+    return actions.filter(a => {
+      if (fAction    && a.type !== fAction)                                                return false;
+      if (fProfile   && a.my_profile !== fProfile)                                        return false;
+      if (fPostOwner && a.post_owner !== fPostOwner)                                      return false;
+      if (fUser      && !(displayUsername(a.username) || '').toLowerCase().includes(fUser.toLowerCase())) return false;
+
+      const ts = new Date(a.action_date || a.created_at).getTime();
+      if (fromTs !== null && ts < fromTs) return false;
+      if (toTs   !== null && ts > toTs)   return false;
+
+      if (fFollowersOp && !isNaN(fv1)) {
+        const fc = a.follower_count;
+        if (fc == null) return false;
+        if (fFollowersOp === 'gt'      && !(fc >  fv1))                   return false;
+        if (fFollowersOp === 'gte'     && !(fc >= fv1))                   return false;
+        if (fFollowersOp === 'lt'      && !(fc <  fv1))                   return false;
+        if (fFollowersOp === 'lte'     && !(fc <= fv1))                   return false;
+        if (fFollowersOp === 'eq'      && !(fc === fv1))                  return false;
+        if (fFollowersOp === 'between' && !isNaN(fv2) && !(fc >= fv1 && fc <= fv2)) return false;
+      }
+
+      return true;
+    });
+  }, [actions, fAction, fProfile, fUser, fPostOwner, fDateFrom, fDateTo, fFollowersOp, fFollowersVal, fFollowersVal2]);
+
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / perPage));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows    = filtered.slice((currentPage - 1) * perPage, currentPage * perPage);
+
+  function resetFilters() {
+    setFAction(''); setFProfile(''); setFUser(''); setFPostOwner('');
+    setFDateFrom(''); setFDateTo(''); setFFollowersOp(''); setFFollowersVal(''); setFFollowersVal2('');
+  }
+
+  const TABS = [
+    { id: 'dashboard' as Tab, label: 'Dashboard', icon: <BarChart2 size={15} /> },
+    { id: 'history'   as Tab, label: 'History',   icon: <Clock size={15} /> },
+    { id: 'campaigns' as Tab, label: 'Campaigns', icon: <Zap size={15} /> },
   ];
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
-      {/* Header */}
+
+      {/* ── Page header ── */}
       <div className="bg-white border-b border-gray-200 px-8 pt-6 pb-0 flex-shrink-0">
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
@@ -123,23 +247,18 @@ export default function InstagramPage() {
               <p className="text-sm text-gray-500">Track your automation history and performance</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {isAdmin && adminUsers.length > 0 && (
-              <div className="relative">
-                <select
-                  value={asUser}
-                  onChange={e => setAsUser(e.target.value)}
-                  className="appearance-none pl-3 pr-8 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">My data</option>
-                  {adminUsers.map(u => (
-                    <option key={u.id} value={u.id}>{u.name} ({u.total_actions} actions)</option>
-                  ))}
-                </select>
-                <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
-              </div>
-            )}
-          </div>
+          {isAdmin && adminUsers.length > 0 && (
+            <div className="relative">
+              <select value={asUser} onChange={e => setAsUser(e.target.value)}
+                className="appearance-none pl-3 pr-8 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">My data</option>
+                {adminUsers.map(u => (
+                  <option key={u.id} value={u.id}>{u.name} ({u.total_actions} actions)</option>
+                ))}
+              </select>
+              <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
+            </div>
+          )}
         </div>
         <div className="flex gap-1">
           {TABS.map(t => (
@@ -154,7 +273,7 @@ export default function InstagramPage() {
 
       <div className="flex-1 overflow-auto p-6">
 
-        {/* ── DASHBOARD ── */}
+        {/* ══════════════════════════════ DASHBOARD ══════════════════════════════ */}
         {tab === 'dashboard' && (
           <div>
             <div className="flex gap-2 mb-6">
@@ -165,6 +284,7 @@ export default function InstagramPage() {
                 </button>
               ))}
             </div>
+
             {loading ? (
               <div className="flex items-center justify-center py-20">
                 <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
@@ -173,10 +293,10 @@ export default function InstagramPage() {
               <>
                 <div className="grid grid-cols-4 gap-4 mb-6">
                   {[
-                    { label: 'Total Actions', value: stats.total, color: 'text-blue-600', bg: 'bg-blue-50' },
-                    { label: 'Follows Sent', value: stats.follows, color: 'text-green-600', bg: 'bg-green-50' },
-                    { label: 'New Followers', value: stats.newFollowers, color: 'text-purple-600', bg: 'bg-purple-50' },
-                    { label: 'Follow-back %', value: `${stats.followBack}%`, color: 'text-orange-600', bg: 'bg-orange-50' },
+                    { label: 'Total Actions',  value: stats.total,                    color: 'text-blue-600',   bg: 'bg-blue-50' },
+                    { label: 'Follows Sent',   value: stats.follows,                  color: 'text-green-600',  bg: 'bg-green-50' },
+                    { label: 'New Followers',  value: stats.newFollowers,             color: 'text-purple-600', bg: 'bg-purple-50' },
+                    { label: 'Follow-back %',  value: `${stats.followBack}%`,         color: 'text-orange-600', bg: 'bg-orange-50' },
                   ].map(c => (
                     <div key={c.label} className={`${c.bg} rounded-xl p-5`}>
                       <div className={`text-3xl font-bold ${c.color}`}>{c.value}</div>
@@ -184,31 +304,37 @@ export default function InstagramPage() {
                     </div>
                   ))}
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
                     <h3 className="font-semibold text-gray-900 mb-4">Actions by Type</h3>
                     <div className="space-y-3">
                       {(stats.byType || []).map(r => (
                         <div key={r.type} className="flex items-center gap-3">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_COLOR[r.type] || 'bg-gray-100 text-gray-600'}`}>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[r.type] || 'bg-gray-100 text-gray-600'}`}>
                             {TYPE_LABEL[r.type] || r.type}
                           </span>
                           <div className="flex-1 bg-gray-100 rounded-full h-2">
-                            <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${Math.min(100, (r.n / Math.max(stats.total, 1)) * 100)}%` }} />
+                            <div className="bg-blue-500 h-2 rounded-full"
+                              style={{ width: `${Math.min(100, (r.n / Math.max(stats.total, 1)) * 100)}%` }} />
                           </div>
-                          <span className="text-sm font-semibold text-gray-700 w-8 text-right">{r.n}</span>
+                          <span className="text-sm font-semibold text-gray-700 w-10 text-right">{r.n}</span>
                         </div>
                       ))}
                       {(stats.byType || []).length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
                     </div>
                   </div>
+
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
                     <h3 className="font-semibold text-gray-900 mb-4">Top Users Engaged</h3>
                     <div className="space-y-2">
                       {(stats.topUsers || []).map((u, i) => (
                         <div key={u.username} className="flex items-center gap-3">
                           <span className="text-xs text-gray-400 w-4">{i + 1}</span>
-                          <span className="text-sm font-medium text-gray-700 flex-1">@{u.username}</span>
+                          <a href={`https://instagram.com/${u.username}`} target="_blank" rel="noreferrer"
+                            className="text-sm font-medium text-blue-500 hover:underline flex-1">
+                            @{u.username}
+                          </a>
                           <span className="text-xs font-semibold bg-gray-100 px-2 py-0.5 rounded-full">{u.n}</span>
                         </div>
                       ))}
@@ -221,102 +347,244 @@ export default function InstagramPage() {
           </div>
         )}
 
-        {/* ── HISTORY ── */}
+        {/* ══════════════════════════════ HISTORY ══════════════════════════════ */}
         {tab === 'history' && (
           <div>
-            {/* Action-type filter pills — your actions + notification types */}
-            <div className="flex gap-2 mb-4 flex-wrap">
-              {[
-                { v: '',                     l: 'All' },
-                { v: 'like',                 l: '❤️ Liked comment' },
-                { v: 'comment_reply',        l: '💬 Replied' },
-                { v: 'follow',               l: '👤 Followed' },
-                { v: 'unfollow',             l: '👋 Unfollowed' },
-                { v: 'dm_reply',             l: '✉️ DM Reply' },
-                { v: 'new_follower',         l: '➕ New Follower' },
-                { v: 'received_like_post',   l: '❤️ Got Like (post)' },
-                { v: 'received_like_comment',l: '❤️ Got Like (comment)' },
-                { v: 'received_comment',     l: '💬 Got Comment' },
-                { v: 'received_reply',       l: '↩️ Got Reply' },
-                { v: 'received_mention',     l: '📣 Got Mentioned' },
-              ].map(t => (
-                <button key={t.v} onClick={() => setTypeFilter(t.v)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${typeFilter === t.v ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
-                  {t.l}
+            {/* ── Filter panel ── */}
+            <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+              {/* Row 1 */}
+              <div className="flex flex-wrap gap-3 mb-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Action</label>
+                  <select value={fAction} onChange={e => setFAction(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[180px]">
+                    <option value="">All actions</option>
+                    <optgroup label="Your actions">
+                      <option value="like">❤️ Liked a comment</option>
+                      <option value="comment_reply">💬 Replied to comment</option>
+                      <option value="follow">👤 Followed someone</option>
+                      <option value="unfollow">👋 Unfollowed someone</option>
+                      <option value="dm_reply">✉️ DM Reply</option>
+                    </optgroup>
+                    <optgroup label="From notifications">
+                      <option value="new_follower">➕ New Follower</option>
+                      <option value="received_like_post">❤️ Got Like on post</option>
+                      <option value="received_like_comment">❤️ Got Like on comment</option>
+                      <option value="received_comment">💬 Got Comment</option>
+                      <option value="received_reply">↩️ Got Reply</option>
+                      <option value="received_mention">📣 Got Mentioned</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">My Profile</label>
+                  <select value={fProfile} onChange={e => setFProfile(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[150px]">
+                    <option value="">All profiles</option>
+                    {profiles.map(p => <option key={p} value={p}>@{p}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Target Username</label>
+                  <input value={fUser} onChange={e => setFUser(e.target.value)}
+                    placeholder="Filter by username…"
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-44" />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Post Owner</label>
+                  <select value={fPostOwner} onChange={e => setFPostOwner(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[150px]">
+                    <option value="">All post owners</option>
+                    {postOwners.map(p => <option key={p} value={p}>@{p}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 2 */}
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date From</label>
+                  <input type="date" value={fDateFrom} onChange={e => setFDateFrom(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Date To</label>
+                  <input type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Followers</label>
+                  <div className="flex gap-2 items-center">
+                    <select value={fFollowersOp} onChange={e => setFFollowersOp(e.target.value)}
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="">Any</option>
+                      <option value="gt">Greater than</option>
+                      <option value="gte">Greater or equal</option>
+                      <option value="lt">Less than</option>
+                      <option value="lte">Less or equal</option>
+                      <option value="eq">Equal to</option>
+                      <option value="between">Between</option>
+                    </select>
+                    {fFollowersOp && (
+                      <input type="number" value={fFollowersVal} onChange={e => setFFollowersVal(e.target.value)}
+                        placeholder="e.g. 1000" min="0"
+                        className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-28" />
+                    )}
+                    {fFollowersOp === 'between' && (
+                      <>
+                        <span className="text-sm text-gray-400">and</span>
+                        <input type="number" value={fFollowersVal2} onChange={e => setFFollowersVal2(e.target.value)}
+                          placeholder="e.g. 5000" min="0"
+                          className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-28" />
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <button onClick={resetFilters}
+                  className="px-4 py-2 text-sm bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors">
+                  ✕ Reset Filters
                 </button>
-              ))}
+              </div>
             </div>
 
+            {/* ── Table ── */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-              <table className="w-full text-sm min-w-[900px]">
+              <table className="w-full text-sm" style={{ minWidth: 1000 }}>
                 <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Date</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">My Profile</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Action</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Target User</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Full Name</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Followers</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Reply / Comment</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Post Owner</th>
-                    <th className="text-left px-4 py-3 font-semibold text-gray-600 whitespace-nowrap">Post</th>
+                  <tr className="border-b border-gray-100 bg-gray-50 text-left">
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Date</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">My Profile</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Action</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Target User</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Full Name</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Followers</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Reply</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Post Owner</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Post URL</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {actions.map(a => (
-                    <tr key={a.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-4 py-3 text-gray-400 whitespace-nowrap">
-                        {fmt(a.action_date || a.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                        {a.my_profile ? `@${a.my_profile}` : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[a.type] || 'bg-gray-100 text-gray-600'}`}>
-                          {TYPE_LABEL[a.type] || a.type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
-                        {a.username
-                          ? <a href={`https://instagram.com/${a.username}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">@{a.username}</a>
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">{a.full_name || '—'}</td>
-                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                        {a.follower_count != null ? Number(a.follower_count).toLocaleString() : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate" title={a.reply_text || a.comment_text || ''}>
-                        {a.reply_text || a.comment_text || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
-                        {a.post_owner
-                          ? <a href={`https://instagram.com/${a.post_owner}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">@{a.post_owner}</a>
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        {a.post_url
-                          ? <a href={a.post_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline whitespace-nowrap">Open ↗</a>
-                          : '—'}
+                  {pageRows.map(a => {
+                    const targetUser = displayUsername(a.username);
+                    return (
+                      <tr key={a.id} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap text-xs">
+                          {fmtShort(a.action_date || a.created_at)}
+                        </td>
+                        <td className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                          {a.my_profile ? `@${a.my_profile}` : '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[a.type] || 'bg-gray-100 text-gray-600'}`}>
+                            {TYPE_LABEL[a.type] || a.type}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {targetUser
+                            ? <a href={`https://instagram.com/${targetUser}`} target="_blank" rel="noreferrer"
+                                className="text-blue-500 hover:underline">@{targetUser}</a>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{a.full_name || '—'}</td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                          {a.follower_count != null ? Number(a.follower_count).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 max-w-[180px] truncate"
+                          title={a.reply_text || a.comment_text || ''}>
+                          {a.reply_text || a.comment_text || '—'}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {a.post_owner
+                            ? <a href={`https://instagram.com/${a.post_owner}`} target="_blank" rel="noreferrer"
+                                className="text-blue-500 hover:underline">@{a.post_owner}</a>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          {a.post_url
+                            ? <a href={a.post_url} target="_blank" rel="noreferrer"
+                                className="text-blue-500 hover:underline whitespace-nowrap">Open ↗</a>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="px-4 py-16 text-center text-gray-400">
+                        {actions.length === 0 ? 'No actions recorded yet. Run the extension to start tracking.' : 'No records match your filters.'}
                       </td>
                     </tr>
-                  ))}
-                  {actions.length === 0 && (
-                    <tr><td colSpan={9} className="px-4 py-12 text-center text-gray-400">No actions recorded yet</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
+
+            {/* ── Bottom bar: count + pagination + per-page + export ── */}
+            <div className="flex items-center justify-between mt-4 flex-wrap gap-3">
+              <span className="text-sm text-gray-500">
+                {filtered.length} record{filtered.length !== 1 ? 's' : ''}
+                {filtered.length > 0 && ` — showing ${(currentPage - 1) * perPage + 1}–${Math.min(currentPage * perPage, filtered.length)}`}
+              </span>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                    ‹ Prev
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                    .reduce<(number | '…')[]>((acc, p, i, arr) => {
+                      if (i > 0 && p - (arr[i - 1] as number) > 1) acc.push('…');
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((p, i) => p === '…'
+                      ? <span key={`e${i}`} className="px-2 text-gray-400">…</span>
+                      : <button key={p} onClick={() => setPage(p as number)}
+                          className={`px-3 py-1.5 text-sm rounded-lg border ${currentPage === p ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+                          {p}
+                        </button>
+                    )}
+                  <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                    Next ›
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  Rows:
+                  <select value={perPage} onChange={e => { setPerPage(Number(e.target.value)); setPage(1); }}
+                    className="px-2 py-1 border border-gray-200 rounded-lg text-sm bg-white">
+                    {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <button onClick={() => exportCSV(filtered)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                  <Download size={14} /> Export CSV
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* ── CAMPAIGNS ── */}
+        {/* ══════════════════════════════ CAMPAIGNS ══════════════════════════════ */}
         {tab === 'campaigns' && (
           <div className="space-y-3">
             {campaigns.map(c => (
               <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <span className="font-semibold text-gray-900 capitalize">{c.type}</span>
+                    <span className="font-semibold text-gray-900 capitalize">{TYPE_LABEL[c.type] || c.type}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-600'}`}>
                       {c.status}
                     </span>
@@ -327,6 +595,14 @@ export default function InstagramPage() {
                   <div><span className="text-gray-500">Actions:</span> <span className="font-semibold">{c.actions_count}</span></div>
                   <div><span className="text-gray-500">New followers:</span> <span className="font-semibold text-green-600">+{c.new_followers}</span></div>
                   {c.ended_at && <div><span className="text-gray-500">Ended:</span> <span className="font-semibold">{fmt(c.ended_at)}</span></div>}
+                  {c.ended_at && c.started_at && (
+                    <div>
+                      <span className="text-gray-500">Duration:</span>{' '}
+                      <span className="font-semibold">
+                        {Math.round((new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()) / 60000)} min
+                      </span>
+                    </div>
+                  )}
                 </div>
                 {c.notes && <p className="text-sm text-gray-500 mt-2">{c.notes}</p>}
               </div>
