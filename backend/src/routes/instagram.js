@@ -1,9 +1,22 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { authenticate, authenticateFlexible } = require('../middleware/auth');
 
 const router = express.Router();
+
+// ── Media uploads for scheduled posts ────────────────────────────────────────
+const IG_UPLOADS_DIR = path.join(__dirname, '../../data/instagram-uploads');
+fs.mkdirSync(IG_UPLOADS_DIR, { recursive: true });
+const igStorage = multer.diskStorage({
+  destination: IG_UPLOADS_DIR,
+  filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname) || ''}`),
+});
+const igUpload = multer({ storage: igStorage, limits: { fileSize: 100 * 1024 * 1024 } });
+router.UPLOADS_DIR = IG_UPLOADS_DIR;
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 try {
@@ -35,6 +48,35 @@ try {
       ended_at DATETIME,
       notes TEXT
     );
+    CREATE TABLE IF NOT EXISTS instagram_scheduled_posts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      my_profile TEXT,
+      post_type TEXT DEFAULT 'post',
+      caption TEXT,
+      hashtags TEXT,
+      location TEXT,
+      media_filename TEXT,
+      media_mime TEXT,
+      media_size INTEGER,
+      scheduled_at DATETIME NOT NULL,
+      status TEXT DEFAULT 'scheduled',
+      posted_at DATETIME,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS instagram_follower_snapshots (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      my_profile TEXT,
+      captured_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      follower_count INTEGER,
+      followers_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ig_sched_due
+      ON instagram_scheduled_posts(status, scheduled_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_snap_user_profile
+      ON instagram_follower_snapshots(user_id, my_profile, captured_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -205,6 +247,182 @@ router.get('/admin/users', authenticate, (req, res) => {
     FROM users u ORDER BY total_actions DESC
   `).all();
   res.json(users);
+});
+
+// ── Scheduled Posts ──────────────────────────────────────────────────────────
+// Create a scheduled post — multipart/form-data with `media` file + fields.
+router.post('/scheduled-posts', authenticateFlexible, igUpload.single('media'), (req, res) => {
+  const b = req.body || {};
+  const scheduled_at = b.scheduled_at || b.scheduledAt;
+  if (!scheduled_at) return res.status(400).json({ error: 'scheduled_at required' });
+  if (!req.file) return res.status(400).json({ error: 'media file required' });
+
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO instagram_scheduled_posts
+      (id, user_id, my_profile, post_type, caption, hashtags, location,
+       media_filename, media_mime, media_size, scheduled_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled')
+  `).run(
+    id, req.user.id,
+    b.my_profile || b.myProfile || null,
+    b.post_type  || b.postType  || 'post',
+    b.caption    || null,
+    b.hashtags   || null,
+    b.location   || null,
+    req.file.filename, req.file.mimetype, req.file.size,
+    scheduled_at,
+  );
+  res.json(db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ?').get(id));
+});
+
+// List user's scheduled posts.
+router.get('/scheduled-posts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { status } = req.query;
+  let q = 'SELECT * FROM instagram_scheduled_posts WHERE user_id = ?';
+  const params = [uid];
+  if (status) { q += ' AND status = ?'; params.push(status); }
+  q += ' ORDER BY scheduled_at ASC LIMIT 500';
+  res.json(db.prepare(q).all(...params));
+});
+
+// Extension polls this every 60s — returns posts whose time has arrived but are still 'scheduled'.
+// Flips them to 'claimed' atomically so two extension instances don't double-publish.
+router.get('/scheduled-posts/due', authenticateFlexible, (req, res) => {
+  const { my_profile, myProfile } = req.query;
+  const profile = my_profile || myProfile || null;
+
+  const rows = db.prepare(`
+    SELECT * FROM instagram_scheduled_posts
+    WHERE user_id = ?
+      AND status = 'scheduled'
+      AND datetime(scheduled_at) <= datetime('now')
+      ${profile ? "AND (my_profile = ? OR my_profile IS NULL)" : ''}
+    ORDER BY scheduled_at ASC
+    LIMIT 5
+  `).all(...(profile ? [req.user.id, profile] : [req.user.id]));
+
+  const claim = db.prepare(`UPDATE instagram_scheduled_posts SET status = 'claimed' WHERE id = ? AND status = 'scheduled'`);
+  const claimed = [];
+  for (const r of rows) {
+    const info = claim.run(r.id);
+    if (info.changes > 0) claimed.push({ ...r, status: 'claimed', media_url: `/api/instagram/scheduled-posts/${r.id}/media` });
+  }
+  res.json(claimed);
+});
+
+// Serve the media file for a scheduled post (extension downloads then uploads to IG).
+router.get('/scheduled-posts/:id/media', authenticateFlexible, (req, res) => {
+  const row = db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row || !row.media_filename) return res.status(404).json({ error: 'Not found' });
+  const filePath = path.join(IG_UPLOADS_DIR, row.media_filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File missing' });
+  res.setHeader('Content-Type', row.media_mime || 'application/octet-stream');
+  res.sendFile(filePath);
+});
+
+// Update status (extension calls this after publish — success or failure).
+router.patch('/scheduled-posts/:id', authenticateFlexible, (req, res) => {
+  const b = req.body || {};
+  const row = db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  db.prepare(`
+    UPDATE instagram_scheduled_posts SET
+      status = COALESCE(?, status),
+      scheduled_at = COALESCE(?, scheduled_at),
+      caption = COALESCE(?, caption),
+      posted_at = CASE WHEN ? = 'posted' THEN CURRENT_TIMESTAMP ELSE posted_at END,
+      error_message = COALESCE(?, error_message)
+    WHERE id = ?
+  `).run(
+    b.status || null,
+    b.scheduled_at || b.scheduledAt || null,
+    b.caption ?? null,
+    b.status || null,
+    b.error_message || b.errorMessage || null,
+    req.params.id,
+  );
+  res.json(db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ?').get(req.params.id));
+});
+
+router.delete('/scheduled-posts/:id', authenticateFlexible, (req, res) => {
+  const row = db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (row.media_filename) {
+    try { fs.unlinkSync(path.join(IG_UPLOADS_DIR, row.media_filename)); } catch (_) {}
+  }
+  db.prepare('DELETE FROM instagram_scheduled_posts WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ── Follower Snapshots ───────────────────────────────────────────────────────
+// Extension posts the followers list it scraped from instagram.com.
+router.post('/followers/snapshot', authenticateFlexible, (req, res) => {
+  const b = req.body || {};
+  const followers = Array.isArray(b.followers) ? b.followers : [];
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO instagram_follower_snapshots (id, user_id, my_profile, follower_count, followers_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, req.user.id, b.my_profile || b.myProfile || null, followers.length, JSON.stringify(followers));
+  res.json({ id, follower_count: followers.length });
+});
+
+// Diff the latest snapshot against the most recent older one (or one ≥ `days` ago).
+router.get('/followers/changes', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { my_profile, days = 7 } = req.query;
+  const profile = my_profile || null;
+
+  const latest = db.prepare(`
+    SELECT * FROM instagram_follower_snapshots
+    WHERE user_id = ? ${profile ? 'AND my_profile = ?' : ''}
+    ORDER BY captured_at DESC LIMIT 1
+  `).get(...(profile ? [uid, profile] : [uid]));
+
+  if (!latest) return res.json({ latest: null, baseline: null, gained: [], lost: [] });
+
+  const baseline = db.prepare(`
+    SELECT * FROM instagram_follower_snapshots
+    WHERE user_id = ? ${profile ? 'AND my_profile = ?' : ''}
+      AND captured_at < ?
+      AND datetime(captured_at) <= datetime('now', '-${Number(days)} days')
+    ORDER BY captured_at DESC LIMIT 1
+  `).get(...(profile ? [uid, profile, latest.captured_at] : [uid, latest.captured_at]));
+
+  const fallbackBaseline = baseline || db.prepare(`
+    SELECT * FROM instagram_follower_snapshots
+    WHERE user_id = ? ${profile ? 'AND my_profile = ?' : ''} AND id != ?
+    ORDER BY captured_at DESC LIMIT 1
+  `).get(...(profile ? [uid, profile, latest.id] : [uid, latest.id]));
+
+  if (!fallbackBaseline) {
+    return res.json({ latest: { ...latest, followers_json: undefined }, baseline: null, gained: [], lost: [] });
+  }
+
+  const latestSet  = new Set(JSON.parse(latest.followers_json || '[]'));
+  const baseSet    = new Set(JSON.parse(fallbackBaseline.followers_json || '[]'));
+  const gained = [...latestSet].filter(u => !baseSet.has(u));
+  const lost   = [...baseSet].filter(u => !latestSet.has(u));
+  res.json({
+    latest:   { id: latest.id, captured_at: latest.captured_at, follower_count: latest.follower_count, my_profile: latest.my_profile },
+    baseline: { id: fallbackBaseline.id, captured_at: fallbackBaseline.captured_at, follower_count: fallbackBaseline.follower_count },
+    gained, lost,
+  });
+});
+
+// List snapshots (without the giant followers_json blob).
+router.get('/followers/snapshots', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { my_profile } = req.query;
+  const rows = db.prepare(`
+    SELECT id, my_profile, captured_at, follower_count
+    FROM instagram_follower_snapshots
+    WHERE user_id = ? ${my_profile ? 'AND my_profile = ?' : ''}
+    ORDER BY captured_at DESC LIMIT 100
+  `).all(...(my_profile ? [uid, my_profile] : [uid]));
+  res.json(rows);
 });
 
 module.exports = router;

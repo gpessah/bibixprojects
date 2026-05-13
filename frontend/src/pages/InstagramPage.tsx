@@ -1,9 +1,22 @@
 import { useEffect, useState, useMemo } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download } from 'lucide-react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers';
+
+interface ScheduledPost {
+  id: string; my_profile: string | null; post_type: string;
+  caption: string | null; media_filename: string | null; media_mime: string | null;
+  scheduled_at: string; status: string; posted_at: string | null;
+  error_message: string | null; created_at: string;
+}
+interface FollowerChanges {
+  latest:   { id: string; captured_at: string; follower_count: number; my_profile: string | null } | null;
+  baseline: { id: string; captured_at: string; follower_count: number } | null;
+  gained: string[]; lost: string[];
+}
+interface Snapshot { id: string; my_profile: string | null; captured_at: string; follower_count: number; }
 
 interface Action {
   id: string;
@@ -226,10 +239,66 @@ export default function InstagramPage() {
     setFDateFrom(''); setFDateTo(''); setFFollowersOp(''); setFFollowersVal(''); setFFollowersVal2('');
   }
 
+  // ── Scheduled posts ──────────────────────────────────────────────────────
+  const [scheduled, setScheduled]         = useState<ScheduledPost[]>([]);
+  const [newPostFile, setNewPostFile]     = useState<File | null>(null);
+  const [newPostCaption, setNewPostCaption] = useState('');
+  const [newPostType, setNewPostType]     = useState<'post' | 'story' | 'reel'>('post');
+  const [newPostWhen, setNewPostWhen]     = useState('');
+  const [newPostProfile, setNewPostProfile] = useState('');
+  const [creatingPost, setCreatingPost]   = useState(false);
+
+  const loadScheduled = () =>
+    api.get(`/instagram/scheduled-posts${qs}`).then((r: { data: ScheduledPost[] }) => setScheduled(r.data));
+
+  useEffect(() => { if (tab === 'schedule') loadScheduled(); }, [tab, asUser]);
+
+  async function createScheduledPost() {
+    if (!newPostFile || !newPostWhen) { alert('Pick a media file and a time.'); return; }
+    const fd = new FormData();
+    fd.append('media', newPostFile);
+    fd.append('caption', newPostCaption);
+    fd.append('post_type', newPostType);
+    fd.append('scheduled_at', new Date(newPostWhen).toISOString());
+    if (newPostProfile) fd.append('my_profile', newPostProfile.replace(/^@/, ''));
+    setCreatingPost(true);
+    try {
+      await api.post('/instagram/scheduled-posts', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setNewPostFile(null); setNewPostCaption(''); setNewPostWhen(''); setNewPostProfile('');
+      await loadScheduled();
+    } catch (e: unknown) {
+      alert('Failed to schedule: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setCreatingPost(false); }
+  }
+
+  async function deleteScheduled(id: string) {
+    if (!confirm('Delete this scheduled post?')) return;
+    await api.delete(`/instagram/scheduled-posts/${id}`);
+    await loadScheduled();
+  }
+
+  // ── Follower snapshots / changes ─────────────────────────────────────────
+  const [changes, setChanges]               = useState<FollowerChanges | null>(null);
+  const [snapshots, setSnapshots]           = useState<Snapshot[]>([]);
+  const [followerDays, setFollowerDays]     = useState(7);
+  const [followerProfile, setFollowerProfile] = useState('');
+
+  useEffect(() => {
+    if (tab !== 'followers') return;
+    const p   = followerProfile ? `&my_profile=${encodeURIComponent(followerProfile)}` : '';
+    const sep = qs ? `${qs}&` : '?';
+    api.get(`/instagram/followers/changes${sep}days=${followerDays}${p}`)
+      .then((r: { data: FollowerChanges }) => setChanges(r.data));
+    api.get(`/instagram/followers/snapshots${qs}${p ? (qs ? '&' : '?') + `my_profile=${encodeURIComponent(followerProfile)}` : ''}`)
+      .then((r: { data: Snapshot[] }) => setSnapshots(r.data));
+  }, [tab, asUser, followerDays, followerProfile]);
+
   const TABS = [
     { id: 'dashboard' as Tab, label: 'Dashboard', icon: <BarChart2 size={15} /> },
     { id: 'history'   as Tab, label: 'History',   icon: <Clock size={15} /> },
     { id: 'campaigns' as Tab, label: 'Campaigns', icon: <Zap size={15} /> },
+    { id: 'schedule'  as Tab, label: 'Schedule',  icon: <Calendar size={15} /> },
+    { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
   ];
 
   return (
@@ -574,6 +643,171 @@ export default function InstagramPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ── SCHEDULE ── */}
+        {tab === 'schedule' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Plus size={18} /> Schedule a post</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <label className="text-sm">
+                  <span className="text-gray-600">Media file</span>
+                  <input type="file" accept="image/*,video/*" onChange={e => setNewPostFile(e.target.files?.[0] || null)}
+                    className="block w-full mt-1 text-sm" />
+                </label>
+                <label className="text-sm">
+                  <span className="text-gray-600">Post type</span>
+                  <select value={newPostType} onChange={e => setNewPostType(e.target.value as 'post' | 'story' | 'reel')}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm">
+                    <option value="post">Post</option>
+                    <option value="story">Story</option>
+                    <option value="reel">Reel</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <span className="text-gray-600">Publish at</span>
+                  <input type="datetime-local" value={newPostWhen} onChange={e => setNewPostWhen(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                </label>
+                <label className="text-sm">
+                  <span className="text-gray-600">Instagram account (optional)</span>
+                  <input type="text" placeholder="@myhandle" value={newPostProfile} onChange={e => setNewPostProfile(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                </label>
+                <label className="text-sm col-span-2">
+                  <span className="text-gray-600">Caption</span>
+                  <textarea rows={3} value={newPostCaption} onChange={e => setNewPostCaption(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                </label>
+              </div>
+              <button onClick={createScheduledPost} disabled={creatingPost}
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                {creatingPost ? 'Scheduling…' : 'Schedule post'}
+              </button>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50">
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Scheduled for</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Type</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Account</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Caption</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600">Status</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-600"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scheduled.map(p => (
+                    <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmt(p.scheduled_at)}</td>
+                      <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 capitalize">{p.post_type}</span></td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{p.my_profile ? `@${p.my_profile}` : '—'}</td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[300px] truncate" title={p.caption || ''}>{p.caption || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                          p.status === 'posted'    ? 'bg-green-100 text-green-700' :
+                          p.status === 'failed'    ? 'bg-red-100 text-red-700' :
+                          p.status === 'claimed'   ? 'bg-yellow-100 text-yellow-700' :
+                                                     'bg-blue-100 text-blue-700'
+                        }`}>{p.status}</span>
+                        {p.error_message && <div className="text-xs text-red-500 mt-1" title={p.error_message}>⚠ {p.error_message.slice(0, 60)}</div>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.status !== 'posted' && (
+                          <button onClick={() => deleteScheduled(p.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={16} /></button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {scheduled.length === 0 && (
+                    <tr><td colSpan={6} className="px-4 py-12 text-center text-gray-400">No scheduled posts. Add one above.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── FOLLOWERS ── */}
+        {tab === 'followers' && (
+          <div className="space-y-6">
+            <div className="flex gap-3 items-center">
+              <input type="text" placeholder="Filter by @profile (optional)" value={followerProfile}
+                onChange={e => setFollowerProfile(e.target.value.replace(/^@/, ''))}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm flex-1 max-w-xs" />
+              <div className="flex gap-2">
+                {[7, 30, 90].map(d => (
+                  <button key={d} onClick={() => setFollowerDays(d)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${followerDays === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                    {d}d
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {changes?.latest ? (
+              <>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="bg-blue-50 rounded-xl p-5">
+                    <div className="text-3xl font-bold text-blue-600">{changes.latest.follower_count}</div>
+                    <div className="text-sm text-gray-600 mt-1">Current followers</div>
+                  </div>
+                  <div className="bg-green-50 rounded-xl p-5">
+                    <div className="text-3xl font-bold text-green-600">+{changes.gained.length}</div>
+                    <div className="text-sm text-gray-600 mt-1">Gained (last {followerDays}d)</div>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-5">
+                    <div className="text-3xl font-bold text-red-600">−{changes.lost.length}</div>
+                    <div className="text-sm text-gray-600 mt-1">Lost (last {followerDays}d)</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <h3 className="font-semibold text-green-700 mb-3">➕ Gained</h3>
+                    <div className="space-y-1 max-h-80 overflow-auto">
+                      {changes.gained.length === 0 && <p className="text-gray-400 text-sm">No new followers in this period.</p>}
+                      {changes.gained.map(u => (
+                        <a key={u} href={`https://instagram.com/${u}`} target="_blank" rel="noreferrer"
+                          className="block text-sm text-blue-600 hover:underline">@{u}</a>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <h3 className="font-semibold text-red-700 mb-3">➖ Lost</h3>
+                    <div className="space-y-1 max-h-80 overflow-auto">
+                      {changes.lost.length === 0 && <p className="text-gray-400 text-sm">No unfollows in this period.</p>}
+                      {changes.lost.map(u => (
+                        <a key={u} href={`https://instagram.com/${u}`} target="_blank" rel="noreferrer"
+                          className="block text-sm text-blue-600 hover:underline">@{u}</a>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+                <UserPlus size={32} className="text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-400">No follower snapshots yet. Open the extension on instagram.com and click "Snapshot followers" to start tracking.</p>
+              </div>
+            )}
+
+            {snapshots.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <h3 className="font-semibold text-gray-900 mb-3">Snapshot history</h3>
+                <div className="space-y-1 text-sm">
+                  {snapshots.map(s => (
+                    <div key={s.id} className="flex justify-between text-gray-600">
+                      <span>{fmt(s.captured_at)} {s.my_profile && `· @${s.my_profile}`}</span>
+                      <span className="font-semibold">{s.follower_count} followers</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
