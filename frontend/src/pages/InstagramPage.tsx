@@ -285,6 +285,14 @@ export default function InstagramPage() {
   const [followerDays, setFollowerDays]     = useState(7);
   const [followerProfile, setFollowerProfile] = useState('');
 
+  // ── Multi-account: list of detected Instagram accounts ──────────────────
+  const [igAccounts, setIgAccounts] = useState<string[]>([]);
+  useEffect(() => {
+    api.get(`/instagram/accounts${qs}`)
+      .then((r: { data: unknown }) => setIgAccounts(Array.isArray(r.data) ? r.data as string[] : []))
+      .catch(() => setIgAccounts([]));
+  }, [asUser]);
+
   useEffect(() => {
     if (tab !== 'followers') return;
     const p   = followerProfile ? `&my_profile=${encodeURIComponent(followerProfile)}` : '';
@@ -681,9 +689,18 @@ export default function InstagramPage() {
                     className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
                 </label>
                 <label className="text-sm">
-                  <span className="text-gray-600">Instagram account (optional)</span>
-                  <input type="text" placeholder="@myhandle" value={newPostProfile} onChange={e => setNewPostProfile(e.target.value)}
-                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                  <span className="text-gray-600">Instagram account</span>
+                  {igAccounts.length > 0 ? (
+                    <select value={newPostProfile} onChange={e => setNewPostProfile(e.target.value)}
+                      className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm">
+                      <option value="">— Any / current —</option>
+                      {igAccounts.map(a => <option key={a} value={a}>@{a}</option>)}
+                    </select>
+                  ) : (
+                    <input type="text" placeholder="@myhandle (scan accounts in the extension to enable dropdown)" value={newPostProfile}
+                      onChange={e => setNewPostProfile(e.target.value)}
+                      className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                  )}
                 </label>
                 <label className="text-sm col-span-2">
                   <span className="text-gray-600">Caption</span>

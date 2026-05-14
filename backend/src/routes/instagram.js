@@ -84,6 +84,9 @@ try {
 ['my_profile TEXT', 'full_name TEXT', 'post_owner TEXT', 'action_date DATETIME'].forEach(col => {
   try { db.exec(`ALTER TABLE instagram_actions ADD COLUMN ${col}`); } catch (_) {}
 });
+// Per-user list of detected Instagram accounts (scanned by the extension from
+// IG's "Switch accounts" modal). Stored as a JSON array on the users row.
+try { db.exec('ALTER TABLE users ADD COLUMN instagram_accounts TEXT'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -354,6 +357,52 @@ router.delete('/scheduled-posts/:id', authenticateFlexible, (req, res) => {
   }
   db.prepare('DELETE FROM instagram_scheduled_posts WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+// ── Distinct accounts whose due posts are waiting ───────────────────────────
+// Used by the scheduler to decide whether it's worth switching IG accounts.
+router.get('/scheduled-posts/pending-accounts', authenticateFlexible, (req, res) => {
+  const rows = db.prepare(`
+    SELECT DISTINCT my_profile FROM instagram_scheduled_posts
+    WHERE user_id = ?
+      AND status = 'scheduled'
+      AND datetime(scheduled_at) <= datetime('now')
+      AND my_profile IS NOT NULL AND my_profile != ''
+  `).all(req.user.id);
+  res.json(rows.map(r => r.my_profile));
+});
+
+// ── Account list (multi-profile management) ──────────────────────────────────
+// The extension scans IG's "Switch accounts" modal and submits the list here;
+// the frontend reads it back to populate dropdowns. We also union in any
+// my_profile values seen in the user's data so manual entries aren't lost.
+router.post('/accounts/scan', authenticateFlexible, (req, res) => {
+  const accounts = Array.isArray(req.body.accounts)
+    ? [...new Set(req.body.accounts.filter(a => typeof a === 'string' && a.length > 0))]
+    : [];
+  db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
+    .run(JSON.stringify(accounts), req.user.id);
+  res.json({ ok: true, count: accounts.length });
+});
+
+router.get('/accounts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(uid);
+  let scanned = [];
+  if (row?.instagram_accounts) {
+    try { scanned = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
+  }
+  const seen = db.prepare(`
+    SELECT DISTINCT my_profile FROM instagram_actions
+      WHERE user_id = ? AND my_profile IS NOT NULL AND my_profile != ''
+    UNION
+    SELECT DISTINCT my_profile FROM instagram_follower_snapshots
+      WHERE user_id = ? AND my_profile IS NOT NULL AND my_profile != ''
+    UNION
+    SELECT DISTINCT my_profile FROM instagram_scheduled_posts
+      WHERE user_id = ? AND my_profile IS NOT NULL AND my_profile != ''
+  `).all(uid, uid, uid).map(r => r.my_profile);
+  res.json([...new Set([...scanned, ...seen])].sort());
 });
 
 // ── Follower Snapshots ───────────────────────────────────────────────────────
