@@ -325,27 +325,67 @@ router.get('/scheduled-posts/:id/media', authenticateFlexible, (req, res) => {
   res.sendFile(filePath);
 });
 
-// Update status (extension calls this after publish — success or failure).
+// Update a scheduled post. The extension calls this with `status` after a
+// publish attempt; the UI calls it with edit fields (caption, time, account,
+// post_type). Editing is blocked once a post has been claimed/posted.
 router.patch('/scheduled-posts/:id', authenticateFlexible, (req, res) => {
   const b = req.body || {};
   const row = db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
   if (!row) return res.status(404).json({ error: 'Not found' });
+
+  // If this isn't a status update (i.e. it's a user edit), refuse if the post
+  // has already been published or is in flight.
+  const isUserEdit = b.status == null;
+  if (isUserEdit && ['posted', 'claimed'].includes(row.status)) {
+    return res.status(409).json({ error: `Cannot edit a post that's already ${row.status}` });
+  }
+
+  const myProfile = b.my_profile != null
+    ? (typeof b.my_profile === 'string' ? b.my_profile.replace(/^@/, '') : null)
+    : null;
+
   db.prepare(`
     UPDATE instagram_scheduled_posts SET
-      status = COALESCE(?, status),
-      scheduled_at = COALESCE(?, scheduled_at),
-      caption = COALESCE(?, caption),
-      posted_at = CASE WHEN ? = 'posted' THEN CURRENT_TIMESTAMP ELSE posted_at END,
+      status        = COALESCE(?, status),
+      scheduled_at  = COALESCE(?, scheduled_at),
+      caption       = COALESCE(?, caption),
+      post_type     = COALESCE(?, post_type),
+      my_profile    = COALESCE(?, my_profile),
+      posted_at     = CASE WHEN ? = 'posted' THEN CURRENT_TIMESTAMP ELSE posted_at END,
       error_message = COALESCE(?, error_message)
     WHERE id = ?
   `).run(
     b.status || null,
     b.scheduled_at || b.scheduledAt || null,
     b.caption ?? null,
+    b.post_type || b.postType || null,
+    myProfile,
     b.status || null,
     b.error_message || b.errorMessage || null,
     req.params.id,
   );
+  res.json(db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ?').get(req.params.id));
+});
+
+// Replace the media file on an existing scheduled post (multipart/form-data
+// with `media` field). Refuses if the post is already in flight or posted.
+router.post('/scheduled-posts/:id/media', authenticateFlexible, igUpload.single('media'), (req, res) => {
+  const row = db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  if (['posted', 'claimed'].includes(row.status)) {
+    return res.status(409).json({ error: `Cannot replace media on a post that's already ${row.status}` });
+  }
+  if (!req.file) return res.status(400).json({ error: 'media file required' });
+
+  // Delete the old file off disk
+  if (row.media_filename) {
+    try { fs.unlinkSync(path.join(IG_UPLOADS_DIR, row.media_filename)); } catch (_) {}
+  }
+  db.prepare(`
+    UPDATE instagram_scheduled_posts SET
+      media_filename = ?, media_mime = ?, media_size = ?
+    WHERE id = ?
+  `).run(req.file.filename, req.file.mimetype, req.file.size, req.params.id);
   res.json(db.prepare('SELECT * FROM instagram_scheduled_posts WHERE id = ?').get(req.params.id));
 });
 
@@ -376,13 +416,52 @@ router.get('/scheduled-posts/pending-accounts', authenticateFlexible, (req, res)
 // The extension scans IG's "Switch accounts" modal and submits the list here;
 // the frontend reads it back to populate dropdowns. We also union in any
 // my_profile values seen in the user's data so manual entries aren't lost.
+// Merges the scanned list with whatever's already stored — so manual entries
+// added via the UI aren't wiped every time the extension scans.
 router.post('/accounts/scan', authenticateFlexible, (req, res) => {
-  const accounts = Array.isArray(req.body.accounts)
-    ? [...new Set(req.body.accounts.filter(a => typeof a === 'string' && a.length > 0))]
+  const incoming = Array.isArray(req.body.accounts)
+    ? req.body.accounts.filter(a => typeof a === 'string' && a.length > 0)
     : [];
+  const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(req.user.id);
+  let existing = [];
+  if (row?.instagram_accounts) {
+    try { existing = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
+  }
+  const merged = [...new Set([...existing, ...incoming])].sort();
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
-    .run(JSON.stringify(accounts), req.user.id);
-  res.json({ ok: true, count: accounts.length });
+    .run(JSON.stringify(merged), req.user.id);
+  res.json({ ok: true, count: merged.length, accounts: merged });
+});
+
+// Add a single account manually (e.g. for accounts not yet logged into IG)
+router.post('/accounts', authenticateFlexible, (req, res) => {
+  const username = (req.body.username || '').trim().replace(/^@/, '');
+  if (!/^[a-zA-Z0-9._]{1,30}$/.test(username)) {
+    return res.status(400).json({ error: 'Invalid Instagram username' });
+  }
+  const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(req.user.id);
+  let list = [];
+  if (row?.instagram_accounts) {
+    try { list = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
+  }
+  if (!list.includes(username)) list.push(username);
+  list = [...new Set(list)].sort();
+  db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
+    .run(JSON.stringify(list), req.user.id);
+  res.json({ ok: true, accounts: list });
+});
+
+router.delete('/accounts/:username', authenticateFlexible, (req, res) => {
+  const target = (req.params.username || '').trim().replace(/^@/, '').toLowerCase();
+  const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(req.user.id);
+  let list = [];
+  if (row?.instagram_accounts) {
+    try { list = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
+  }
+  list = list.filter(a => a.toLowerCase() !== target);
+  db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
+    .run(JSON.stringify(list), req.user.id);
+  res.json({ ok: true, accounts: list });
 });
 
 router.get('/accounts', authenticateFlexible, (req, res) => {

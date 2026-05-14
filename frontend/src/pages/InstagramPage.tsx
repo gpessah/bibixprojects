@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus } from 'lucide-react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts';
 
 interface ScheduledPost {
   id: string; my_profile: string | null; post_type: string;
@@ -287,11 +287,71 @@ export default function InstagramPage() {
 
   // ── Multi-account: list of detected Instagram accounts ──────────────────
   const [igAccounts, setIgAccounts] = useState<string[]>([]);
-  useEffect(() => {
+  const [newAccount, setNewAccount] = useState('');
+  const loadAccounts = () =>
     api.get(`/instagram/accounts${qs}`)
       .then((r: { data: unknown }) => setIgAccounts(Array.isArray(r.data) ? r.data as string[] : []))
       .catch(() => setIgAccounts([]));
-  }, [asUser]);
+  useEffect(() => { loadAccounts(); }, [asUser]);
+  async function addAccount() {
+    const u = newAccount.trim().replace(/^@/, '');
+    if (!u) return;
+    try {
+      await api.post('/instagram/accounts', { username: u });
+      setNewAccount('');
+      await loadAccounts();
+    } catch (e: unknown) {
+      alert('Could not add account: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function removeAccount(username: string) {
+    if (!confirm(`Remove @${username} from the account list? (does not affect Instagram)`)) return;
+    await api.delete(`/instagram/accounts/${encodeURIComponent(username)}`);
+    await loadAccounts();
+  }
+
+  // ── Edit a scheduled post ────────────────────────────────────────────────
+  const [editingPost, setEditingPost] = useState<ScheduledPost | null>(null);
+  const [editCaption, setEditCaption] = useState('');
+  const [editType, setEditType] = useState<'post' | 'story' | 'reel'>('post');
+  const [editWhen, setEditWhen] = useState('');
+  const [editProfile, setEditProfile] = useState('');
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  function openEdit(p: ScheduledPost) {
+    setEditingPost(p);
+    setEditCaption(p.caption || '');
+    setEditType((p.post_type as 'post' | 'story' | 'reel') || 'post');
+    // Convert ISO to local datetime-local string (yyyy-MM-ddTHH:mm)
+    const d = new Date(p.scheduled_at);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    setEditWhen(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    setEditProfile(p.my_profile || '');
+    setEditFile(null);
+  }
+  async function saveEdit() {
+    if (!editingPost) return;
+    setSavingEdit(true);
+    try {
+      await api.patch(`/instagram/scheduled-posts/${editingPost.id}`, {
+        caption: editCaption,
+        post_type: editType,
+        scheduled_at: new Date(editWhen).toISOString(),
+        my_profile: editProfile || null,
+      });
+      if (editFile) {
+        const fd = new FormData();
+        fd.append('media', editFile);
+        await api.post(`/instagram/scheduled-posts/${editingPost.id}/media`, fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+      setEditingPost(null);
+      await loadScheduled();
+    } catch (e: unknown) {
+      alert('Save failed: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setSavingEdit(false); }
+  }
 
   useEffect(() => {
     if (tab !== 'followers') return;
@@ -316,6 +376,7 @@ export default function InstagramPage() {
     { id: 'campaigns' as Tab, label: 'Campaigns', icon: <Zap size={15} /> },
     { id: 'schedule'  as Tab, label: 'Schedule',  icon: <Calendar size={15} /> },
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
+    { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
   ];
 
   return (
@@ -743,8 +804,11 @@ export default function InstagramPage() {
                         {p.error_message && <div className="text-xs text-red-500 mt-1" title={p.error_message}>⚠ {p.error_message.slice(0, 60)}</div>}
                       </td>
                       <td className="px-4 py-3">
-                        {p.status !== 'posted' && (
-                          <button onClick={() => deleteScheduled(p.id)} className="text-gray-400 hover:text-red-500"><Trash2 size={16} /></button>
+                        {!['posted', 'claimed'].includes(p.status) && (
+                          <div className="flex gap-2">
+                            <button onClick={() => openEdit(p)} className="text-gray-400 hover:text-blue-500" title="Edit"><Pencil size={16} /></button>
+                            <button onClick={() => deleteScheduled(p.id)} className="text-gray-400 hover:text-red-500" title="Delete"><Trash2 size={16} /></button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -837,6 +901,41 @@ export default function InstagramPage() {
           </div>
         )}
 
+        {/* ══════════════════════════════ ACCOUNTS ══════════════════════════════ */}
+        {tab === 'accounts' && (
+          <div className="space-y-4 max-w-2xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><Plus size={18} /> Add an Instagram account</h3>
+              <p className="text-sm text-gray-500 mb-3">
+                Add the @handle of any Instagram account you manage. Or run <b>Scan accounts</b> from the extension popup on instagram.com to import all accounts logged into your browser at once.
+              </p>
+              <div className="flex gap-2">
+                <input type="text" placeholder="@username" value={newAccount} onChange={e => setNewAccount(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') addAccount(); }}
+                  className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                <button onClick={addAccount}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Add</button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-3">Your accounts <span className="text-gray-400 font-normal">({igAccounts.length})</span></h3>
+              {igAccounts.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No accounts yet. Add one above or scan from the extension.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {igAccounts.map(u => (
+                    <div key={u} className="flex items-center justify-between py-2.5">
+                      <a href={`https://instagram.com/${u}`} target="_blank" rel="noreferrer" className="text-sm font-medium text-blue-600 hover:underline">@{u}</a>
+                      <button onClick={() => removeAccount(u)} className="text-gray-400 hover:text-red-500" title="Remove"><Trash2 size={16} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ══════════════════════════════ CAMPAIGNS ══════════════════════════════ */}
         {tab === 'campaigns' && (
           <div className="space-y-3">
@@ -876,6 +975,77 @@ export default function InstagramPage() {
           </div>
         )}
       </div>
+
+      {/* ══════════════════════════════ EDIT SCHEDULED POST MODAL ══════════════════════════════ */}
+      {editingPost && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setEditingPost(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-xl w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-lg text-gray-900">Edit scheduled post</h3>
+              <button onClick={() => setEditingPost(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block text-sm">
+                <span className="text-gray-600">Replace media (optional)</span>
+                <input type="file" accept="image/*,video/*" onChange={e => setEditFile(e.target.files?.[0] || null)}
+                  className="block w-full mt-1 text-sm" />
+                {editFile ? (
+                  <span className="text-xs text-blue-600">New file selected: {editFile.name}</span>
+                ) : (
+                  <span className="text-xs text-gray-500">Current: {editingPost.media_filename}</span>
+                )}
+              </label>
+
+              <div className="grid grid-cols-2 gap-4">
+                <label className="text-sm">
+                  <span className="text-gray-600">Post type</span>
+                  <select value={editType} onChange={e => setEditType(e.target.value as 'post' | 'story' | 'reel')}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm">
+                    <option value="post">Post</option>
+                    <option value="story">Story</option>
+                    <option value="reel">Reel</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <span className="text-gray-600">Publish at</span>
+                  <input type="datetime-local" value={editWhen} onChange={e => setEditWhen(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                </label>
+              </div>
+
+              <label className="block text-sm">
+                <span className="text-gray-600">Instagram account</span>
+                {igAccounts.length > 0 ? (
+                  <select value={editProfile} onChange={e => setEditProfile(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm">
+                    <option value="">— Any / current —</option>
+                    {igAccounts.map(a => <option key={a} value={a}>@{a}</option>)}
+                  </select>
+                ) : (
+                  <input type="text" placeholder="@myhandle" value={editProfile} onChange={e => setEditProfile(e.target.value)}
+                    className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+                )}
+              </label>
+
+              <label className="block text-sm">
+                <span className="text-gray-600">Caption</span>
+                <textarea rows={4} value={editCaption} onChange={e => setEditCaption(e.target.value)}
+                  className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button onClick={() => setEditingPost(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900">Cancel</button>
+              <button onClick={saveEdit} disabled={savingEdit}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                {savingEdit ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
