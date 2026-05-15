@@ -19,6 +19,14 @@ interface ScrapedPost {
 interface ScrapedSummary {
   target_username: string; post_count: number; last_scraped_at: string;
 }
+interface ActionCampaign {
+  id: string; name: string | null;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  total_requested: number; total_completed: number; concurrency: number;
+  consecutive_failures: number; start_at: string | null;
+  started_at: string | null; ended_at: string | null;
+  error_message: string | null; created_at: string;
+}
 
 interface ScheduledPost {
   id: string; my_profile: string | null; post_type: string;
@@ -417,10 +425,108 @@ export default function InstagramPage() {
   async function openScrapedUser(username: string) {
     setViewingUser(username);
     setViewingPosts([]);
+    setSelectedPosts(new Set());
     try {
       const res = await api.get(`/instagram/scraped-posts${qs ? qs + '&' : '?'}target_username=${encodeURIComponent(username)}`);
       setViewingPosts(Array.isArray(res.data) ? res.data as ScrapedPost[] : []);
     } catch (_) { setViewingPosts([]); }
+  }
+
+  // ── Action queue (likes + replies campaigns) ─────────────────────────────
+  const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
+  const [showActionModal, setShowActionModal] = useState(false);
+  const [acLikes, setAcLikes] = useState('5');
+  const [acReplies, setAcReplies] = useState('0');
+  const [acAccount, setAcAccount] = useState('');
+  const [acReplySource, setAcReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [acReplyText, setAcReplyText] = useState('');
+  const [acConcurrency, setAcConcurrency] = useState('6');
+  const [acName, setAcName] = useState('');
+  const [acStartAt, setAcStartAt] = useState('');
+  const [acBusy, setAcBusy] = useState(false);
+  const [actionCampaigns, setActionCampaigns] = useState<ActionCampaign[]>([]);
+
+  const loadActionCampaigns = async () => {
+    try {
+      const res = await api.get(`/instagram/action-campaigns${qs}`);
+      setActionCampaigns(Array.isArray(res.data) ? res.data as ActionCampaign[] : []);
+    } catch (_) { /* keep state */ }
+  };
+
+  useEffect(() => {
+    if (tab === 'campaigns') loadActionCampaigns();
+  }, [tab, asUser]);
+
+  // Auto-refresh while any campaign is pending/running
+  useEffect(() => {
+    if (tab !== 'campaigns') return;
+    const active = actionCampaigns.some(c => c.status === 'pending' || c.status === 'running');
+    if (!active) return;
+    const id = setInterval(loadActionCampaigns, 5000);
+    return () => clearInterval(id);
+  }, [tab, actionCampaigns, asUser]);
+
+  function togglePostSelection(postId: string) {
+    setSelectedPosts(prev => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId); else next.add(postId);
+      return next;
+    });
+  }
+
+  async function submitActionCampaign() {
+    const likes = Math.max(0, parseInt(acLikes, 10) || 0);
+    const replies = Math.max(0, parseInt(acReplies, 10) || 0);
+    if (likes === 0 && replies === 0) { alert('Set at least one of Likes or Replies to a positive number.'); return; }
+    if (!acAccount) { alert('Pick the Instagram account that will perform these actions.'); return; }
+    const conc = Math.max(1, Math.min(6, parseInt(acConcurrency, 10) || 6));
+    const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
+    if (selected.length === 0) { alert('No posts selected.'); return; }
+
+    const customReplies = acReplySource === 'custom'
+      ? acReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+      : [];
+    if (acReplySource === 'custom' && customReplies.length === 0 && replies > 0) {
+      alert('Custom reply source picked but no reply text provided.'); return;
+    }
+
+    const items: Array<{ post_url: string; action_type: 'like'|'reply'; count: number; reply_source?: string; reply_texts?: string[] }> = [];
+    for (const p of selected) {
+      if (likes > 0)   items.push({ post_url: p.post_url, action_type: 'like',  count: likes });
+      if (replies > 0) items.push({
+        post_url: p.post_url, action_type: 'reply', count: replies,
+        reply_source: acReplySource,
+        reply_texts: acReplySource === 'custom' ? customReplies : undefined,
+      });
+    }
+
+    setAcBusy(true);
+    try {
+      await api.post(`/instagram/action-campaigns${qs}`, {
+        name: acName || null,
+        as_account: acAccount,
+        concurrency: conc,
+        start_at: acStartAt ? new Date(acStartAt).toISOString() : null,
+        items,
+      });
+      setShowActionModal(false);
+      setSelectedPosts(new Set());
+      setAcName(''); setAcStartAt(''); setAcReplyText('');
+      await loadActionCampaigns();
+      alert(`Campaign queued — ${items.length} action${items.length === 1 ? '' : 's'} created across ${selected.length} post${selected.length === 1 ? '' : 's'}.`);
+    } catch (e: unknown) {
+      alert('Failed to queue campaign: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setAcBusy(false); }
+  }
+
+  async function cancelActionCampaign(id: string) {
+    if (!confirm('Cancel this campaign? Pending actions will be skipped; in-flight ones finish.')) return;
+    await api.post(`/instagram/action-campaigns/${id}/cancel${qs}`);
+    await loadActionCampaigns();
+  }
+  async function resumeActionCampaign(id: string) {
+    await api.post(`/instagram/action-campaigns/${id}/resume${qs}`);
+    await loadActionCampaigns();
   }
 
   useEffect(() => {
@@ -1119,7 +1225,20 @@ export default function InstagramPage() {
               </a>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Posts <span className="text-gray-400 font-normal">({viewingPosts.length})</span></h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Posts <span className="text-gray-400 font-normal">({viewingPosts.length})</span></h3>
+                {selectedPosts.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">{selectedPosts.size} selected</span>
+                    <button onClick={() => setSelectedPosts(new Set())}
+                      className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
+                    <button onClick={() => setShowActionModal(true)}
+                      className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+                      Add to action queue
+                    </button>
+                  </div>
+                )}
+              </div>
               {viewingPosts.length === 0 ? (
                 <p className="text-gray-400 text-sm py-6 text-center">No posts found.</p>
               ) : (
@@ -1127,6 +1246,12 @@ export default function InstagramPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium w-8">
+                          <input type="checkbox"
+                            checked={selectedPosts.size === viewingPosts.length && viewingPosts.length > 0}
+                            onChange={(e) => setSelectedPosts(e.target.checked ? new Set(viewingPosts.map(p => p.id)) : new Set())}
+                          />
+                        </th>
                         <th className="py-2 pr-3 font-medium">Post</th>
                         <th className="py-2 pr-3 font-medium">Type</th>
                         <th className="py-2 pr-3 font-medium text-right">Likes</th>
@@ -1138,6 +1263,12 @@ export default function InstagramPage() {
                     <tbody>
                       {viewingPosts.map(p => (
                         <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2 pr-3">
+                            <input type="checkbox"
+                              checked={selectedPosts.has(p.id)}
+                              onChange={() => togglePostSelection(p.id)}
+                            />
+                          </td>
                           <td className="py-2 pr-3">
                             <a href={p.post_url} target="_blank" rel="noreferrer"
                               className="text-blue-600 hover:underline flex items-center gap-1">
@@ -1159,9 +1290,164 @@ export default function InstagramPage() {
           </div>
         )}
 
+        {/* ══ Add-to-action-queue modal ══ */}
+        {showActionModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowActionModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Add to action queue</h3>
+                <button onClick={() => setShowActionModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">For each of the <b>{selectedPosts.size}</b> selected post{selectedPosts.size === 1 ? '' : 's'}, the extension will perform the actions below as the chosen Instagram account.</p>
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Likes per post</label>
+                  <input type="number" min={0} max={100} value={acLikes}
+                    onChange={e => setAcLikes(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Replies per post</label>
+                  <input type="number" min={0} max={100} value={acReplies}
+                    onChange={e => setAcReplies(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Run as</label>
+                <select value={acAccount} onChange={e => setAcAccount(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— pick one of your Instagram accounts —</option>
+                  {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                </select>
+              </div>
+
+              {Number(acReplies) > 0 && (
+                <>
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Reply text source</label>
+                    <select value={acReplySource} onChange={e => setAcReplySource(e.target.value as 'default'|'custom'|'ai')}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                      <option value="default">Built-in defaults (generic friendly replies)</option>
+                      <option value="custom">Custom text (one per line or comma-separated)</option>
+                      <option value="ai">AI (Groq — requires API key in extension)</option>
+                    </select>
+                  </div>
+                  {acReplySource === 'custom' && (
+                    <div className="mb-3">
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Custom replies</label>
+                      <textarea value={acReplyText} onChange={e => setAcReplyText(e.target.value)}
+                        placeholder="Amazing! 🔥&#10;Love this 😍&#10;So true 💯"
+                        rows={4}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs)</label>
+                  <input type="number" min={1} max={6} value={acConcurrency}
+                    onChange={e => setAcConcurrency(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Campaign name <span className="text-gray-400">(optional)</span></label>
+                  <input type="text" value={acName} placeholder="May 15 — likes/replies"
+                    onChange={e => setAcName(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(leave empty = ASAP)</span></label>
+                <input type="datetime-local" value={acStartAt}
+                  onChange={e => setAcStartAt(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <p className="text-xs text-gray-500 mb-3">
+                <b>Tip:</b> 4–6 concurrent tabs is fast but Instagram pattern-detects aggressive activity. Lower it to 2–3 for safer runs. The campaign auto-pauses after 3 consecutive failures.
+              </p>
+
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowActionModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={submitActionCampaign} disabled={acBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {acBusy ? 'Queuing…' : 'Queue campaign'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ══════════════════════════════ CAMPAIGNS ══════════════════════════════ */}
         {tab === 'campaigns' && (
           <div className="space-y-3">
+
+            {/* Scheduled action campaigns (new) */}
+            {actionCampaigns.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold text-gray-900">Scheduled action campaigns</h3>
+                  <button onClick={loadActionCampaigns} className="text-gray-400 hover:text-gray-600" title="Refresh">
+                    <RefreshCw size={16} />
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {actionCampaigns.map(c => {
+                    const elapsedMs = c.started_at && c.ended_at
+                      ? new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()
+                      : c.started_at ? Date.now() - new Date(c.started_at).getTime() : 0;
+                    const minutes = Math.max(0, Math.round(elapsedMs / 60000));
+                    const pct = c.total_requested > 0 ? Math.round((c.total_completed / c.total_requested) * 100) : 0;
+                    return (
+                      <div key={c.id} className="border border-gray-100 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-gray-900 text-sm">{c.name || `Campaign ${c.id.slice(0, 8)}`}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              c.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              c.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                              c.status === 'paused'    ? 'bg-yellow-100 text-yellow-700' :
+                              c.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
+                              c.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                                         'bg-gray-100 text-gray-600'
+                            }`}>{c.status}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {(c.status === 'running' || c.status === 'pending') && (
+                              <button onClick={() => cancelActionCampaign(c.id)}
+                                className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                            )}
+                            {(c.status === 'paused' || c.status === 'failed') && (
+                              <button onClick={() => resumeActionCampaign(c.id)}
+                                className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2">
+                          <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
+                          <span>Concurrency: {c.concurrency}</span>
+                          {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
+                          {c.ended_at && <span>Ended: {fmt(c.ended_at)}</span>}
+                          {(c.started_at) && <span>Elapsed: {minutes} min</span>}
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                          <div className={`h-full ${c.status === 'paused' || c.status === 'failed' ? 'bg-red-400' : c.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'}`}
+                            style={{ width: `${pct}%` }} />
+                        </div>
+                        {c.error_message && <p className="text-xs text-red-600 mt-2">{c.error_message}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {campaigns.map(c => (
               <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between mb-3">

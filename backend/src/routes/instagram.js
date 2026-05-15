@@ -99,6 +99,39 @@ try {
       last_scraped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, target_username, shortcode)
     );
+    CREATE TABLE IF NOT EXISTS instagram_action_campaigns (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      total_requested INTEGER DEFAULT 0,
+      total_completed INTEGER DEFAULT 0,
+      concurrency INTEGER DEFAULT 6,
+      consecutive_failures INTEGER DEFAULT 0,
+      start_at DATETIME,
+      started_at DATETIME,
+      ended_at DATETIME,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS instagram_action_queue (
+      id TEXT PRIMARY KEY,
+      campaign_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      as_account TEXT NOT NULL,
+      post_url TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      count_requested INTEGER NOT NULL,
+      count_done INTEGER DEFAULT 0,
+      reply_source TEXT,
+      reply_texts TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claimed_at DATETIME,
+      started_at DATETIME,
+      completed_at DATETIME,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE INDEX IF NOT EXISTS idx_ig_sched_due
       ON instagram_scheduled_posts(status, scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_ig_snap_user_profile
@@ -107,6 +140,10 @@ try {
       ON instagram_scrape_jobs(user_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_scraped_user_target
       ON instagram_scraped_posts(user_id, target_username, last_scraped_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_action_queue_pending
+      ON instagram_action_queue(user_id, as_account, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_action_campaign_status
+      ON instagram_action_campaigns(user_id, status, created_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -714,6 +751,242 @@ router.get('/scraped-posts', authenticateFlexible, (req, res) => {
     ORDER BY last_scraped_at DESC
   `).all(uid);
   res.json(rows);
+});
+
+// ── Scheduled action campaigns (likes + replies orchestration) ───────────────
+// Monday creates a campaign with N atomic queue items (one per post × action
+// type). The extension's background alarm picks the oldest pending campaign,
+// claims rows for the IG account it can run as, opens up to `concurrency`
+// tabs in parallel, runs likes/replies, marks rows done. After all of an
+// account's rows are done, switches accounts (respecting cooldown).
+
+// Monday creates a campaign + its queue items
+router.post('/action-campaigns', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { name, as_account, concurrency, start_at, items } = req.body || {};
+  if (!as_account) return res.status(400).json({ error: 'as_account required' });
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items required (array of {post_url, action_type, count, reply_source, reply_texts})' });
+  }
+  const cid = uuidv4();
+  const conc = Math.max(1, Math.min(6, parseInt(concurrency, 10) || 6));
+  const totalReq = items.reduce((sum, it) => sum + (Number(it.count) || 0), 0);
+  const cleanedAcct = String(as_account).trim().replace(/^@/, '').toLowerCase();
+  db.prepare(`
+    INSERT INTO instagram_action_campaigns
+      (id, user_id, name, status, total_requested, concurrency, start_at)
+    VALUES (?, ?, ?, 'pending', ?, ?, ?)
+  `).run(cid, uid, name || null, totalReq, conc, start_at || null);
+
+  const insertItem = db.prepare(`
+    INSERT INTO instagram_action_queue
+      (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const it of items) {
+    const actionType = it.action_type === 'reply' ? 'reply' : 'like';
+    const count = Math.max(1, parseInt(it.count, 10) || 1);
+    insertItem.run(
+      uuidv4(), cid, uid, cleanedAcct,
+      String(it.post_url || ''),
+      actionType, count,
+      actionType === 'reply' ? (it.reply_source || 'default') : null,
+      actionType === 'reply' && Array.isArray(it.reply_texts) ? JSON.stringify(it.reply_texts) : null
+    );
+  }
+  res.json(db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(cid));
+});
+
+// Monday lists this user's action campaigns (newest first)
+router.get('/action-campaigns', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const rows = db.prepare(`
+    SELECT * FROM instagram_action_campaigns
+    WHERE user_id = ?
+    ORDER BY created_at DESC LIMIT 100
+  `).all(uid);
+  res.json(rows);
+});
+
+// Monday: campaign detail + per-action breakdown
+router.get('/action-campaigns/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const campaign = db.prepare(`
+    SELECT * FROM instagram_action_campaigns WHERE id = ? AND user_id = ?
+  `).get(req.params.id, uid);
+  if (!campaign) return res.status(404).json({ error: 'not found' });
+  const items = db.prepare(`
+    SELECT * FROM instagram_action_queue
+    WHERE campaign_id = ? ORDER BY created_at ASC
+  `).all(req.params.id);
+  res.json({ campaign, items });
+});
+
+// Monday: cancel campaign — pending items get skipped; in-flight ones finish
+router.post('/action-campaigns/:id/cancel', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare(`
+    UPDATE instagram_action_campaigns
+    SET status = 'cancelled', ended_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND user_id = ?
+  `).run(req.params.id, uid);
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = 'cancelled'
+    WHERE campaign_id = ? AND status = 'pending'
+  `).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Monday: resume paused campaign
+router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare(`
+    UPDATE instagram_action_campaigns
+    SET status = 'pending', consecutive_failures = 0, error_message = NULL
+    WHERE id = ? AND user_id = ? AND status IN ('paused', 'failed')
+  `).run(req.params.id, uid);
+  res.json({ ok: true });
+});
+
+// Extension: list IG accounts that have pending action-queue items for this user.
+// Lets the extension know which accounts it should consider switching to.
+router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const rows = db.prepare(`
+    SELECT DISTINCT q.as_account
+    FROM instagram_action_queue q
+    JOIN instagram_action_campaigns c ON c.id = q.campaign_id
+    WHERE q.user_id = ?
+      AND q.status = 'pending'
+      AND c.status IN ('pending', 'running')
+      AND (c.start_at IS NULL OR datetime(c.start_at) <= datetime('now'))
+    ORDER BY q.as_account
+  `).all(uid);
+  res.json(rows.map(r => r.as_account));
+});
+
+// Extension: claim the next batch of pending actions for a given account.
+// Atomically transitions up to N rows from 'pending' to 'claimed' and returns
+// them so the background can dispatch them across multiple tabs.
+router.get('/action-queue/pending', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const acct = String(req.query.as_account || '').trim().replace(/^@/, '').toLowerCase();
+  const limit = Math.max(1, Math.min(6, parseInt(req.query.limit, 10) || 1));
+  if (!acct) return res.status(400).json({ error: 'as_account required' });
+
+  // Find the oldest eligible campaign for this user+account combo so we don't
+  // interleave campaigns. We pick at most `limit` items, all from the same
+  // campaign, and atomically claim them.
+  const campaign = db.prepare(`
+    SELECT c.* FROM instagram_action_campaigns c
+    WHERE c.user_id = ?
+      AND c.status IN ('pending', 'running')
+      AND (c.start_at IS NULL OR datetime(c.start_at) <= datetime('now'))
+      AND EXISTS (
+        SELECT 1 FROM instagram_action_queue q
+        WHERE q.campaign_id = c.id
+          AND q.user_id = c.user_id
+          AND q.as_account = ?
+          AND q.status = 'pending'
+      )
+    ORDER BY c.created_at ASC LIMIT 1
+  `).get(uid, acct);
+
+  if (!campaign) return res.json({ campaign: null, items: [] });
+
+  // Mark campaign as running if it wasn't already
+  if (campaign.status === 'pending') {
+    db.prepare(`
+      UPDATE instagram_action_campaigns
+      SET status = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+      WHERE id = ? AND status = 'pending'
+    `).run(campaign.id);
+  }
+
+  // Claim up to `limit` rows one-by-one (atomic via the WHERE status='pending').
+  // The shared db wrapper doesn't expose transactions, so we just loop.
+  const claimed = [];
+  for (let i = 0; i < limit; i++) {
+    const row = db.prepare(`
+      SELECT id FROM instagram_action_queue
+      WHERE campaign_id = ? AND user_id = ? AND as_account = ? AND status = 'pending'
+      ORDER BY created_at ASC LIMIT 1
+    `).get(campaign.id, uid, acct);
+    if (!row) break;
+    const claim = db.prepare(`
+      UPDATE instagram_action_queue
+      SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'pending'
+    `).run(row.id);
+    if (claim.changes > 0) {
+      claimed.push(db.prepare('SELECT * FROM instagram_action_queue WHERE id = ?').get(row.id));
+    }
+  }
+  res.json({ campaign, items: claimed });
+});
+
+// Extension: report progress / completion on a queue item.
+// Body: { status, count_done, error_message }
+router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { status, count_done, error_message } = req.body || {};
+  const isTerminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+
+  const item = db.prepare('SELECT * FROM instagram_action_queue WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!item) return res.status(404).json({ error: 'not found' });
+
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = COALESCE(?, status),
+        count_done = COALESCE(?, count_done),
+        error_message = COALESCE(?, error_message),
+        started_at = COALESCE(started_at, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END),
+        completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END
+    WHERE id = ? AND user_id = ?
+  `).run(
+    status || null,
+    Number.isFinite(count_done) ? count_done : null,
+    error_message || null,
+    status || null,
+    isTerminal ? 1 : 0,
+    req.params.id, uid
+  );
+
+  // Roll up campaign-level counters and consecutive_failures tracking.
+  if (isTerminal) {
+    const camp = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(item.campaign_id);
+    if (camp) {
+      const stats = db.prepare(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+          SUM(CASE WHEN status IN ('pending', 'claimed', 'running') THEN 1 ELSE 0 END) AS remaining
+        FROM instagram_action_queue WHERE campaign_id = ?
+      `).get(camp.id);
+      const totalCompletedCount = Number.isFinite(count_done) ? count_done : 0;
+      const newCompleted = (camp.total_completed || 0) + totalCompletedCount;
+      const newFails = status === 'failed' ? (camp.consecutive_failures || 0) + 1 : 0;
+      let newStatus = camp.status;
+      let newEnded = null;
+      if (stats.remaining === 0) {
+        newStatus = 'completed';
+        newEnded = 1;
+      } else if (newFails >= 3) {
+        newStatus = 'paused';
+      }
+      db.prepare(`
+        UPDATE instagram_action_campaigns
+        SET total_completed = ?,
+            consecutive_failures = ?,
+            status = ?,
+            ended_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE ended_at END,
+            error_message = CASE WHEN ? = 'paused' THEN '3 consecutive failures — likely rate-limited by Instagram. Resume manually.' ELSE error_message END
+        WHERE id = ?
+      `).run(newCompleted, newFails, newStatus, newEnded ? 1 : 0, newStatus, camp.id);
+    }
+  }
+  res.json({ ok: true });
 });
 
 module.exports = router;
