@@ -73,10 +73,40 @@ try {
       follower_count INTEGER,
       followers_json TEXT
     );
+    CREATE TABLE IF NOT EXISTS instagram_scrape_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      target_username TEXT NOT NULL,
+      post_count INTEGER NOT NULL DEFAULT 25,
+      status TEXT NOT NULL DEFAULT 'pending',
+      error_message TEXT,
+      posts_scraped INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME,
+      completed_at DATETIME
+    );
+    CREATE TABLE IF NOT EXISTS instagram_scraped_posts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      target_username TEXT NOT NULL,
+      shortcode TEXT NOT NULL,
+      post_url TEXT NOT NULL,
+      post_type TEXT,
+      likes INTEGER,
+      views INTEGER,
+      comments INTEGER,
+      caption TEXT,
+      last_scraped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, target_username, shortcode)
+    );
     CREATE INDEX IF NOT EXISTS idx_ig_sched_due
       ON instagram_scheduled_posts(status, scheduled_at);
     CREATE INDEX IF NOT EXISTS idx_ig_snap_user_profile
       ON instagram_follower_snapshots(user_id, my_profile, captured_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_scrape_pending
+      ON instagram_scrape_jobs(user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_scraped_user_target
+      ON instagram_scraped_posts(user_id, target_username, last_scraped_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -550,6 +580,138 @@ router.get('/followers/snapshots', authenticateFlexible, (req, res) => {
     WHERE user_id = ? ${my_profile ? 'AND my_profile = ?' : ''}
     ORDER BY captured_at DESC LIMIT 100
   `).all(...(my_profile ? [uid, my_profile] : [uid]));
+  res.json(rows);
+});
+
+// ── Profile scraping (research) ──────────────────────────────────────────────
+// Monday queues a job → extension's background alarm claims it → extension
+// opens an IG tab to the target profile → content script scrapes the first N
+// post tiles via hover overlay → results upserted into instagram_scraped_posts.
+
+function cleanUsername(u) {
+  return String(u || '').trim().replace(/^@/, '').toLowerCase();
+}
+
+// Monday creates a job
+router.post('/scrape-jobs', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const target = cleanUsername(req.body?.target_username);
+  if (!target) return res.status(400).json({ error: 'target_username required' });
+  const count = Math.max(1, Math.min(200, parseInt(req.body?.post_count, 10) || 25));
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO instagram_scrape_jobs (id, user_id, target_username, post_count)
+    VALUES (?, ?, ?, ?)
+  `).run(id, uid, target, count);
+  const row = db.prepare('SELECT * FROM instagram_scrape_jobs WHERE id = ?').get(id);
+  res.json(row);
+});
+
+// Monday lists this user's jobs (most recent first)
+router.get('/scrape-jobs', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const rows = db.prepare(`
+    SELECT * FROM instagram_scrape_jobs
+    WHERE user_id = ?
+    ORDER BY created_at DESC LIMIT 100
+  `).all(uid);
+  res.json(rows);
+});
+
+// Extension polls for the next pending job, claiming it atomically
+router.get('/scrape-jobs/pending', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const job = db.prepare(`
+    SELECT * FROM instagram_scrape_jobs
+    WHERE user_id = ? AND status = 'pending'
+    ORDER BY created_at ASC LIMIT 1
+  `).get(uid);
+  if (!job) return res.json(null);
+  const claim = db.prepare(`
+    UPDATE instagram_scrape_jobs
+    SET status = 'running', started_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'pending'
+  `).run(job.id);
+  if (claim.changes === 0) return res.json(null);
+  res.json({ ...job, status: 'running' });
+});
+
+// Extension updates job status when scraping finishes (or fails)
+router.patch('/scrape-jobs/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { status, error_message, posts_scraped } = req.body || {};
+  const isTerminal = status === 'completed' || status === 'failed';
+  db.prepare(`
+    UPDATE instagram_scrape_jobs
+    SET status = COALESCE(?, status),
+        error_message = COALESCE(?, error_message),
+        posts_scraped = COALESCE(?, posts_scraped),
+        completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END
+    WHERE id = ? AND user_id = ?
+  `).run(status || null, error_message || null, posts_scraped ?? null, isTerminal ? 1 : 0, req.params.id, uid);
+  res.json({ ok: true });
+});
+
+// Extension uploads scraped data — bulk upsert
+router.post('/scraped-posts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const target = cleanUsername(req.body?.target_username);
+  const posts = Array.isArray(req.body?.posts) ? req.body.posts : [];
+  if (!target) return res.status(400).json({ error: 'target_username required' });
+
+  const upsert = db.prepare(`
+    INSERT INTO instagram_scraped_posts
+      (id, user_id, target_username, shortcode, post_url, post_type, likes, views, comments, caption, last_scraped_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, target_username, shortcode) DO UPDATE SET
+      post_url = excluded.post_url,
+      post_type = excluded.post_type,
+      likes = excluded.likes,
+      views = excluded.views,
+      comments = excluded.comments,
+      caption = excluded.caption,
+      last_scraped_at = CURRENT_TIMESTAMP
+  `);
+  const tx = db.transaction((rows) => {
+    for (const p of rows) {
+      if (!p?.shortcode) continue;
+      upsert.run(
+        uuidv4(), uid, target,
+        String(p.shortcode),
+        String(p.post_url || ''),
+        p.post_type === 'reel' ? 'reel' : 'post',
+        Number.isFinite(p.likes) ? p.likes : null,
+        Number.isFinite(p.views) ? p.views : null,
+        Number.isFinite(p.comments) ? p.comments : null,
+        p.caption ? String(p.caption).slice(0, 500) : null
+      );
+    }
+  });
+  tx(posts);
+  res.json({ ok: true, count: posts.length });
+});
+
+// Monday reads scraped posts — by target_username for detail, or grouped summary
+router.get('/scraped-posts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const target = req.query.target_username ? cleanUsername(req.query.target_username) : null;
+  if (target) {
+    const rows = db.prepare(`
+      SELECT * FROM instagram_scraped_posts
+      WHERE user_id = ? AND target_username = ?
+      ORDER BY last_scraped_at DESC LIMIT 500
+    `).all(uid, target);
+    return res.json(rows);
+  }
+  const rows = db.prepare(`
+    SELECT target_username,
+           COUNT(*) AS post_count,
+           MAX(last_scraped_at) AS last_scraped_at
+    FROM instagram_scraped_posts
+    WHERE user_id = ?
+    GROUP BY target_username
+    ORDER BY last_scraped_at DESC
+  `).all(uid);
   res.json(rows);
 });
 

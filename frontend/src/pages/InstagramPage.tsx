@@ -1,9 +1,24 @@
 import { useEffect, useState, useMemo } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X } from 'lucide-react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X, Search, RefreshCw, ArrowLeft, ExternalLink } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research';
+
+interface ScrapeJob {
+  id: string; target_username: string; post_count: number;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  error_message: string | null; posts_scraped: number;
+  created_at: string; started_at: string | null; completed_at: string | null;
+}
+interface ScrapedPost {
+  id: string; target_username: string; shortcode: string; post_url: string;
+  post_type: 'post' | 'reel'; likes: number | null; views: number | null;
+  comments: number | null; caption: string | null; last_scraped_at: string;
+}
+interface ScrapedSummary {
+  target_username: string; post_count: number; last_scraped_at: string;
+}
 
 interface ScheduledPost {
   id: string; my_profile: string | null; post_type: string;
@@ -353,6 +368,61 @@ export default function InstagramPage() {
     } finally { setSavingEdit(false); }
   }
 
+  // ── Profile research (scrape jobs + results) ─────────────────────────────
+  const [scrapeJobs,    setScrapeJobs]    = useState<ScrapeJob[]>([]);
+  const [scrapedSummary, setScrapedSummary] = useState<ScrapedSummary[]>([]);
+  const [scrapeTarget,  setScrapeTarget]  = useState('');
+  const [scrapeCount,   setScrapeCount]   = useState('25');
+  const [scrapeBusy,    setScrapeBusy]    = useState(false);
+  const [viewingUser,   setViewingUser]   = useState<string | null>(null);
+  const [viewingPosts,  setViewingPosts]  = useState<ScrapedPost[]>([]);
+
+  const loadResearch = async () => {
+    try {
+      const [jobsRes, summaryRes] = await Promise.all([
+        api.get(`/instagram/scrape-jobs${qs}`),
+        api.get(`/instagram/scraped-posts${qs}`),
+      ]);
+      setScrapeJobs(Array.isArray(jobsRes.data) ? jobsRes.data as ScrapeJob[] : []);
+      setScrapedSummary(Array.isArray(summaryRes.data) ? summaryRes.data as ScrapedSummary[] : []);
+    } catch (_) { /* keep prior state */ }
+  };
+
+  useEffect(() => { if (tab === 'research') loadResearch(); }, [tab, asUser]);
+
+  // Auto-refresh research view while a job is pending or running so the user
+  // sees status updates without manually reloading.
+  useEffect(() => {
+    if (tab !== 'research') return;
+    const hasActive = scrapeJobs.some(j => j.status === 'pending' || j.status === 'running');
+    if (!hasActive) return;
+    const id = setInterval(loadResearch, 5000);
+    return () => clearInterval(id);
+  }, [tab, scrapeJobs, asUser]);
+
+  async function createScrapeJob() {
+    const target = scrapeTarget.trim().replace(/^@/, '').toLowerCase();
+    if (!target) { alert('Enter an Instagram username (e.g. elizabethvasilenko)'); return; }
+    const count = Math.max(1, Math.min(200, parseInt(scrapeCount, 10) || 25));
+    setScrapeBusy(true);
+    try {
+      await api.post(`/instagram/scrape-jobs${qs}`, { target_username: target, post_count: count });
+      setScrapeTarget('');
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to queue scrape: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setScrapeBusy(false); }
+  }
+
+  async function openScrapedUser(username: string) {
+    setViewingUser(username);
+    setViewingPosts([]);
+    try {
+      const res = await api.get(`/instagram/scraped-posts${qs ? qs + '&' : '?'}target_username=${encodeURIComponent(username)}`);
+      setViewingPosts(Array.isArray(res.data) ? res.data as ScrapedPost[] : []);
+    } catch (_) { setViewingPosts([]); }
+  }
+
   useEffect(() => {
     if (tab !== 'followers') return;
     const p   = followerProfile ? `&my_profile=${encodeURIComponent(followerProfile)}` : '';
@@ -377,6 +447,7 @@ export default function InstagramPage() {
     { id: 'schedule'  as Tab, label: 'Schedule',  icon: <Calendar size={15} /> },
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
+    { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
   ];
 
   return (
@@ -930,6 +1001,158 @@ export default function InstagramPage() {
                       <button onClick={() => removeAccount(u)} className="text-gray-400 hover:text-red-500" title="Remove"><Trash2 size={16} /></button>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ RESEARCH ══════════════════════════════ */}
+        {tab === 'research' && !viewingUser && (
+          <div className="space-y-4 max-w-4xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2"><Search size={18} /> Scrape a profile</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Enter any public Instagram username — the extension will open the profile, scrape the first N posts (likes / views and comments), and save the data here.
+                The extension must be installed on at least one device with <b>Automation</b> enabled.
+              </p>
+              <div className="flex flex-wrap gap-2 items-end">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Username</label>
+                  <input type="text" placeholder="elizabethvasilenko" value={scrapeTarget}
+                    onChange={e => setScrapeTarget(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createScrapeJob(); }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div className="w-28">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Posts</label>
+                  <input type="number" min={1} max={200} value={scrapeCount}
+                    onChange={e => setScrapeCount(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <button onClick={createScrapeJob} disabled={scrapeBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {scrapeBusy ? 'Queuing…' : 'Queue scrape'}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Scrape jobs</h3>
+                <button onClick={loadResearch} className="text-gray-400 hover:text-gray-600" title="Refresh">
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+              {scrapeJobs.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No scrape jobs yet. Queue one above.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium">Username</th>
+                        <th className="py-2 pr-3 font-medium">Requested</th>
+                        <th className="py-2 pr-3 font-medium">Status</th>
+                        <th className="py-2 pr-3 font-medium">Scraped</th>
+                        <th className="py-2 pr-3 font-medium">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scrapeJobs.map(j => (
+                        <tr key={j.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2 pr-3 font-medium text-blue-600">@{j.target_username}</td>
+                          <td className="py-2 pr-3 text-gray-600">{j.post_count}</td>
+                          <td className="py-2 pr-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              j.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              j.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                              j.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                                         'bg-gray-100 text-gray-600'
+                            }`}>{j.status}</span>
+                            {j.status === 'failed' && j.error_message && (
+                              <span className="block text-xs text-red-600 mt-0.5">{j.error_message}</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 text-gray-600">{j.posts_scraped || 0}</td>
+                          <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(j.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-3">Scraped profiles <span className="text-gray-400 font-normal">({scrapedSummary.length})</span></h3>
+              {scrapedSummary.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No data yet. Queue a scrape job above.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {scrapedSummary.map(s => (
+                    <button key={s.target_username} onClick={() => openScrapedUser(s.target_username)}
+                      className="w-full flex items-center justify-between py-2.5 hover:bg-gray-50 px-2 rounded">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-blue-600">@{s.target_username}</span>
+                        <span className="text-xs text-gray-400">{s.post_count} posts</span>
+                      </div>
+                      <span className="text-xs text-gray-500">Last scraped {fmt(s.last_scraped_at)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'research' && viewingUser && (
+          <div className="space-y-4 max-w-5xl">
+            <div className="flex items-center justify-between">
+              <button onClick={() => { setViewingUser(null); setViewingPosts([]); }}
+                className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
+                <ArrowLeft size={16} /> Back to research
+              </button>
+              <a href={`https://instagram.com/${viewingUser}`} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1 text-sm text-blue-600 hover:underline">
+                @{viewingUser} <ExternalLink size={12} />
+              </a>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-3">Posts <span className="text-gray-400 font-normal">({viewingPosts.length})</span></h3>
+              {viewingPosts.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No posts found.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium">Post</th>
+                        <th className="py-2 pr-3 font-medium">Type</th>
+                        <th className="py-2 pr-3 font-medium text-right">Likes</th>
+                        <th className="py-2 pr-3 font-medium text-right">Views</th>
+                        <th className="py-2 pr-3 font-medium text-right">Comments</th>
+                        <th className="py-2 pr-3 font-medium">Last scraped</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewingPosts.map(p => (
+                        <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2 pr-3">
+                            <a href={p.post_url} target="_blank" rel="noreferrer"
+                              className="text-blue-600 hover:underline flex items-center gap-1">
+                              {p.shortcode} <ExternalLink size={12} />
+                            </a>
+                          </td>
+                          <td className="py-2 pr-3 text-gray-600 capitalize">{p.post_type}</td>
+                          <td className="py-2 pr-3 text-right">{p.likes != null ? p.likes.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-right">{p.views != null ? p.views.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-right">{p.comments != null ? p.comments.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(p.last_scraped_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
