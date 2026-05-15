@@ -672,23 +672,24 @@ router.post('/scraped-posts', authenticateFlexible, (req, res) => {
       caption = excluded.caption,
       last_scraped_at = CURRENT_TIMESTAMP
   `);
-  const tx = db.transaction((rows) => {
-    for (const p of rows) {
-      if (!p?.shortcode) continue;
-      upsert.run(
-        uuidv4(), uid, target,
-        String(p.shortcode),
-        String(p.post_url || ''),
-        p.post_type === 'reel' ? 'reel' : 'post',
-        Number.isFinite(p.likes) ? p.likes : null,
-        Number.isFinite(p.views) ? p.views : null,
-        Number.isFinite(p.comments) ? p.comments : null,
-        p.caption ? String(p.caption).slice(0, 500) : null
-      );
-    }
-  });
-  tx(posts);
-  res.json({ ok: true, count: posts.length });
+  // No transaction wrapper — our db wrapper doesn't expose .transaction().
+  // For 5–25 rows the perf impact of individual auto-commits is negligible.
+  let inserted = 0;
+  for (const p of posts) {
+    if (!p?.shortcode) continue;
+    upsert.run(
+      uuidv4(), uid, target,
+      String(p.shortcode),
+      String(p.post_url || ''),
+      p.post_type === 'reel' ? 'reel' : 'post',
+      Number.isFinite(p.likes) ? p.likes : null,
+      Number.isFinite(p.views) ? p.views : null,
+      Number.isFinite(p.comments) ? p.comments : null,
+      p.caption ? String(p.caption).slice(0, 500) : null
+    );
+    inserted++;
+  }
+  res.json({ ok: true, count: inserted });
 });
 
 // Monday reads scraped posts — by target_username for detail, or grouped summary
