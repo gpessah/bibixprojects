@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Linkedin, Database } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Linkedin, Database, Pencil, Check, X } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../ui/Avatar';
@@ -9,7 +9,7 @@ import WorkspaceMembersModal from '../workspace/WorkspaceMembersModal';
 import toast from 'react-hot-toast';
 
 export default function Sidebar() {
-  const { workspaces, boards, createWorkspace, createBoard, deleteBoard, deleteWorkspace } = useWorkspaceStore();
+  const { workspaces, boards, createWorkspace, createBoard, deleteBoard, deleteWorkspace, updateWorkspace } = useWorkspaceStore();
   const { user, logout, hasPermission } = useAuthStore();
   const navigate = useNavigate();
   const { boardId } = useParams();
@@ -44,6 +44,8 @@ export default function Sidebar() {
   const isSuperAdmin = user?.role === 'super_admin';
   const [marketingOpen, setMarketingOpen] = useState(false);
   const [socialMediaOpen, setSocialMediaOpen] = useState(false);
+  const [editingWs, setEditingWs] = useState<string | null>(null);
+  const [editingWsName, setEditingWsName] = useState('');
 
   return (
     <aside className="w-64 bg-monday-sidebar flex flex-col h-full overflow-hidden">
@@ -138,22 +140,47 @@ export default function Sidebar() {
           {workspaces.map(ws => (
             <div key={ws.id} className="mb-1">
               <div className="flex items-center justify-between group px-2 py-1.5 rounded hover:bg-monday-sidebar-hover">
-                <button className="flex items-center gap-2 flex-1 text-white/80 hover:text-white text-sm min-w-0"
-                  onClick={() => toggle(ws.id)}>
-                  {expanded[ws.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <LayoutGrid size={14} />
-                  <span className="truncate">{ws.name}</span>
-                </button>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                  <button onClick={() => setMembersWs({ id: ws.id, name: ws.name })}
-                    className="text-white/50 hover:text-white p-0.5 rounded" title="Manage members">
-                    <Users size={13} />
+                {editingWs === ws.id ? (
+                  /* ── Inline edit mode ── */
+                  <form className="flex items-center gap-1 flex-1 min-w-0"
+                    onSubmit={async e => {
+                      e.preventDefault();
+                      const name = editingWsName.trim();
+                      if (name && name !== ws.name) { await updateWorkspace(ws.id, { name }); toast.success('Renamed'); }
+                      setEditingWs(null);
+                    }}>
+                    <input autoFocus value={editingWsName}
+                      onChange={e => setEditingWsName(e.target.value)}
+                      onKeyDown={e => e.key === 'Escape' && setEditingWs(null)}
+                      className="flex-1 bg-white/10 text-white text-sm rounded px-2 py-0.5 outline-none border border-white/30 min-w-0" />
+                    <button type="submit" className="text-green-400 hover:text-green-300 p-0.5"><Check size={13} /></button>
+                    <button type="button" onClick={() => setEditingWs(null)} className="text-white/40 hover:text-white p-0.5"><X size={13} /></button>
+                  </form>
+                ) : (
+                  /* ── Normal mode ── */
+                  <button className="flex items-center gap-2 flex-1 text-white/80 hover:text-white text-sm min-w-0"
+                    onClick={() => toggle(ws.id)}>
+                    {expanded[ws.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    <LayoutGrid size={14} />
+                    <span className="truncate">{ws.name}</span>
                   </button>
-                  <button onClick={() => { setShowNewBoard(ws.id); setBoardName(''); setBoardIcon('📋'); }}
-                    className="text-white/50 hover:text-white p-0.5 rounded"><Plus size={13} /></button>
-                  <button onClick={async () => { if (confirm('Delete workspace?')) { await deleteWorkspace(ws.id); toast.success('Deleted'); } }}
-                    className="text-white/50 hover:text-red-400 p-0.5 rounded"><Trash2 size={13} /></button>
-                </div>
+                )}
+                {editingWs !== ws.id && (
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <button onClick={() => { setEditingWs(ws.id); setEditingWsName(ws.name); }}
+                      className="text-white/50 hover:text-white p-0.5 rounded" title="Rename workspace">
+                      <Pencil size={13} />
+                    </button>
+                    <button onClick={() => setMembersWs({ id: ws.id, name: ws.name })}
+                      className="text-white/50 hover:text-white p-0.5 rounded" title="Manage members">
+                      <Users size={13} />
+                    </button>
+                    <button onClick={() => { setShowNewBoard(ws.id); setBoardName(''); setBoardIcon('📋'); }}
+                      className="text-white/50 hover:text-white p-0.5 rounded"><Plus size={13} /></button>
+                    <button onClick={async () => { if (confirm('Delete workspace?')) { await deleteWorkspace(ws.id); toast.success('Deleted'); } }}
+                      className="text-white/50 hover:text-red-400 p-0.5 rounded"><Trash2 size={13} /></button>
+                  </div>
+                )}
               </div>
 
               {expanded[ws.id] && (
