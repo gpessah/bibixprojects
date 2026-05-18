@@ -103,6 +103,7 @@ try {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       name TEXT,
+      as_account TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       total_requested INTEGER DEFAULT 0,
       total_completed INTEGER DEFAULT 0,
@@ -154,6 +155,8 @@ try {
 // Per-user list of detected Instagram accounts (scanned by the extension from
 // IG's "Switch accounts" modal). Stored as a JSON array on the users row.
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_accounts TEXT'); } catch (_) {}
+// Older deployments created instagram_action_campaigns without as_account.
+try { db.exec('ALTER TABLE instagram_action_campaigns ADD COLUMN as_account TEXT'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -779,9 +782,9 @@ router.post('/action-campaigns', authenticateFlexible, (req, res) => {
   }
   db.prepare(`
     INSERT INTO instagram_action_campaigns
-      (id, user_id, name, status, total_requested, concurrency, start_at)
-    VALUES (?, ?, ?, 'draft', 0, ?, ?)
-  `).run(cid, uid, finalName, conc, start_at || null);
+      (id, user_id, name, as_account, status, total_requested, concurrency, start_at)
+    VALUES (?, ?, ?, ?, 'draft', 0, ?, ?)
+  `).run(cid, uid, finalName, cleanedAcct, conc, start_at || null);
 
   // Optionally seed with items if the caller passed any. Enforce the 6-item cap.
   if (Array.isArray(items) && items.length > 0) {
@@ -806,10 +809,8 @@ router.post('/action-campaigns', authenticateFlexible, (req, res) => {
     }
     db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(total, cid);
   }
-  // Store as_account on a transient column so we can return it (the column
-  // doesn't actually exist on the campaigns table; we read it from items.)
   const row = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(cid);
-  res.json({ ...row, as_account: cleanedAcct });
+  res.json(row);
 });
 
 // Monday lists this user's action campaigns. Includes item count + the
@@ -820,7 +821,9 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   const rows = db.prepare(`
     SELECT c.*,
            (SELECT COUNT(*) FROM instagram_action_queue q WHERE q.campaign_id = c.id) AS items_count,
-           (SELECT q.as_account FROM instagram_action_queue q WHERE q.campaign_id = c.id LIMIT 1) AS as_account
+           COALESCE(c.as_account,
+                    (SELECT q.as_account FROM instagram_action_queue q WHERE q.campaign_id = c.id LIMIT 1)
+           ) AS as_account
     FROM instagram_action_campaigns c
     WHERE c.user_id = ?
     ORDER BY c.created_at DESC LIMIT 100
@@ -843,10 +846,12 @@ router.post('/action-campaigns/:id/items', authenticateFlexible, (req, res) => {
 
   const { post_url, action_type, count, reply_source, reply_texts, as_account } = req.body || {};
   if (!post_url) return res.status(400).json({ error: 'post_url required' });
-  // The campaign's as_account is fixed across all items. Use the existing one
-  // if any items exist; otherwise take it from the body (first-item case).
+  // Campaign-level as_account is the source of truth. Fall back to existing
+  // items (for legacy campaigns without the column) and finally the body.
   const existing = db.prepare('SELECT as_account FROM instagram_action_queue WHERE campaign_id = ? LIMIT 1').get(cid);
-  const acct = existing?.as_account || (as_account && String(as_account).trim().replace(/^@/, '').toLowerCase());
+  const acct = campaign.as_account
+    || existing?.as_account
+    || (as_account && String(as_account).trim().replace(/^@/, '').toLowerCase());
   if (!acct) return res.status(400).json({ error: 'as_account required for the first item' });
 
   const at = action_type === 'reply' ? 'reply' : 'like';
