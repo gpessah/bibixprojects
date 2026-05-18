@@ -760,52 +760,182 @@ router.get('/scraped-posts', authenticateFlexible, (req, res) => {
 // tabs in parallel, runs likes/replies, marks rows done. After all of an
 // account's rows are done, switches accounts (respecting cooldown).
 
-// Monday creates a campaign + its queue items
+// Monday creates a campaign (starts as 'draft' — items added separately,
+// then explicitly Sent to transition into the run queue).
 router.post('/action-campaigns', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  const { name, as_account, concurrency, start_at, items } = req.body || {};
+  const { name, as_account, concurrency, start_at, items, free_text } = req.body || {};
   if (!as_account) return res.status(400).json({ error: 'as_account required' });
-  if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'items required (array of {post_url, action_type, count, reply_source, reply_texts})' });
-  }
   const cid = uuidv4();
   const conc = Math.max(1, Math.min(6, parseInt(concurrency, 10) || 6));
-  const totalReq = items.reduce((sum, it) => sum + (Number(it.count) || 0), 0);
   const cleanedAcct = String(as_account).trim().replace(/^@/, '').toLowerCase();
+  // Auto-format name if not supplied: "@account YYYY-MM-DD HH:mm — free_text"
+  let finalName = name && name.trim();
+  if (!finalName) {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    finalName = `@${cleanedAcct} ${stamp}` + (free_text ? ` — ${String(free_text).trim()}` : '');
+  }
   db.prepare(`
     INSERT INTO instagram_action_campaigns
       (id, user_id, name, status, total_requested, concurrency, start_at)
-    VALUES (?, ?, ?, 'pending', ?, ?, ?)
-  `).run(cid, uid, name || null, totalReq, conc, start_at || null);
+    VALUES (?, ?, ?, 'draft', 0, ?, ?)
+  `).run(cid, uid, finalName, conc, start_at || null);
 
-  const insertItem = db.prepare(`
-    INSERT INTO instagram_action_queue
-      (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const it of items) {
-    const actionType = it.action_type === 'reply' ? 'reply' : 'like';
-    const count = Math.max(1, parseInt(it.count, 10) || 1);
-    insertItem.run(
-      uuidv4(), cid, uid, cleanedAcct,
-      String(it.post_url || ''),
-      actionType, count,
-      actionType === 'reply' ? (it.reply_source || 'default') : null,
-      actionType === 'reply' && Array.isArray(it.reply_texts) ? JSON.stringify(it.reply_texts) : null
-    );
+  // Optionally seed with items if the caller passed any. Enforce the 6-item cap.
+  if (Array.isArray(items) && items.length > 0) {
+    if (items.length > 6) return res.status(400).json({ error: 'A campaign can hold at most 6 items.' });
+    const insertItem = db.prepare(`
+      INSERT INTO instagram_action_queue
+        (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    let total = 0;
+    for (const it of items) {
+      const actionType = it.action_type === 'reply' ? 'reply' : 'like';
+      const count = Math.max(1, parseInt(it.count, 10) || 1);
+      total += count;
+      insertItem.run(
+        uuidv4(), cid, uid, cleanedAcct,
+        String(it.post_url || ''),
+        actionType, count,
+        actionType === 'reply' ? (it.reply_source || 'default') : null,
+        actionType === 'reply' && Array.isArray(it.reply_texts) ? JSON.stringify(it.reply_texts) : null
+      );
+    }
+    db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(total, cid);
   }
-  res.json(db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(cid));
+  // Store as_account on a transient column so we can return it (the column
+  // doesn't actually exist on the campaigns table; we read it from items.)
+  const row = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(cid);
+  res.json({ ...row, as_account: cleanedAcct });
 });
 
-// Monday lists this user's action campaigns (newest first)
+// Monday lists this user's action campaigns. Includes item count + the
+// as_account derived from any of the campaign's items so the UI can display
+// the target IG account on the list page.
 router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const rows = db.prepare(`
-    SELECT * FROM instagram_action_campaigns
-    WHERE user_id = ?
-    ORDER BY created_at DESC LIMIT 100
+    SELECT c.*,
+           (SELECT COUNT(*) FROM instagram_action_queue q WHERE q.campaign_id = c.id) AS items_count,
+           (SELECT q.as_account FROM instagram_action_queue q WHERE q.campaign_id = c.id LIMIT 1) AS as_account
+    FROM instagram_action_campaigns c
+    WHERE c.user_id = ?
+    ORDER BY c.created_at DESC LIMIT 100
   `).all(uid);
   res.json(rows);
+});
+
+// Add a single item to an existing campaign (draft or pending/running).
+// Enforces the per-campaign 6-item cap.
+router.post('/action-campaigns/:id/items', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const cid = req.params.id;
+  const campaign = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ? AND user_id = ?').get(cid, uid);
+  if (!campaign) return res.status(404).json({ error: 'not found' });
+  if (campaign.status === 'completed' || campaign.status === 'cancelled') {
+    return res.status(400).json({ error: 'Cannot add items to a completed or cancelled campaign.' });
+  }
+  const current = db.prepare('SELECT COUNT(*) AS n FROM instagram_action_queue WHERE campaign_id = ?').get(cid);
+  if ((current?.n || 0) >= 6) return res.status(400).json({ error: 'Campaign already has 6 items (max).' });
+
+  const { post_url, action_type, count, reply_source, reply_texts, as_account } = req.body || {};
+  if (!post_url) return res.status(400).json({ error: 'post_url required' });
+  // The campaign's as_account is fixed across all items. Use the existing one
+  // if any items exist; otherwise take it from the body (first-item case).
+  const existing = db.prepare('SELECT as_account FROM instagram_action_queue WHERE campaign_id = ? LIMIT 1').get(cid);
+  const acct = existing?.as_account || (as_account && String(as_account).trim().replace(/^@/, '').toLowerCase());
+  if (!acct) return res.status(400).json({ error: 'as_account required for the first item' });
+
+  const at = action_type === 'reply' ? 'reply' : 'like';
+  const cnt = Math.max(1, parseInt(count, 10) || 1);
+  const itemId = uuidv4();
+  db.prepare(`
+    INSERT INTO instagram_action_queue
+      (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    itemId, cid, uid, acct, String(post_url),
+    at, cnt,
+    at === 'reply' ? (reply_source || 'default') : null,
+    at === 'reply' && Array.isArray(reply_texts) ? JSON.stringify(reply_texts) : null
+  );
+
+  // Refresh campaign totals
+  const stats = db.prepare(`
+    SELECT SUM(count_requested) AS req FROM instagram_action_queue WHERE campaign_id = ?
+  `).get(cid);
+  db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(stats?.req || 0, cid);
+
+  res.json(db.prepare('SELECT * FROM instagram_action_queue WHERE id = ?').get(itemId));
+});
+
+// Edit an item's count_requested (only allowed while it's still pending —
+// once claimed/running/completed, edits are rejected).
+router.patch('/action-campaigns/:id/items/:itemId', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const item = db.prepare(`
+    SELECT * FROM instagram_action_queue
+    WHERE id = ? AND campaign_id = ? AND user_id = ?
+  `).get(req.params.itemId, req.params.id, uid);
+  if (!item) return res.status(404).json({ error: 'item not found' });
+  if (item.status !== 'pending') {
+    return res.status(400).json({ error: `Cannot edit item with status '${item.status}'.` });
+  }
+  const cnt = Math.max(1, parseInt(req.body?.count_requested, 10) || 1);
+  db.prepare(`UPDATE instagram_action_queue SET count_requested = ? WHERE id = ?`).run(cnt, item.id);
+
+  const stats = db.prepare(`
+    SELECT SUM(count_requested) AS req FROM instagram_action_queue WHERE campaign_id = ?
+  `).get(req.params.id);
+  db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(stats?.req || 0, req.params.id);
+
+  res.json({ ok: true });
+});
+
+// Remove an item (only if it's pending).
+router.delete('/action-campaigns/:id/items/:itemId', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const item = db.prepare(`
+    SELECT * FROM instagram_action_queue
+    WHERE id = ? AND campaign_id = ? AND user_id = ?
+  `).get(req.params.itemId, req.params.id, uid);
+  if (!item) return res.status(404).json({ error: 'item not found' });
+  if (item.status !== 'pending') {
+    return res.status(400).json({ error: `Cannot remove item with status '${item.status}'.` });
+  }
+  db.prepare('DELETE FROM instagram_action_queue WHERE id = ?').run(item.id);
+
+  const stats = db.prepare(`
+    SELECT SUM(count_requested) AS req FROM instagram_action_queue WHERE campaign_id = ?
+  `).get(req.params.id);
+  db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(stats?.req || 0, req.params.id);
+
+  res.json({ ok: true });
+});
+
+// Send a draft campaign — transitions to 'pending' so the extension picks it
+// up on its next poll cycle. Refuses if the campaign has no items.
+router.post('/action-campaigns/:id/send', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const campaign = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!campaign) return res.status(404).json({ error: 'not found' });
+  if (campaign.status !== 'draft') return res.status(400).json({ error: `Campaign is not a draft (status=${campaign.status}).` });
+  const items = db.prepare('SELECT COUNT(*) AS n FROM instagram_action_queue WHERE campaign_id = ?').get(req.params.id);
+  if ((items?.n || 0) === 0) return res.status(400).json({ error: 'Cannot send a campaign with no items.' });
+  db.prepare(`UPDATE instagram_action_campaigns SET status = 'pending' WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Delete a campaign + its items entirely. Allowed in any status.
+router.delete('/action-campaigns/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const r = db.prepare('DELETE FROM instagram_action_campaigns WHERE id = ? AND user_id = ?').run(req.params.id, uid);
+  if (r.changes === 0) return res.status(404).json({ error: 'not found' });
+  db.prepare('DELETE FROM instagram_action_queue WHERE campaign_id = ? AND user_id = ?').run(req.params.id, uid);
+  res.json({ ok: true });
 });
 
 // Monday: campaign detail + per-action breakdown

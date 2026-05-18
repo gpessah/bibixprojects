@@ -21,11 +21,24 @@ interface ScrapedSummary {
 }
 interface ActionCampaign {
   id: string; name: string | null;
-  status: 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  status: 'draft' | 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
   total_requested: number; total_completed: number; concurrency: number;
   consecutive_failures: number; start_at: string | null;
   started_at: string | null; ended_at: string | null;
   error_message: string | null; created_at: string;
+}
+interface ActionCampaignSummary extends ActionCampaign {
+  items_count: number;
+  as_account: string | null;
+}
+interface ActionItem {
+  id: string; campaign_id: string; user_id: string; as_account: string;
+  post_url: string; action_type: 'like' | 'reply';
+  count_requested: number; count_done: number;
+  reply_source: string | null; reply_texts: string | null;
+  status: 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled';
+  claimed_at: string | null; started_at: string | null; completed_at: string | null;
+  error_message: string | null;
 }
 
 interface ScheduledPost {
@@ -432,63 +445,67 @@ export default function InstagramPage() {
     } catch (_) { setViewingPosts([]); }
   }
 
-  // ── Action queue (likes + replies campaigns) ─────────────────────────────
-  // Per-post account assignment: each selected post gets its own as_account
-  // and count. On submit we group by as_account and create one campaign per
-  // account so the extension can drain each account's bulk before switching.
-  type PostAssignment = { account: string; count: number };
+  // ── Action campaigns (drafts that you build up, then Send) ───────────────
+  // Flow: create empty draft → add up to 6 items (from Research or by URL)
+  // → click Send → extension picks it up. Items can be edited (count) or
+  // removed while still 'pending'; new items can be appended even after Send
+  // (up to the 6-cap), as long as the campaign isn't completed/cancelled.
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
-  const [showActionModal, setShowActionModal] = useState(false);
-  const [acActionType, setAcActionType] = useState<'like' | 'reply'>('like');
-  const [acAssignments, setAcAssignments] = useState<Record<string, PostAssignment>>({});
-  const [acDefaultAccount, setAcDefaultAccount] = useState('');
-  const [acDefaultCount, setAcDefaultCount] = useState('3');
-  const [acReplySource, setAcReplySource] = useState<'default' | 'custom' | 'ai'>('default');
-  const [acReplyText, setAcReplyText] = useState('');
-  const [acConcurrency, setAcConcurrency] = useState('6');
-  const [acName, setAcName] = useState('');
-  const [acStartAt, setAcStartAt] = useState('');
-  const [acBusy, setAcBusy] = useState(false);
-  const [actionCampaigns, setActionCampaigns] = useState<ActionCampaign[]>([]);
+  const [actionCampaigns, setActionCampaigns] = useState<ActionCampaignSummary[]>([]);
+  const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+  const [expandedItems, setExpandedItems] = useState<ActionItem[]>([]);
 
-  function openActionModal() {
-    const defAcct = igAccounts[0] || '';
-    setAcDefaultAccount(defAcct);
-    const initial: Record<string, PostAssignment> = {};
-    for (const p of viewingPosts) {
-      if (selectedPosts.has(p.id)) initial[p.id] = { account: defAcct, count: 3 };
-    }
-    setAcAssignments(initial);
-    setShowActionModal(true);
-  }
-  function applyDefaultsToAll() {
-    const count = Math.max(1, parseInt(acDefaultCount, 10) || 1);
-    const updated: Record<string, PostAssignment> = {};
-    for (const id of Object.keys(acAssignments)) {
-      updated[id] = { account: acDefaultAccount, count };
-    }
-    setAcAssignments(updated);
-  }
+  // Create-campaign modal
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createAccount, setCreateAccount] = useState('');
+  const [createFreeText, setCreateFreeText] = useState('');
+  const [createConcurrency, setCreateConcurrency] = useState('6');
+  const [createBusy, setCreateBusy] = useState(false);
+
+  // Add-to-campaign modal (triggered from Research)
+  const [showAddToCampaign, setShowAddToCampaign] = useState(false);
+  const [addToCampaignId, setAddToCampaignId] = useState('');
+  const [addToActionType, setAddToActionType] = useState<'like' | 'reply'>('like');
+  const [addToCount, setAddToCount] = useState('3');
+  const [addToReplySource, setAddToReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [addToReplyText, setAddToReplyText] = useState('');
+  const [addToBusy, setAddToBusy] = useState(false);
+
+  // Add-by-URL form inside campaign detail
+  const [byUrlInput, setByUrlInput] = useState('');
+  const [byUrlActionType, setByUrlActionType] = useState<'like' | 'reply'>('like');
+  const [byUrlCount, setByUrlCount] = useState('3');
+  const [byUrlReplySource, setByUrlReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [byUrlReplyText, setByUrlReplyText] = useState('');
+  const [byUrlBusy, setByUrlBusy] = useState(false);
 
   const loadActionCampaigns = async () => {
     try {
       const res = await api.get(`/instagram/action-campaigns${qs}`);
-      setActionCampaigns(Array.isArray(res.data) ? res.data as ActionCampaign[] : []);
+      setActionCampaigns(Array.isArray(res.data) ? res.data as ActionCampaignSummary[] : []);
     } catch (_) { /* keep state */ }
+  };
+  const loadExpandedItems = async (id: string) => {
+    try {
+      const res = await api.get(`/instagram/action-campaigns/${id}${qs}`);
+      setExpandedItems(Array.isArray(res.data?.items) ? res.data.items as ActionItem[] : []);
+    } catch (_) { setExpandedItems([]); }
   };
 
   useEffect(() => {
     if (tab === 'campaigns') loadActionCampaigns();
   }, [tab, asUser]);
 
-  // Auto-refresh while any campaign is pending/running
   useEffect(() => {
     if (tab !== 'campaigns') return;
     const active = actionCampaigns.some(c => c.status === 'pending' || c.status === 'running');
-    if (!active) return;
-    const id = setInterval(loadActionCampaigns, 5000);
+    if (!active && !expandedCampaign) return;
+    const id = setInterval(() => {
+      loadActionCampaigns();
+      if (expandedCampaign) loadExpandedItems(expandedCampaign);
+    }, 5000);
     return () => clearInterval(id);
-  }, [tab, actionCampaigns, asUser]);
+  }, [tab, actionCampaigns, expandedCampaign, asUser]);
 
   function togglePostSelection(postId: string) {
     setSelectedPosts(prev => {
@@ -498,62 +515,142 @@ export default function InstagramPage() {
     });
   }
 
-  async function submitActionCampaign() {
-    const conc = Math.max(1, Math.min(6, parseInt(acConcurrency, 10) || 6));
+  async function createCampaign() {
+    if (!createAccount) { alert('Pick an Instagram account for the campaign.'); return; }
+    const conc = Math.max(1, Math.min(6, parseInt(createConcurrency, 10) || 6));
+    setCreateBusy(true);
+    try {
+      const res = await api.post(`/instagram/action-campaigns${qs}`, {
+        as_account: createAccount,
+        concurrency: conc,
+        free_text: createFreeText || null,
+      });
+      setShowCreateModal(false);
+      setCreateFreeText('');
+      await loadActionCampaigns();
+      // Open it for immediate item-adding
+      const newId = res.data?.id;
+      if (newId) { setExpandedCampaign(newId); loadExpandedItems(newId); }
+    } catch (e: unknown) {
+      alert('Failed to create campaign: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setCreateBusy(false); }
+  }
+
+  function openAddToCampaign() {
+    // Default to the most-recent draft if any, else first non-completed campaign
+    const eligible = actionCampaigns.filter(c =>
+      c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6
+    );
+    setAddToCampaignId(eligible[0]?.id || '');
+    setShowAddToCampaign(true);
+  }
+
+  async function submitAddToCampaign() {
+    if (!addToCampaignId) { alert('Pick a campaign first (or create a new one).'); return; }
+    const count = Math.max(1, parseInt(addToCount, 10) || 1);
     const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
     if (selected.length === 0) { alert('No posts selected.'); return; }
-
-    const customReplies = acReplySource === 'custom'
-      ? acReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
-      : [];
-    if (acActionType === 'reply' && acReplySource === 'custom' && customReplies.length === 0) {
+    const camp = actionCampaigns.find(c => c.id === addToCampaignId);
+    const remaining = camp ? 6 - (camp.items_count ?? 0) : 6;
+    if (selected.length > remaining) {
+      alert(`That campaign has room for only ${remaining} more post(s). You selected ${selected.length}. Remove some or create a new campaign.`);
+      return;
+    }
+    const customReplies = addToReplySource === 'custom'
+      ? addToReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
+    if (addToActionType === 'reply' && addToReplySource === 'custom' && customReplies.length === 0) {
       alert('Custom reply source picked but no reply text provided.'); return;
     }
-
-    // Group selected posts by their assigned account
-    const byAccount: Record<string, Array<{ post_url: string; action_type: 'like'|'reply'; count: number; reply_source?: string; reply_texts?: string[] }>> = {};
-    for (const p of selected) {
-      const a = acAssignments[p.id];
-      if (!a || !a.account || a.count <= 0) {
-        alert(`Post ${p.shortcode} is missing an account or has count 0. Set one for every selected post.`);
-        return;
-      }
-      if (!byAccount[a.account]) byAccount[a.account] = [];
-      byAccount[a.account].push({
-        post_url: p.post_url,
-        action_type: acActionType,
-        count: a.count,
-        reply_source: acActionType === 'reply' ? acReplySource : undefined,
-        reply_texts: acActionType === 'reply' && acReplySource === 'custom' ? customReplies : undefined,
-      });
-    }
-    const accounts = Object.keys(byAccount);
-    if (accounts.length === 0) { alert('No valid assignments to queue.'); return; }
-
-    setAcBusy(true);
+    setAddToBusy(true);
     try {
-      // One campaign per account so the extension processes each account's
-      // bulk in full before switching to the next.
-      const baseName = acName || `${acActionType === 'like' ? 'Likes' : 'Replies'} — ${new Date().toLocaleDateString()}`;
-      const startIso = acStartAt ? new Date(acStartAt).toISOString() : null;
-      await Promise.all(accounts.map(account =>
-        api.post(`/instagram/action-campaigns${qs}`, {
-          name: accounts.length > 1 ? `${baseName} (@${account})` : baseName,
-          as_account: account,
-          concurrency: conc,
-          start_at: startIso,
-          items: byAccount[account],
-        })
-      ));
-      setShowActionModal(false);
+      // Add items sequentially to keep the 6-cap consistent. (Parallel would
+      // race on the server-side count check.)
+      for (const p of selected) {
+        await api.post(`/instagram/action-campaigns/${addToCampaignId}/items${qs}`, {
+          post_url: p.post_url,
+          action_type: addToActionType,
+          count,
+          reply_source: addToActionType === 'reply' ? addToReplySource : undefined,
+          reply_texts: addToActionType === 'reply' && addToReplySource === 'custom' ? customReplies : undefined,
+        });
+      }
+      setShowAddToCampaign(false);
       setSelectedPosts(new Set());
-      setAcName(''); setAcStartAt(''); setAcReplyText('');
+      setAddToReplyText('');
       await loadActionCampaigns();
-      const totalActions = Object.values(byAccount).reduce((sum, items) => sum + items.length, 0);
-      alert(`${accounts.length} campaign${accounts.length === 1 ? '' : 's'} queued — ${totalActions} action${totalActions === 1 ? '' : 's'} total across ${selected.length} post${selected.length === 1 ? '' : 's'}.`);
     } catch (e: unknown) {
-      alert('Failed to queue campaign(s): ' + (e instanceof Error ? e.message : String(e)));
-    } finally { setAcBusy(false); }
+      alert('Failed to add to campaign: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setAddToBusy(false); }
+  }
+
+  async function addByUrl(campaignId: string) {
+    const url = byUrlInput.trim();
+    if (!url) { alert('Paste an Instagram post URL.'); return; }
+    const count = Math.max(1, parseInt(byUrlCount, 10) || 1);
+    const customReplies = byUrlReplySource === 'custom'
+      ? byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
+    if (byUrlActionType === 'reply' && byUrlReplySource === 'custom' && customReplies.length === 0) {
+      alert('Custom reply source picked but no reply text provided.'); return;
+    }
+    setByUrlBusy(true);
+    try {
+      await api.post(`/instagram/action-campaigns/${campaignId}/items${qs}`, {
+        post_url: url,
+        action_type: byUrlActionType,
+        count,
+        reply_source: byUrlActionType === 'reply' ? byUrlReplySource : undefined,
+        reply_texts: byUrlActionType === 'reply' && byUrlReplySource === 'custom' ? customReplies : undefined,
+      });
+      setByUrlInput('');
+      setByUrlReplyText('');
+      await loadActionCampaigns();
+      await loadExpandedItems(campaignId);
+    } catch (e: unknown) {
+      alert('Failed to add: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setByUrlBusy(false); }
+  }
+
+  async function patchItemCount(campaignId: string, itemId: string, count: number) {
+    try {
+      await api.patch(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`, {
+        count_requested: Math.max(1, count),
+      });
+      await loadExpandedItems(campaignId);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to update count: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function removeItem(campaignId: string, itemId: string) {
+    if (!confirm('Remove this post from the campaign?')) return;
+    try {
+      await api.delete(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`);
+      await loadExpandedItems(campaignId);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to remove: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function sendCampaign(id: string) {
+    try {
+      await api.post(`/instagram/action-campaigns/${id}/send${qs}`);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to send: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function deleteCampaign(id: string) {
+    if (!confirm('Delete this campaign and all its items permanently?')) return;
+    try {
+      await api.delete(`/instagram/action-campaigns/${id}${qs}`);
+      if (expandedCampaign === id) { setExpandedCampaign(null); setExpandedItems([]); }
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
   }
 
   async function cancelActionCampaign(id: string) {
@@ -1269,9 +1366,9 @@ export default function InstagramPage() {
                     <span className="text-sm text-gray-600">{selectedPosts.size} selected</span>
                     <button onClick={() => setSelectedPosts(new Set())}
                       className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
-                    <button onClick={openActionModal}
+                    <button onClick={openAddToCampaign}
                       className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-                      Add to action queue
+                      Add to campaign
                     </button>
                   </div>
                 )}
@@ -1327,144 +1424,126 @@ export default function InstagramPage() {
           </div>
         )}
 
-        {/* ══ Add-to-action-queue modal ══ */}
-        {showActionModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowActionModal(false)}>
-            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        {/* ══ Create campaign modal ══ */}
+        {showCreateModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">Add to action queue</h3>
-                <button onClick={() => setShowActionModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+                <h3 className="text-lg font-semibold text-gray-900">New campaign</h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                Assign an Instagram account and a count to each of the <b>{selectedPosts.size}</b> selected post{selectedPosts.size === 1 ? '' : 's'}.
-                The extension creates one campaign per unique account — actions for one account run to completion in parallel tabs before switching to the next.
+                The campaign starts as a draft. Add up to 6 posts (from Research or by URL), then click <b>Send</b> to start it.
               </p>
-
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Action type</label>
-                  <select value={acActionType} onChange={e => setAcActionType(e.target.value as 'like'|'reply')}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                    <option value="like">Like comments</option>
-                    <option value="reply">Reply to comments</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs)</label>
-                  <input type="number" min={1} max={6} value={acConcurrency}
-                    onChange={e => setAcConcurrency(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                </div>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Instagram account</label>
+                <select value={createAccount} onChange={e => setCreateAccount(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— pick one —</option>
+                  {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                </select>
               </div>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Free text (appended to the auto-generated name)</label>
+                <input type="text" value={createFreeText} onChange={e => setCreateFreeText(e.target.value)}
+                  placeholder="e.g. fashion influencers"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                <p className="text-xs text-gray-400 mt-1">
+                  Name will be: <code className="bg-gray-100 px-1 rounded">@{createAccount || 'account'} {new Date().toLocaleDateString()} {new Date().toLocaleTimeString().slice(0,5)}{createFreeText ? ` — ${createFreeText}` : ''}</code>
+                </p>
+              </div>
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs in parallel, 1–6)</label>
+                <input type="number" min={1} max={6} value={createConcurrency}
+                  onChange={e => setCreateConcurrency(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={createCampaign} disabled={createBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {createBusy ? 'Creating…' : 'Create draft'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-              {acActionType === 'reply' && (
+        {/* ══ Add-to-campaign modal (from Research) ══ */}
+        {showAddToCampaign && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowAddToCampaign(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Add to campaign</h3>
+                <button onClick={() => setShowAddToCampaign(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a campaign. Each campaign holds up to 6 posts total.
+              </p>
+              {actionCampaigns.filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6).length === 0 ? (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                  No campaigns available. <button className="underline" onClick={() => { setShowAddToCampaign(false); setShowCreateModal(true); }}>Create one first</button>.
+                </p>
+              ) : (
                 <>
                   <div className="mb-3">
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Reply text source</label>
-                    <select value={acReplySource} onChange={e => setAcReplySource(e.target.value as 'default'|'custom'|'ai')}
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Campaign</label>
+                    <select value={addToCampaignId} onChange={e => setAddToCampaignId(e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                      <option value="default">Built-in defaults (generic friendly replies)</option>
-                      <option value="custom">Custom text (one per line or comma-separated)</option>
-                      <option value="ai">AI (Groq — requires API key in extension)</option>
+                      <option value="">— pick a campaign —</option>
+                      {actionCampaigns
+                        .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6)
+                        .map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} — {c.status} ({c.items_count ?? 0}/6, room for {6 - (c.items_count ?? 0)})
+                          </option>
+                        ))}
                     </select>
                   </div>
-                  {acReplySource === 'custom' && (
-                    <div className="mb-3">
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Custom replies</label>
-                      <textarea value={acReplyText} onChange={e => setAcReplyText(e.target.value)}
-                        placeholder="Amazing! 🔥&#10;Love this 😍&#10;So true 💯"
-                        rows={4}
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Action type</label>
+                      <select value={addToActionType} onChange={e => setAddToActionType(e.target.value as 'like'|'reply')}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                        <option value="like">Like comments</option>
+                        <option value="reply">Reply to comments</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Count per post</label>
+                      <input type="number" min={1} max={100} value={addToCount}
+                        onChange={e => setAddToCount(e.target.value)}
                         className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                     </div>
+                  </div>
+                  {addToActionType === 'reply' && (
+                    <>
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Reply text source</label>
+                        <select value={addToReplySource} onChange={e => setAddToReplySource(e.target.value as 'default'|'custom'|'ai')}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                          <option value="default">Built-in defaults</option>
+                          <option value="custom">Custom text</option>
+                          <option value="ai">AI (Groq)</option>
+                        </select>
+                      </div>
+                      {addToReplySource === 'custom' && (
+                        <div className="mb-3">
+                          <textarea value={addToReplyText} onChange={e => setAddToReplyText(e.target.value)}
+                            placeholder="Amazing! 🔥&#10;Love this 😍"
+                            rows={3}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}
-
-              {/* Bulk-apply shortcut */}
-              <div className="flex items-end gap-2 mb-2 p-3 bg-gray-50 rounded-lg">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Default account</label>
-                  <select value={acDefaultAccount} onChange={e => setAcDefaultAccount(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white">
-                    <option value="">— pick one —</option>
-                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
-                  </select>
-                </div>
-                <div className="w-24">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Default count</label>
-                  <input type="number" min={1} max={100} value={acDefaultCount}
-                    onChange={e => setAcDefaultCount(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white" />
-                </div>
-                <button onClick={applyDefaultsToAll}
-                  className="px-3 py-1.5 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 whitespace-nowrap">
-                  Apply to all rows
-                </button>
-              </div>
-
-              {/* Per-post assignment table */}
-              <div className="border border-gray-200 rounded-lg overflow-hidden mb-3 max-h-64 overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr className="text-left text-xs text-gray-500">
-                      <th className="py-2 px-3 font-medium">Post</th>
-                      <th className="py-2 px-3 font-medium">Run as</th>
-                      <th className="py-2 px-3 font-medium w-24">Count</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {viewingPosts.filter(p => selectedPosts.has(p.id)).map(p => {
-                      const a = acAssignments[p.id] || { account: '', count: 3 };
-                      return (
-                        <tr key={p.id} className="border-t border-gray-100">
-                          <td className="py-2 px-3 text-xs text-gray-600">
-                            <span className="capitalize text-gray-400 mr-1">{p.post_type}</span>
-                            {p.shortcode}
-                          </td>
-                          <td className="py-2 px-3">
-                            <select value={a.account}
-                              onChange={e => setAcAssignments(prev => ({ ...prev, [p.id]: { ...a, account: e.target.value } }))}
-                              className="w-full border border-gray-200 rounded px-2 py-1 text-sm">
-                              <option value="">— pick —</option>
-                              {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
-                            </select>
-                          </td>
-                          <td className="py-2 px-3">
-                            <input type="number" min={1} max={100} value={a.count}
-                              onChange={e => setAcAssignments(prev => ({ ...prev, [p.id]: { ...a, count: Math.max(1, parseInt(e.target.value, 10) || 1) } }))}
-                              className="w-full border border-gray-200 rounded px-2 py-1 text-sm" />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Campaign name <span className="text-gray-400">(optional)</span></label>
-                  <input type="text" value={acName} placeholder="auto-generated"
-                    onChange={e => setAcName(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(ASAP if empty)</span></label>
-                  <input type="datetime-local" value={acStartAt}
-                    onChange={e => setAcStartAt(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                </div>
-              </div>
-
-              <p className="text-xs text-gray-500 mb-3">
-                <b>Tip:</b> 4–6 concurrent tabs is fast but Instagram pattern-detects aggressive activity. Lower it to 2–3 for safer runs. Campaigns auto-pause after 3 consecutive failures.
-              </p>
-
-              <div className="flex gap-2 justify-end">
-                <button onClick={() => setShowActionModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
-                <button onClick={submitActionCampaign} disabled={acBusy}
+              <div className="flex gap-2 justify-end mt-2">
+                <button onClick={() => setShowAddToCampaign(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={submitAddToCampaign} disabled={addToBusy || !addToCampaignId}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                  {acBusy ? 'Queuing…' : 'Queue campaign(s)'}
+                  {addToBusy ? 'Adding…' : 'Add to campaign'}
                 </button>
               </div>
             </div>
@@ -1475,15 +1554,23 @@ export default function InstagramPage() {
         {tab === 'campaigns' && (
           <div className="space-y-3">
 
-            {/* Scheduled action campaigns (new) */}
-            {actionCampaigns.length > 0 && (
-              <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold text-gray-900">Scheduled action campaigns</h3>
+            {/* Action campaigns header + create button */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Action campaigns <span className="text-gray-400 font-normal">({actionCampaigns.length})</span></h3>
+                <div className="flex items-center gap-2">
                   <button onClick={loadActionCampaigns} className="text-gray-400 hover:text-gray-600" title="Refresh">
                     <RefreshCw size={16} />
                   </button>
+                  <button onClick={() => { setCreateAccount(igAccounts[0] || ''); setShowCreateModal(true); }}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
+                    <Plus size={14} /> New campaign
+                  </button>
                 </div>
+              </div>
+              {actionCampaigns.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No campaigns yet. Click <b>+ New campaign</b> to create your first one.</p>
+              ) : (
                 <div className="space-y-2">
                   {actionCampaigns.map(c => {
                     const elapsedMs = c.started_at && c.ended_at
@@ -1491,49 +1578,171 @@ export default function InstagramPage() {
                       : c.started_at ? Date.now() - new Date(c.started_at).getTime() : 0;
                     const minutes = Math.max(0, Math.round(elapsedMs / 60000));
                     const pct = c.total_requested > 0 ? Math.round((c.total_completed / c.total_requested) * 100) : 0;
+                    const isExpanded = expandedCampaign === c.id;
                     return (
-                      <div key={c.id} className="border border-gray-100 rounded-lg p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-gray-900 text-sm">{c.name || `Campaign ${c.id.slice(0, 8)}`}</span>
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              c.status === 'completed' ? 'bg-green-100 text-green-700' :
-                              c.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
-                              c.status === 'paused'    ? 'bg-yellow-100 text-yellow-700' :
-                              c.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
-                              c.status === 'failed'    ? 'bg-red-100 text-red-700'     :
-                                                         'bg-gray-100 text-gray-600'
-                            }`}>{c.status}</span>
+                      <div key={c.id} className="border border-gray-100 rounded-lg">
+                        <div className="p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <button onClick={() => {
+                              if (isExpanded) { setExpandedCampaign(null); }
+                              else { setExpandedCampaign(c.id); loadExpandedItems(c.id); }
+                            }} className="flex items-center gap-2 text-left flex-1">
+                              <ChevronDown size={14} className={`text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                              <span className="font-medium text-gray-900 text-sm">{c.name || `Campaign ${c.id.slice(0, 8)}`}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                c.status === 'draft'     ? 'bg-amber-100 text-amber-700'  :
+                                c.status === 'completed' ? 'bg-green-100 text-green-700'  :
+                                c.status === 'running'   ? 'bg-blue-100 text-blue-700'    :
+                                c.status === 'paused'    ? 'bg-yellow-100 text-yellow-700':
+                                c.status === 'cancelled' ? 'bg-gray-100 text-gray-600'    :
+                                c.status === 'failed'    ? 'bg-red-100 text-red-700'      :
+                                                           'bg-gray-100 text-gray-600'
+                              }`}>{c.status}</span>
+                              <span className="text-xs text-gray-500">{c.items_count ?? 0}/6 posts</span>
+                            </button>
+                            <div className="flex items-center gap-2">
+                              {c.status === 'draft' && (
+                                <button onClick={() => sendCampaign(c.id)}
+                                  className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Send</button>
+                              )}
+                              {(c.status === 'running' || c.status === 'pending') && (
+                                <button onClick={() => cancelActionCampaign(c.id)}
+                                  className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                              )}
+                              {(c.status === 'paused' || c.status === 'failed') && (
+                                <button onClick={() => resumeActionCampaign(c.id)}
+                                  className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
+                              )}
+                              <button onClick={() => deleteCampaign(c.id)} title="Delete"
+                                className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {(c.status === 'running' || c.status === 'pending') && (
-                              <button onClick={() => cancelActionCampaign(c.id)}
-                                className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                          {c.status !== 'draft' && (
+                            <>
+                              <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2 pl-6">
+                                <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
+                                {c.as_account && <span>@{c.as_account}</span>}
+                                <span>Concurrency: {c.concurrency}</span>
+                                {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
+                                {c.ended_at && <span>Ended: {fmt(c.ended_at)}</span>}
+                                {c.started_at && <span>Elapsed: {minutes} min</span>}
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden ml-6" style={{width: 'calc(100% - 1.5rem)'}}>
+                                <div className={`h-full ${c.status === 'paused' || c.status === 'failed' ? 'bg-red-400' : c.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${pct}%` }} />
+                              </div>
+                            </>
+                          )}
+                          {c.error_message && <p className="text-xs text-red-600 mt-2 pl-6">{c.error_message}</p>}
+                        </div>
+
+                        {/* Expanded detail view */}
+                        {isExpanded && (
+                          <div className="border-t border-gray-100 p-3 bg-gray-50">
+                            {expandedItems.length === 0 ? (
+                              <p className="text-xs text-gray-500 py-2">No posts yet. Add one below.</p>
+                            ) : (
+                              <table className="w-full text-sm mb-3">
+                                <thead>
+                                  <tr className="text-left text-xs text-gray-500">
+                                    <th className="py-1 pr-2 font-medium">Post</th>
+                                    <th className="py-1 pr-2 font-medium">Action</th>
+                                    <th className="py-1 pr-2 font-medium w-20">Count</th>
+                                    <th className="py-1 pr-2 font-medium">Status</th>
+                                    <th className="py-1 pr-2 font-medium w-8"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {expandedItems.map(it => (
+                                    <tr key={it.id} className="border-t border-gray-200">
+                                      <td className="py-1.5 pr-2">
+                                        <a href={it.post_url} target="_blank" rel="noreferrer"
+                                          className="text-blue-600 hover:underline text-xs flex items-center gap-1">
+                                          {it.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || it.post_url.slice(-15)}
+                                          <ExternalLink size={10} />
+                                        </a>
+                                      </td>
+                                      <td className="py-1.5 pr-2 text-gray-600 capitalize text-xs">{it.action_type}</td>
+                                      <td className="py-1.5 pr-2">
+                                        {it.status === 'pending' ? (
+                                          <input type="number" min={1} max={100} defaultValue={it.count_requested}
+                                            onBlur={e => {
+                                              const v = parseInt(e.target.value, 10);
+                                              if (v !== it.count_requested && v >= 1) patchItemCount(c.id, it.id, v);
+                                            }}
+                                            className="w-16 border border-gray-200 rounded px-1 py-0.5 text-xs bg-white" />
+                                        ) : (
+                                          <span className="text-xs text-gray-600">{it.count_done}/{it.count_requested}</span>
+                                        )}
+                                      </td>
+                                      <td className="py-1.5 pr-2">
+                                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                          it.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                          it.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                                          it.status === 'claimed'   ? 'bg-blue-50 text-blue-600'    :
+                                          it.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                          it.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
+                                                                      'bg-amber-100 text-amber-700'
+                                        }`}>{it.status}</span>
+                                      </td>
+                                      <td className="py-1.5 pr-2">
+                                        {it.status === 'pending' && (
+                                          <button onClick={() => removeItem(c.id, it.id)} title="Remove"
+                                            className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             )}
-                            {(c.status === 'paused' || c.status === 'failed') && (
-                              <button onClick={() => resumeActionCampaign(c.id)}
-                                className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
+
+                            {/* Add by URL form */}
+                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6 && (
+                              <div className="border-t border-gray-200 pt-3">
+                                <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({6 - (c.items_count ?? 0)} slot{6 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
+                                <div className="flex flex-wrap gap-2 items-end">
+                                  <input type="text" placeholder="https://www.instagram.com/p/SHORTCODE/"
+                                    value={byUrlInput} onChange={e => setByUrlInput(e.target.value)}
+                                    className="flex-1 min-w-[200px] border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                  <select value={byUrlActionType} onChange={e => setByUrlActionType(e.target.value as 'like'|'reply')}
+                                    className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
+                                    <option value="like">Like</option>
+                                    <option value="reply">Reply</option>
+                                  </select>
+                                  <input type="number" min={1} max={100} value={byUrlCount}
+                                    onChange={e => setByUrlCount(e.target.value)}
+                                    className="w-16 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                  <button onClick={() => addByUrl(c.id)} disabled={byUrlBusy}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                                    {byUrlBusy ? 'Adding…' : 'Add'}
+                                  </button>
+                                </div>
+                                {byUrlActionType === 'reply' && (
+                                  <div className="mt-2 flex gap-2">
+                                    <select value={byUrlReplySource} onChange={e => setByUrlReplySource(e.target.value as 'default'|'custom'|'ai')}
+                                      className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
+                                      <option value="default">Default replies</option>
+                                      <option value="custom">Custom text</option>
+                                      <option value="ai">AI (Groq)</option>
+                                    </select>
+                                    {byUrlReplySource === 'custom' && (
+                                      <input type="text" placeholder="Amazing!, Love this 😍, So true"
+                                        value={byUrlReplyText} onChange={e => setByUrlReplyText(e.target.value)}
+                                        className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
-                        </div>
-                        <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2">
-                          <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
-                          <span>Concurrency: {c.concurrency}</span>
-                          {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
-                          {c.ended_at && <span>Ended: {fmt(c.ended_at)}</span>}
-                          {(c.started_at) && <span>Elapsed: {minutes} min</span>}
-                        </div>
-                        <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                          <div className={`h-full ${c.status === 'paused' || c.status === 'failed' ? 'bg-red-400' : c.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'}`}
-                            style={{ width: `${pct}%` }} />
-                        </div>
-                        {c.error_message && <p className="text-xs text-red-600 mt-2">{c.error_message}</p>}
+                        )}
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {campaigns.map(c => (
               <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
