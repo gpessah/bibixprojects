@@ -279,6 +279,13 @@ export default function InstagramPage() {
   const [scheduled, setScheduled]         = useState<ScheduledPost[]>([]);
   const [newPostFile, setNewPostFile]     = useState<File | null>(null);
   const [newPostCaption, setNewPostCaption] = useState('');
+  // AI caption generator
+  const [showAIPanel, setShowAIPanel] = useState(false);
+  const [aiTopic, setAiTopic] = useState('');
+  const [aiTone, setAiTone] = useState<'friendly'|'professional'|'funny'|'inspirational'>('friendly');
+  const [aiHashtags, setAiHashtags] = useState(true);
+  const [aiComments, setAiComments] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [newPostType, setNewPostType]     = useState<'post' | 'story' | 'reel'>('post');
   const [newPostWhen, setNewPostWhen]     = useState('');
   const [newPostProfile, setNewPostProfile] = useState('');
@@ -313,6 +320,48 @@ export default function InstagramPage() {
     if (!confirm('Delete this scheduled post?')) return;
     await api.delete(`/instagram/scheduled-posts/${id}`);
     await loadScheduled();
+  }
+
+  // Encode a small image to base64 so Groq's vision model can see it. Skip
+  // for video (Groq doesn't accept video) and for images >4MB to keep the
+  // payload reasonable.
+  function arrayBufferToBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    const CHUNK = 0x8000;
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+    }
+    return btoa(bin);
+  }
+
+  async function generateAICaption() {
+    if (!aiTopic.trim() && !aiComments.trim() && !newPostFile) {
+      alert('Add a topic, some notes, or upload a file first.'); return;
+    }
+    setAiBusy(true);
+    try {
+      let imageB64: string | null = null;
+      let mimeType: string | null = null;
+      if (newPostFile && newPostFile.type.startsWith('image/') && newPostFile.size <= 4 * 1024 * 1024) {
+        const buf = await newPostFile.arrayBuffer();
+        imageB64 = arrayBufferToBase64(buf);
+        mimeType = newPostFile.type;
+      }
+      const res = await api.post(`/instagram/ai-caption${qs}`, {
+        topic: aiTopic,
+        tone: aiTone,
+        include_hashtags: aiHashtags,
+        comments: aiComments,
+        image_b64: imageB64,
+        mime_type: mimeType,
+      });
+      if (res.data?.caption) setNewPostCaption(res.data.caption);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+        || (e instanceof Error ? e.message : String(e));
+      alert('Failed to generate caption: ' + msg);
+    } finally { setAiBusy(false); }
   }
 
   // ── Follower snapshots / changes ─────────────────────────────────────────
@@ -1089,7 +1138,60 @@ export default function InstagramPage() {
                   )}
                 </label>
                 <label className="text-sm col-span-2">
-                  <span className="text-gray-600">Caption</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Caption</span>
+                    <button type="button" onClick={() => setShowAIPanel(s => !s)}
+                      className="text-xs px-2 py-1 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 font-medium">
+                      ✨ {showAIPanel ? 'Hide AI' : 'Generate with AI'}
+                    </button>
+                  </div>
+                  {showAIPanel && (
+                    <div className="mt-2 mb-2 p-3 border border-purple-100 rounded-lg bg-purple-50/40">
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Topic / what's the post about</label>
+                          <textarea rows={2} value={aiTopic} onChange={e => setAiTopic(e.target.value)}
+                            placeholder="e.g. our new spring collection launch"
+                            className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Notes / additional context</label>
+                          <textarea rows={2} value={aiComments} onChange={e => setAiComments(e.target.value)}
+                            placeholder="e.g. mention free shipping, ask a question"
+                            className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white" />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 mb-2">
+                        <div className="flex items-center gap-1">
+                          <label className="text-xs text-gray-500">Tone:</label>
+                          <select value={aiTone} onChange={e => setAiTone(e.target.value as 'friendly'|'professional'|'funny'|'inspirational')}
+                            className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+                            <option value="friendly">Friendly</option>
+                            <option value="professional">Professional</option>
+                            <option value="funny">Funny</option>
+                            <option value="inspirational">Inspirational</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-1 text-xs text-gray-700">
+                          <input type="checkbox" checked={aiHashtags} onChange={e => setAiHashtags(e.target.checked)} />
+                          Include hashtags
+                        </label>
+                        <button type="button" onClick={generateAICaption} disabled={aiBusy}
+                          className="ml-auto px-3 py-1 bg-purple-600 text-white rounded text-xs font-medium hover:bg-purple-700 disabled:opacity-50">
+                          {aiBusy ? 'Generating…' : '✨ Generate'}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-500">
+                        {newPostFile && newPostFile.type.startsWith('image/') && newPostFile.size <= 4 * 1024 * 1024
+                          ? '🖼 Vision model — caption will be based on the image you uploaded.'
+                          : newPostFile && newPostFile.type.startsWith('video/')
+                          ? '🎥 Video file — AI uses your topic/notes only (Groq can\'t analyze video frames).'
+                          : newPostFile
+                          ? 'File too large for vision (over 4MB) — AI uses your topic/notes only.'
+                          : 'No file uploaded — AI uses your topic/notes only.'}
+                      </p>
+                    </div>
+                  )}
                   <textarea rows={3} value={newPostCaption} onChange={e => setNewPostCaption(e.target.value)}
                     className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
                 </label>

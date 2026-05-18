@@ -1153,4 +1153,56 @@ router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── AI caption generator (Groq) ──────────────────────────────────────────────
+// Uses Groq's vision model when the user uploaded an image so the caption is
+// actually about the picture. For video uploads we fall back to a text-only
+// model (Groq doesn't accept raw video) and rely on the topic/comments the
+// user typed. Requires GROQ_API_KEY in backend/.env.
+const fetchFn = (typeof fetch === 'function') ? fetch : require('node-fetch');
+router.post('/ai-caption', authenticateFlexible, async (req, res) => {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'GROQ_API_KEY is not set on the server.' });
+
+  const { topic, tone, include_hashtags, comments, image_b64, mime_type } = req.body || {};
+  const isImage = !!(mime_type && /^image\//i.test(mime_type) && image_b64);
+  const model = isImage ? 'llama-3.2-11b-vision-preview' : 'llama-3.1-8b-instant';
+
+  let prompt = `Write a short, engaging Instagram caption${isImage ? ' for this image' : ''}.`;
+  if (topic) prompt += ` Topic: "${String(topic).slice(0, 500)}".`;
+  if (tone) prompt += ` Tone: ${tone}.`;
+  if (comments) prompt += ` Additional notes from the user: "${String(comments).slice(0, 500)}".`;
+  prompt += include_hashtags
+    ? ' Include 3–5 relevant hashtags at the end.'
+    : ' Do not include any hashtags.';
+  prompt += ' Keep the whole caption under 220 characters. Return only the caption text — no quotes, no preamble.';
+
+  const messages = isImage
+    ? [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mime_type};base64,${image_b64}` } },
+        ],
+      }]
+    : [{ role: 'user', content: prompt }];
+
+  try {
+    const r = await fetchFn('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, max_tokens: 250, messages }),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      return res.status(502).json({ error: `Groq HTTP ${r.status}: ${text.slice(0, 300)}` });
+    }
+    const data = await r.json();
+    const caption = String(data?.choices?.[0]?.message?.content || '').trim();
+    if (!caption) return res.status(502).json({ error: 'Groq returned an empty caption.' });
+    res.json({ caption, used_vision: isImage });
+  } catch (e) {
+    res.status(502).json({ error: e?.message || 'Groq fetch failed' });
+  }
+});
+
 module.exports = router;
