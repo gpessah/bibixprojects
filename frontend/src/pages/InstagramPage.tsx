@@ -433,11 +433,16 @@ export default function InstagramPage() {
   }
 
   // ── Action queue (likes + replies campaigns) ─────────────────────────────
+  // Per-post account assignment: each selected post gets its own as_account
+  // and count. On submit we group by as_account and create one campaign per
+  // account so the extension can drain each account's bulk before switching.
+  type PostAssignment = { account: string; count: number };
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
   const [showActionModal, setShowActionModal] = useState(false);
-  const [acLikes, setAcLikes] = useState('5');
-  const [acReplies, setAcReplies] = useState('0');
-  const [acAccount, setAcAccount] = useState('');
+  const [acActionType, setAcActionType] = useState<'like' | 'reply'>('like');
+  const [acAssignments, setAcAssignments] = useState<Record<string, PostAssignment>>({});
+  const [acDefaultAccount, setAcDefaultAccount] = useState('');
+  const [acDefaultCount, setAcDefaultCount] = useState('3');
   const [acReplySource, setAcReplySource] = useState<'default' | 'custom' | 'ai'>('default');
   const [acReplyText, setAcReplyText] = useState('');
   const [acConcurrency, setAcConcurrency] = useState('6');
@@ -445,6 +450,25 @@ export default function InstagramPage() {
   const [acStartAt, setAcStartAt] = useState('');
   const [acBusy, setAcBusy] = useState(false);
   const [actionCampaigns, setActionCampaigns] = useState<ActionCampaign[]>([]);
+
+  function openActionModal() {
+    const defAcct = igAccounts[0] || '';
+    setAcDefaultAccount(defAcct);
+    const initial: Record<string, PostAssignment> = {};
+    for (const p of viewingPosts) {
+      if (selectedPosts.has(p.id)) initial[p.id] = { account: defAcct, count: 3 };
+    }
+    setAcAssignments(initial);
+    setShowActionModal(true);
+  }
+  function applyDefaultsToAll() {
+    const count = Math.max(1, parseInt(acDefaultCount, 10) || 1);
+    const updated: Record<string, PostAssignment> = {};
+    for (const id of Object.keys(acAssignments)) {
+      updated[id] = { account: acDefaultAccount, count };
+    }
+    setAcAssignments(updated);
+  }
 
   const loadActionCampaigns = async () => {
     try {
@@ -475,10 +499,6 @@ export default function InstagramPage() {
   }
 
   async function submitActionCampaign() {
-    const likes = Math.max(0, parseInt(acLikes, 10) || 0);
-    const replies = Math.max(0, parseInt(acReplies, 10) || 0);
-    if (likes === 0 && replies === 0) { alert('Set at least one of Likes or Replies to a positive number.'); return; }
-    if (!acAccount) { alert('Pick the Instagram account that will perform these actions.'); return; }
     const conc = Math.max(1, Math.min(6, parseInt(acConcurrency, 10) || 6));
     const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
     if (selected.length === 0) { alert('No posts selected.'); return; }
@@ -486,36 +506,53 @@ export default function InstagramPage() {
     const customReplies = acReplySource === 'custom'
       ? acReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
       : [];
-    if (acReplySource === 'custom' && customReplies.length === 0 && replies > 0) {
+    if (acActionType === 'reply' && acReplySource === 'custom' && customReplies.length === 0) {
       alert('Custom reply source picked but no reply text provided.'); return;
     }
 
-    const items: Array<{ post_url: string; action_type: 'like'|'reply'; count: number; reply_source?: string; reply_texts?: string[] }> = [];
+    // Group selected posts by their assigned account
+    const byAccount: Record<string, Array<{ post_url: string; action_type: 'like'|'reply'; count: number; reply_source?: string; reply_texts?: string[] }>> = {};
     for (const p of selected) {
-      if (likes > 0)   items.push({ post_url: p.post_url, action_type: 'like',  count: likes });
-      if (replies > 0) items.push({
-        post_url: p.post_url, action_type: 'reply', count: replies,
-        reply_source: acReplySource,
-        reply_texts: acReplySource === 'custom' ? customReplies : undefined,
+      const a = acAssignments[p.id];
+      if (!a || !a.account || a.count <= 0) {
+        alert(`Post ${p.shortcode} is missing an account or has count 0. Set one for every selected post.`);
+        return;
+      }
+      if (!byAccount[a.account]) byAccount[a.account] = [];
+      byAccount[a.account].push({
+        post_url: p.post_url,
+        action_type: acActionType,
+        count: a.count,
+        reply_source: acActionType === 'reply' ? acReplySource : undefined,
+        reply_texts: acActionType === 'reply' && acReplySource === 'custom' ? customReplies : undefined,
       });
     }
+    const accounts = Object.keys(byAccount);
+    if (accounts.length === 0) { alert('No valid assignments to queue.'); return; }
 
     setAcBusy(true);
     try {
-      await api.post(`/instagram/action-campaigns${qs}`, {
-        name: acName || null,
-        as_account: acAccount,
-        concurrency: conc,
-        start_at: acStartAt ? new Date(acStartAt).toISOString() : null,
-        items,
-      });
+      // One campaign per account so the extension processes each account's
+      // bulk in full before switching to the next.
+      const baseName = acName || `${acActionType === 'like' ? 'Likes' : 'Replies'} — ${new Date().toLocaleDateString()}`;
+      const startIso = acStartAt ? new Date(acStartAt).toISOString() : null;
+      await Promise.all(accounts.map(account =>
+        api.post(`/instagram/action-campaigns${qs}`, {
+          name: accounts.length > 1 ? `${baseName} (@${account})` : baseName,
+          as_account: account,
+          concurrency: conc,
+          start_at: startIso,
+          items: byAccount[account],
+        })
+      ));
       setShowActionModal(false);
       setSelectedPosts(new Set());
       setAcName(''); setAcStartAt(''); setAcReplyText('');
       await loadActionCampaigns();
-      alert(`Campaign queued — ${items.length} action${items.length === 1 ? '' : 's'} created across ${selected.length} post${selected.length === 1 ? '' : 's'}.`);
+      const totalActions = Object.values(byAccount).reduce((sum, items) => sum + items.length, 0);
+      alert(`${accounts.length} campaign${accounts.length === 1 ? '' : 's'} queued — ${totalActions} action${totalActions === 1 ? '' : 's'} total across ${selected.length} post${selected.length === 1 ? '' : 's'}.`);
     } catch (e: unknown) {
-      alert('Failed to queue campaign: ' + (e instanceof Error ? e.message : String(e)));
+      alert('Failed to queue campaign(s): ' + (e instanceof Error ? e.message : String(e)));
     } finally { setAcBusy(false); }
   }
 
@@ -1232,7 +1269,7 @@ export default function InstagramPage() {
                     <span className="text-sm text-gray-600">{selectedPosts.size} selected</span>
                     <button onClick={() => setSelectedPosts(new Set())}
                       className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
-                    <button onClick={() => setShowActionModal(true)}
+                    <button onClick={openActionModal}
                       className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
                       Add to action queue
                     </button>
@@ -1293,38 +1330,34 @@ export default function InstagramPage() {
         {/* ══ Add-to-action-queue modal ══ */}
         {showActionModal && (
           <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowActionModal(false)}>
-            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-900">Add to action queue</h3>
                 <button onClick={() => setShowActionModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
-              <p className="text-sm text-gray-500 mb-4">For each of the <b>{selectedPosts.size}</b> selected post{selectedPosts.size === 1 ? '' : 's'}, the extension will perform the actions below as the chosen Instagram account.</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Assign an Instagram account and a count to each of the <b>{selectedPosts.size}</b> selected post{selectedPosts.size === 1 ? '' : 's'}.
+                The extension creates one campaign per unique account — actions for one account run to completion in parallel tabs before switching to the next.
+              </p>
 
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Likes per post</label>
-                  <input type="number" min={0} max={100} value={acLikes}
-                    onChange={e => setAcLikes(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Action type</label>
+                  <select value={acActionType} onChange={e => setAcActionType(e.target.value as 'like'|'reply')}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value="like">Like comments</option>
+                    <option value="reply">Reply to comments</option>
+                  </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Replies per post</label>
-                  <input type="number" min={0} max={100} value={acReplies}
-                    onChange={e => setAcReplies(e.target.value)}
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs)</label>
+                  <input type="number" min={1} max={6} value={acConcurrency}
+                    onChange={e => setAcConcurrency(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                 </div>
               </div>
 
-              <div className="mb-3">
-                <label className="block text-xs font-medium text-gray-500 mb-1">Run as</label>
-                <select value={acAccount} onChange={e => setAcAccount(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                  <option value="">— pick one of your Instagram accounts —</option>
-                  {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
-                </select>
-              </div>
-
-              {Number(acReplies) > 0 && (
+              {acActionType === 'reply' && (
                 <>
                   <div className="mb-3">
                     <label className="block text-xs font-medium text-gray-500 mb-1">Reply text source</label>
@@ -1347,37 +1380,91 @@ export default function InstagramPage() {
                 </>
               )}
 
+              {/* Bulk-apply shortcut */}
+              <div className="flex items-end gap-2 mb-2 p-3 bg-gray-50 rounded-lg">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Default account</label>
+                  <select value={acDefaultAccount} onChange={e => setAcDefaultAccount(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white">
+                    <option value="">— pick one —</option>
+                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                  </select>
+                </div>
+                <div className="w-24">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Default count</label>
+                  <input type="number" min={1} max={100} value={acDefaultCount}
+                    onChange={e => setAcDefaultCount(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white" />
+                </div>
+                <button onClick={applyDefaultsToAll}
+                  className="px-3 py-1.5 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-800 whitespace-nowrap">
+                  Apply to all rows
+                </button>
+              </div>
+
+              {/* Per-post assignment table */}
+              <div className="border border-gray-200 rounded-lg overflow-hidden mb-3 max-h-64 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="text-left text-xs text-gray-500">
+                      <th className="py-2 px-3 font-medium">Post</th>
+                      <th className="py-2 px-3 font-medium">Run as</th>
+                      <th className="py-2 px-3 font-medium w-24">Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewingPosts.filter(p => selectedPosts.has(p.id)).map(p => {
+                      const a = acAssignments[p.id] || { account: '', count: 3 };
+                      return (
+                        <tr key={p.id} className="border-t border-gray-100">
+                          <td className="py-2 px-3 text-xs text-gray-600">
+                            <span className="capitalize text-gray-400 mr-1">{p.post_type}</span>
+                            {p.shortcode}
+                          </td>
+                          <td className="py-2 px-3">
+                            <select value={a.account}
+                              onChange={e => setAcAssignments(prev => ({ ...prev, [p.id]: { ...a, account: e.target.value } }))}
+                              className="w-full border border-gray-200 rounded px-2 py-1 text-sm">
+                              <option value="">— pick —</option>
+                              {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                            </select>
+                          </td>
+                          <td className="py-2 px-3">
+                            <input type="number" min={1} max={100} value={a.count}
+                              onChange={e => setAcAssignments(prev => ({ ...prev, [p.id]: { ...a, count: Math.max(1, parseInt(e.target.value, 10) || 1) } }))}
+                              className="w-full border border-gray-200 rounded px-2 py-1 text-sm" />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs)</label>
-                  <input type="number" min={1} max={6} value={acConcurrency}
-                    onChange={e => setAcConcurrency(e.target.value)}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Campaign name <span className="text-gray-400">(optional)</span></label>
-                  <input type="text" value={acName} placeholder="May 15 — likes/replies"
+                  <input type="text" value={acName} placeholder="auto-generated"
                     onChange={e => setAcName(e.target.value)}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                 </div>
-              </div>
-
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(leave empty = ASAP)</span></label>
-                <input type="datetime-local" value={acStartAt}
-                  onChange={e => setAcStartAt(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(ASAP if empty)</span></label>
+                  <input type="datetime-local" value={acStartAt}
+                    onChange={e => setAcStartAt(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
               </div>
 
               <p className="text-xs text-gray-500 mb-3">
-                <b>Tip:</b> 4–6 concurrent tabs is fast but Instagram pattern-detects aggressive activity. Lower it to 2–3 for safer runs. The campaign auto-pauses after 3 consecutive failures.
+                <b>Tip:</b> 4–6 concurrent tabs is fast but Instagram pattern-detects aggressive activity. Lower it to 2–3 for safer runs. Campaigns auto-pause after 3 consecutive failures.
               </p>
 
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setShowActionModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
                 <button onClick={submitActionCampaign} disabled={acBusy}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                  {acBusy ? 'Queuing…' : 'Queue campaign'}
+                  {acBusy ? 'Queuing…' : 'Queue campaign(s)'}
                 </button>
               </div>
             </div>
