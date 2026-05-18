@@ -460,6 +460,7 @@ export default function InstagramPage() {
   const [createAccount, setCreateAccount] = useState('');
   const [createFreeText, setCreateFreeText] = useState('');
   const [createConcurrency, setCreateConcurrency] = useState('6');
+  const [createStartAt, setCreateStartAt] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
 
   // Add-to-campaign modal (triggered from Research)
@@ -524,9 +525,11 @@ export default function InstagramPage() {
         as_account: createAccount,
         concurrency: conc,
         free_text: createFreeText || null,
+        start_at: createStartAt ? new Date(createStartAt).toISOString() : null,
       });
       setShowCreateModal(false);
       setCreateFreeText('');
+      setCreateStartAt('');
       await loadActionCampaigns();
       // Open it for immediate item-adding
       const newId = res.data?.id;
@@ -639,6 +642,17 @@ export default function InstagramPage() {
       await loadActionCampaigns();
     } catch (e: unknown) {
       alert('Failed to send: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function patchCampaignStartAt(id: string, datetimeLocal: string) {
+    try {
+      await api.patch(`/instagram/action-campaigns/${id}${qs}`, {
+        start_at: datetimeLocal ? new Date(datetimeLocal).toISOString() : null,
+      });
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to update start time: ' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -1452,11 +1466,19 @@ export default function InstagramPage() {
                   Name will be: <code className="bg-gray-100 px-1 rounded">@{createAccount || 'account'} {new Date().toLocaleDateString()} {new Date().toLocaleTimeString().slice(0,5)}{createFreeText ? ` — ${createFreeText}` : ''}</code>
                 </p>
               </div>
-              <div className="mb-4">
-                <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (tabs in parallel, 1–6)</label>
-                <input type="number" min={1} max={6} value={createConcurrency}
-                  onChange={e => setCreateConcurrency(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (1–6)</label>
+                  <input type="number" min={1} max={6} value={createConcurrency}
+                    onChange={e => setCreateConcurrency(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(empty = ASAP after Send)</span></label>
+                  <input type="datetime-local" value={createStartAt}
+                    onChange={e => setCreateStartAt(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
               </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
@@ -1623,6 +1645,7 @@ export default function InstagramPage() {
                                 <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
                                 {c.as_account && <span>@{c.as_account}</span>}
                                 <span>Concurrency: {c.concurrency}</span>
+                                {c.start_at && !c.started_at && <span className="text-amber-600">Scheduled: {fmt(c.start_at)}</span>}
                                 {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
                                 {c.ended_at && <span>Ended: {fmt(c.ended_at)}</span>}
                                 {c.started_at && <span>Elapsed: {minutes} min</span>}
@@ -1639,6 +1662,21 @@ export default function InstagramPage() {
                         {/* Expanded detail view */}
                         {isExpanded && (
                           <div className="border-t border-gray-100 p-3 bg-gray-50">
+                            {/* Scheduled start time — editable while draft or pending */}
+                            {(c.status === 'draft' || c.status === 'pending') && (
+                              <div className="flex items-center gap-2 mb-3 text-xs">
+                                <label className="text-gray-600 whitespace-nowrap">Scheduled start:</label>
+                                <input type="datetime-local"
+                                  defaultValue={c.start_at ? new Date(c.start_at).toISOString().slice(0, 16) : ''}
+                                  onBlur={(e) => {
+                                    const next = e.target.value;
+                                    const curr = c.start_at ? new Date(c.start_at).toISOString().slice(0, 16) : '';
+                                    if (next !== curr) patchCampaignStartAt(c.id, next);
+                                  }}
+                                  className="border border-gray-200 rounded px-2 py-1 text-xs bg-white" />
+                                <span className="text-gray-400">(leave empty for ASAP after Send)</span>
+                              </div>
+                            )}
                             {expandedItems.length === 0 ? (
                               <p className="text-xs text-gray-500 py-2">No posts yet. Add one below.</p>
                             ) : (

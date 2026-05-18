@@ -921,6 +921,31 @@ router.delete('/action-campaigns/:id/items/:itemId', authenticateFlexible, (req,
   res.json({ ok: true });
 });
 
+// Patch editable campaign fields (start_at, name, concurrency) — useful when
+// the user wants to schedule the campaign for a future time after creating it
+// or rename it. Allowed in any status except completed/cancelled.
+router.patch('/action-campaigns/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const campaign = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!campaign) return res.status(404).json({ error: 'not found' });
+  if (campaign.status === 'completed' || campaign.status === 'cancelled') {
+    return res.status(400).json({ error: `Cannot edit a ${campaign.status} campaign.` });
+  }
+  const { start_at, name, concurrency } = req.body || {};
+  const fields = [];
+  const params = [];
+  if (start_at !== undefined) { fields.push('start_at = ?'); params.push(start_at || null); }
+  if (name !== undefined) { fields.push('name = ?'); params.push(String(name).slice(0, 200) || null); }
+  if (concurrency !== undefined) {
+    const c = Math.max(1, Math.min(6, parseInt(concurrency, 10) || 6));
+    fields.push('concurrency = ?'); params.push(c);
+  }
+  if (fields.length === 0) return res.json({ ok: true });
+  params.push(req.params.id);
+  db.prepare(`UPDATE instagram_action_campaigns SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+  res.json({ ok: true });
+});
+
 // Send a draft campaign — transitions to 'pending' so the extension picks it
 // up on its next poll cycle. Refuses if the campaign has no items.
 router.post('/action-campaigns/:id/send', authenticateFlexible, (req, res) => {
