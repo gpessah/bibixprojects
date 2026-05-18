@@ -370,6 +370,22 @@ export default function InstagramPage() {
   const [followerDays, setFollowerDays]     = useState(7);
   const [followerProfile, setFollowerProfile] = useState('');
 
+  // ── Daily follower-count history ─────────────────────────────────────────
+  interface FollowerCountPoint { bucket: string; follower_count: number; delta: number | null }
+  interface FollowerCountSeries { my_profile: string; points: FollowerCountPoint[] }
+  const [followerCountSeries, setFollowerCountSeries] = useState<FollowerCountSeries[]>([]);
+  const [followerCountAgg, setFollowerCountAgg] = useState<'day'|'month'>('day');
+  const [followerCountProfile, setFollowerCountProfile] = useState('');
+
+  useEffect(() => {
+    if (tab !== 'followers') return;
+    const profile = followerCountProfile ? `&my_profile=${encodeURIComponent(followerCountProfile)}` : '';
+    const sep = qs ? `${qs}&` : '?';
+    api.get(`/instagram/follower-counts${sep}aggregate=${followerCountAgg}${profile}`)
+      .then((r: { data: unknown }) => setFollowerCountSeries(Array.isArray(r.data) ? r.data as FollowerCountSeries[] : []))
+      .catch(() => setFollowerCountSeries([]));
+  }, [tab, asUser, followerCountAgg, followerCountProfile]);
+
   // ── Multi-account: list of detected Instagram accounts ──────────────────
   const [igAccounts, setIgAccounts] = useState<string[]>([]);
   const [newAccount, setNewAccount] = useState('');
@@ -1325,6 +1341,75 @@ export default function InstagramPage() {
                 </div>
               </div>
             )}
+
+            {/* ── Daily follower count history (auto-scraped by the extension) ── */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <h3 className="font-semibold text-gray-900">Daily follower history</h3>
+                <div className="flex items-center gap-2">
+                  <select value={followerCountProfile} onChange={e => setFollowerCountProfile(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="">All profiles</option>
+                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                  </select>
+                  <div className="flex gap-1">
+                    <button onClick={() => setFollowerCountAgg('day')}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium ${followerCountAgg === 'day' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                      Daily
+                    </button>
+                    <button onClick={() => setFollowerCountAgg('month')}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium ${followerCountAgg === 'month' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                      Monthly
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mb-3">
+                The extension opens each of your profiles in a background tab once a day and records the follower count from Instagram's public profile page. Make sure <b>Automation</b> is enabled in the extension popup.
+              </p>
+              {followerCountSeries.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No follower counts recorded yet. The extension scrapes once every 24h — first counts appear after the first run.</p>
+              ) : (
+                <div className="space-y-4">
+                  {followerCountSeries.map(series => (
+                    <div key={series.my_profile} className="border border-gray-100 rounded-lg overflow-hidden">
+                      <div className="bg-gray-50 px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                        <a href={`https://instagram.com/${series.my_profile}`} target="_blank" rel="noreferrer"
+                          className="text-sm font-medium text-blue-600 hover:underline">@{series.my_profile}</a>
+                        <span className="text-sm text-gray-600">
+                          Latest: <b className="text-gray-900">{(series.points[0]?.follower_count ?? 0).toLocaleString()}</b> followers
+                        </span>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-500 bg-white">
+                            <th className="py-1.5 px-3 font-medium">{followerCountAgg === 'month' ? 'Month' : 'Date'}</th>
+                            <th className="py-1.5 px-3 font-medium text-right">Followers</th>
+                            <th className="py-1.5 px-3 font-medium text-right">Δ from previous</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {series.points.map(pt => (
+                            <tr key={pt.bucket} className="border-t border-gray-100">
+                              <td className="py-1.5 px-3 text-gray-600 text-xs">{pt.bucket}</td>
+                              <td className="py-1.5 px-3 text-right">{pt.follower_count.toLocaleString()}</td>
+                              <td className={`py-1.5 px-3 text-right text-xs ${
+                                pt.delta == null ? 'text-gray-400'
+                                : pt.delta > 0 ? 'text-green-600'
+                                : pt.delta < 0 ? 'text-red-600'
+                                : 'text-gray-500'
+                              }`}>
+                                {pt.delta == null ? '—' : pt.delta > 0 ? `+${pt.delta.toLocaleString()}` : pt.delta.toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

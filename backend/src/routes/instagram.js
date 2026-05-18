@@ -115,6 +115,13 @@ try {
       error_message TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS instagram_follower_counts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      my_profile TEXT NOT NULL,
+      follower_count INTEGER NOT NULL,
+      captured_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS instagram_action_queue (
       id TEXT PRIMARY KEY,
       campaign_id TEXT NOT NULL,
@@ -145,6 +152,8 @@ try {
       ON instagram_action_queue(user_id, as_account, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_action_campaign_status
       ON instagram_action_campaigns(user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_follower_counts_user_profile
+      ON instagram_follower_counts(user_id, my_profile, captured_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -1151,6 +1160,88 @@ router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
     }
   }
   res.json({ ok: true });
+});
+
+// ── Daily follower count tracking ────────────────────────────────────────────
+// Extension scrapes the public profile page of each managed account once a
+// day, reads the follower count from the og:description meta tag, and POSTs
+// it here. Monday reads the time series back to show trends + day-over-day
+// deltas in the Followers tab.
+
+// Extension uploads a single follower count for a profile
+router.post('/follower-counts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const { my_profile, follower_count } = req.body || {};
+  if (!my_profile || !Number.isFinite(Number(follower_count))) {
+    return res.status(400).json({ error: 'my_profile and follower_count (number) required' });
+  }
+  const cleaned = String(my_profile).trim().replace(/^@/, '').toLowerCase();
+  const id = uuidv4();
+  db.prepare(`
+    INSERT INTO instagram_follower_counts (id, user_id, my_profile, follower_count)
+    VALUES (?, ?, ?, ?)
+  `).run(id, uid, cleaned, Math.round(Number(follower_count)));
+  res.json({ id });
+});
+
+// Monday reads the time series. Supports:
+//   ?my_profile=X     — filter to a single profile (otherwise: all profiles)
+//   ?aggregate=day|month — bucket by day or month; default = day
+//   ?limit=N          — how many buckets to return; default = 60
+router.get('/follower-counts', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const aggregate = req.query.aggregate === 'month' ? 'month' : 'day';
+  const limit = Math.max(1, Math.min(365, parseInt(req.query.limit, 10) || 60));
+  const profileFilter = req.query.my_profile
+    ? String(req.query.my_profile).trim().replace(/^@/, '').toLowerCase()
+    : null;
+
+  // SQLite strftime: %Y-%m-%d for day, %Y-%m for month. Use the LATEST count
+  // in each bucket so multiple scrapes per day collapse to the most recent.
+  const bucketExpr = aggregate === 'month'
+    ? `strftime('%Y-%m', captured_at)`
+    : `strftime('%Y-%m-%d', captured_at)`;
+
+  // Per (profile, bucket) take the latest follower_count.
+  const rows = db.prepare(`
+    SELECT my_profile,
+           ${bucketExpr} AS bucket,
+           follower_count
+    FROM (
+      SELECT my_profile, captured_at, follower_count,
+             ROW_NUMBER() OVER (
+               PARTITION BY my_profile, ${bucketExpr}
+               ORDER BY captured_at DESC
+             ) AS rn
+      FROM instagram_follower_counts
+      WHERE user_id = ?
+        ${profileFilter ? 'AND my_profile = ?' : ''}
+    )
+    WHERE rn = 1
+    ORDER BY my_profile ASC, bucket DESC
+    LIMIT ?
+  `).all(...(profileFilter ? [uid, profileFilter, limit] : [uid, limit]));
+
+  // Compute delta from previous bucket (same profile) and shape the response.
+  // Group by profile so the frontend can show one block per profile.
+  const byProfile = {};
+  for (const r of rows) {
+    (byProfile[r.my_profile] ??= []).push(r);
+  }
+  const out = Object.entries(byProfile).map(([profile, list]) => {
+    // list is currently DESC; reverse to ASC for delta calc
+    const asc = [...list].reverse();
+    const series = asc.map((row, i) => ({
+      bucket: row.bucket,
+      follower_count: row.follower_count,
+      delta: i === 0 ? null : row.follower_count - asc[i - 1].follower_count,
+    }));
+    // Return DESC for display
+    return { my_profile: profile, points: series.reverse() };
+  });
+  // Sort profiles by latest count desc for stable display
+  out.sort((a, b) => (b.points[0]?.follower_count || 0) - (a.points[0]?.follower_count || 0));
+  res.json(out);
 });
 
 // ── AI caption generator (Groq) ──────────────────────────────────────────────
