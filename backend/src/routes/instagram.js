@@ -1165,7 +1165,10 @@ router.post('/ai-caption', authenticateFlexible, async (req, res) => {
 
   const { topic, tone, include_hashtags, comments, image_b64, mime_type } = req.body || {};
   const isImage = !!(mime_type && /^image\//i.test(mime_type) && image_b64);
-  const model = isImage ? 'llama-3.2-11b-vision-preview' : 'llama-3.1-8b-instant';
+  // Groq vision model — check https://console.groq.com/docs/models for current.
+  // Llama 4 Scout is the current vision-capable model after the 3.2-vision
+  // family was decommissioned.
+  const model = isImage ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'llama-3.1-8b-instant';
 
   let prompt = `Write a short, engaging Instagram caption${isImage ? ' for this image' : ''}.`;
   if (topic) prompt += ` Topic: "${String(topic).slice(0, 500)}".`;
