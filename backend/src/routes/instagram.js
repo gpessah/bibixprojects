@@ -1013,15 +1013,19 @@ router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => 
 // Lets the extension know which accounts it should consider switching to.
 router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  // Order accounts by the created_at of their oldest eligible pending
+  // campaign — strict FIFO across accounts. If @A's oldest campaign was
+  // created before @B's oldest, the extension switches to @A first.
   const rows = db.prepare(`
-    SELECT DISTINCT q.as_account
+    SELECT q.as_account, MIN(c.created_at) AS oldest_campaign
     FROM instagram_action_queue q
     JOIN instagram_action_campaigns c ON c.id = q.campaign_id
     WHERE q.user_id = ?
       AND q.status = 'pending'
       AND c.status IN ('pending', 'running')
       AND (c.start_at IS NULL OR datetime(c.start_at) <= datetime('now'))
-    ORDER BY q.as_account
+    GROUP BY q.as_account
+    ORDER BY oldest_campaign ASC
   `).all(uid);
   res.json(rows.map(r => r.as_account));
 });
