@@ -12,33 +12,23 @@ if (process.env.NODE_ENV !== 'production') {
   app.use(cors());
 }
 
-// Always allow the Chrome extension + LinkedIn (the extension content script runs on linkedin.com)
-// to hit the /api/linkedin endpoints, regardless of NODE_ENV.
+// CORS allowing chrome-extension://, linkedin.com and instagram.com origins,
+// used by every endpoint the chrome extension calls.
 const extensionCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (origin.startsWith('chrome-extension://')) return cb(null, true);
     if (/^https?:\/\/([a-z0-9-]+\.)*linkedin\.com$/i.test(origin)) return cb(null, true);
-    if (process.env.NODE_ENV !== 'production') return cb(null, true);
-    return cb(null, false);
-  },
-  credentials: false,
-});
-app.use('/api/linkedin', extensionCors);
-app.use('/api/contacts', extensionCors);
-// CORS for the auth + instagram endpoints the extension uses
-const extensionCors = cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true);
-    if (origin.startsWith('chrome-extension://')) return cb(null, true);
     if (/^https?:\/\/([a-z0-9-]+\.)*instagram\.com$/i.test(origin)) return cb(null, true);
     if (process.env.NODE_ENV !== 'production') return cb(null, true);
     return cb(null, false);
   },
   credentials: false,
 });
-app.use('/api/auth', extensionCors);
+app.use('/api/auth',      extensionCors);
 app.use('/api/instagram', extensionCors);
+app.use('/api/linkedin',  extensionCors);
+app.use('/api/contacts',  extensionCors);
 
 app.use(express.json({ limit: '20mb' }));
 
