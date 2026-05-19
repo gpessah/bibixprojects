@@ -1029,29 +1029,30 @@
   }
 
   function injectFindContactButton() {
-    if (!isProfilePage()) return;
-    // Find the profile action bar (Connect / Message / More)
-    const actionsBar = document.querySelector(
-      'main section[data-section="profileActions"], '
-      + 'main .pv-top-card-v2-ctas, '
-      + 'main .ph5 .display-flex.mt2, '
-      + 'main .pv-top-card__cta-container'
-    );
-    // Fallback — anywhere near the h1
-    const h1 = document.querySelector('main h1, h1');
-    const target = actionsBar || (h1 && h1.parentElement && h1.parentElement.parentElement);
-    if (!target) return;
-    if (target.getAttribute(FIND_PROCESSED) === '1') return;
-    if (target.querySelector('.' + FIND_BTN_CLASS)) { target.setAttribute(FIND_PROCESSED, '1'); return; }
-    target.setAttribute(FIND_PROCESSED, '1');
-
+    if (!isProfilePage()) {
+      // If we navigate away from a profile, remove any floating button
+      const existing = document.getElementById('bibix-floating-find');
+      if (existing) existing.remove();
+      return;
+    }
+    // Floating button — fixed top-right, can't be hidden by LinkedIn's chrome.
+    if (document.getElementById('bibix-floating-find')) return;
     const btn = el('button', {
+      id: 'bibix-floating-find',
       className: FIND_BTN_CLASS,
       type: 'button',
       title: 'Find this person\'s email via Hunter.io',
+      style: {
+        position: 'fixed',
+        top: '90px',
+        right: '24px',
+        zIndex: '2147483646',
+        padding: '12px 18px',
+        fontSize: '14px',
+      },
       onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
     }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Contact']);
-    target.appendChild(btn);
+    document.body.appendChild(btn);
   }
 
   function openFindContactDialog() {
@@ -1173,7 +1174,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.0)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.1)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
