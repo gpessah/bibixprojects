@@ -80,6 +80,8 @@ interface Stats {
   byType: { type: string; n: number }[];
   daily: { day: string; type: string; n: number }[];
   topUsers: { username: string; n: number }[];
+  conversion?: { username: string; followed_at: string; full_name: string | null; follower_count: number | null; followed_back_at: string | null }[];
+  bestPosts?: { post_url: string; post_owner: string | null; engaged_users: number; converted: number }[];
 }
 
 interface AdminUser {
@@ -905,6 +907,149 @@ export default function InstagramPage() {
                       {(stats.topUsers || []).length === 0 && <p className="text-gray-400 text-sm">No data yet</p>}
                     </div>
                   </div>
+                </div>
+
+                {/* ── Activity Over Time ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h3 className="font-semibold text-gray-900 mb-4">📅 Activity Over Time</h3>
+                  {(() => {
+                    const daily = stats.daily || [];
+                    if (daily.length === 0) return <p className="text-gray-400 text-sm">No data yet</p>;
+                    // Pivot daily rows into per-day totals split outbound/inbound
+                    const OUTBOUND = new Set(['like', 'comment', 'reply', 'comment_reply', 'follow', 'unfollow']);
+                    const INBOUND  = new Set(['new_follower', 'new_like', 'new_comment']);
+                    const days: Record<string, { outbound: number; inbound: number }> = {};
+                    for (const row of daily) {
+                      if (!days[row.day]) days[row.day] = { outbound: 0, inbound: 0 };
+                      if (OUTBOUND.has(row.type)) days[row.day].outbound += row.n;
+                      else if (INBOUND.has(row.type)) days[row.day].inbound += row.n;
+                    }
+                    const sortedDays = Object.keys(days).sort();
+                    const maxVal = Math.max(1, ...sortedDays.map(d => Math.max(days[d].outbound, days[d].inbound)));
+                    return (
+                      <>
+                        <div className="flex items-end gap-1 h-32 overflow-x-auto pb-2">
+                          {sortedDays.map(d => {
+                            const v = days[d];
+                            const outH = (v.outbound / maxVal) * 100;
+                            const inH = (v.inbound / maxVal) * 100;
+                            return (
+                              <div key={d} className="flex flex-col items-center min-w-[40px]">
+                                <div className="flex items-end gap-0.5 h-28">
+                                  <div className="w-3 bg-blue-500 rounded-t" style={{ height: `${outH}%` }} title={`${v.outbound} outbound`} />
+                                  <div className="w-3 bg-green-500 rounded-t" style={{ height: `${inH}%` }} title={`${v.inbound} inbound`} />
+                                </div>
+                                <span className="text-[10px] text-gray-400 mt-1 -rotate-45 origin-top-left whitespace-nowrap">{d.slice(5)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-4 text-xs text-gray-600 mt-4">
+                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded-sm" /> Outbound (likes / replies / follows)</span>
+                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded-sm" /> Inbound (new followers)</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                {/* ── Who Followed You Back ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h3 className="font-semibold text-gray-900 mb-4">🔄 Who Followed You Back</h3>
+                  {(stats.conversion || []).length === 0 ? (
+                    <p className="text-gray-400 text-sm">No follow actions in this period yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                            <th className="py-2 pr-3 font-medium">User</th>
+                            <th className="py-2 pr-3 font-medium">Followers</th>
+                            <th className="py-2 pr-3 font-medium">You followed</th>
+                            <th className="py-2 pr-3 font-medium">Followed back?</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(stats.conversion || []).slice(0, 30).map(c => (
+                            <tr key={c.username + c.followed_at} className="border-b border-gray-50 last:border-0">
+                              <td className="py-2 pr-3">
+                                <a href={`https://instagram.com/${c.username}`} target="_blank" rel="noreferrer"
+                                  className="text-blue-600 hover:underline font-medium">@{c.username}</a>
+                                {c.full_name && <span className="text-xs text-gray-400 ml-2">({c.full_name})</span>}
+                              </td>
+                              <td className="py-2 pr-3 text-gray-600 text-xs">{c.follower_count != null ? c.follower_count.toLocaleString() : '—'}</td>
+                              <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(c.followed_at)}</td>
+                              <td className="py-2 pr-3">
+                                {c.followed_back_at ? (
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                    ✓ {fmt(c.followed_back_at)}
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {(() => {
+                        const c = stats.conversion || [];
+                        const back = c.filter(r => r.followed_back_at).length;
+                        const rate = c.length > 0 ? Math.round((back / c.length) * 100) : 0;
+                        return (
+                          <div className="mt-3 text-xs text-gray-600">
+                            <b>{back}</b> of {c.length} followed back ({rate}%)
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Best Posts by Follower Conversion ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h3 className="font-semibold text-gray-900 mb-4">🏆 Best Posts by Follower Conversion</h3>
+                  {(stats.bestPosts || []).length === 0 ? (
+                    <p className="text-gray-400 text-sm">No engagement on tracked posts yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                            <th className="py-2 pr-3 font-medium">Post</th>
+                            <th className="py-2 pr-3 font-medium">Owner</th>
+                            <th className="py-2 pr-3 font-medium text-right">Engaged</th>
+                            <th className="py-2 pr-3 font-medium text-right">Converted</th>
+                            <th className="py-2 pr-3 font-medium text-right">Rate</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(stats.bestPosts || []).map(p => {
+                            const rate = p.engaged_users > 0 ? Math.round((p.converted / p.engaged_users) * 100) : 0;
+                            const short = p.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || p.post_url.slice(-12);
+                            return (
+                              <tr key={p.post_url} className="border-b border-gray-50 last:border-0">
+                                <td className="py-2 pr-3">
+                                  <a href={p.post_url} target="_blank" rel="noreferrer"
+                                    className="text-blue-600 hover:underline text-xs">{short}</a>
+                                </td>
+                                <td className="py-2 pr-3 text-gray-600 text-xs">{p.post_owner ? `@${p.post_owner}` : '—'}</td>
+                                <td className="py-2 pr-3 text-right">{p.engaged_users}</td>
+                                <td className="py-2 pr-3 text-right text-green-600 font-medium">{p.converted}</td>
+                                <td className="py-2 pr-3 text-right">
+                                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                    rate >= 30 ? 'bg-green-100 text-green-700' :
+                                    rate >= 10 ? 'bg-yellow-100 text-yellow-700' :
+                                                 'bg-gray-100 text-gray-600'
+                                  }`}>{rate}%</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </>
             )}
