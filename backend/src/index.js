@@ -14,7 +14,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Always allow the Chrome extension + LinkedIn (the extension content script runs on linkedin.com)
 // to hit the /api/linkedin endpoints, regardless of NODE_ENV.
-app.use('/api/linkedin', cors({
+const extensionCors = cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (origin.startsWith('chrome-extension://')) return cb(null, true);
@@ -23,7 +23,9 @@ app.use('/api/linkedin', cors({
     return cb(null, false);
   },
   credentials: false,
-}));
+});
+app.use('/api/linkedin', extensionCors);
+app.use('/api/contacts', extensionCors);
 // CORS for the auth + instagram endpoints the extension uses
 const extensionCors = cors({
   origin: (origin, cb) => {
@@ -69,6 +71,7 @@ app.use('/api/invoices',    require('./routes/invoices'));
 const instagramRouter = require('./routes/instagram');
 app.use('/api/instagram',      instagramRouter);
 app.use('/api/linkedin',       require('./routes/linkedin'));
+app.use('/api/contacts',       require('./routes/contacts'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');

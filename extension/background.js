@@ -71,6 +71,18 @@ const handlers = {
   async getHistory({ limit = 20 } = {}) {
     return apiFetch(`/api/linkedin/history?limit=${limit}`);
   },
+  async findEmail(body) {
+    return apiFetch('/api/contacts/find-email', { method: 'POST', body });
+  },
+  async listContacts() {
+    return apiFetch('/api/contacts');
+  },
+  async contactToCrm({ contactId }) {
+    return apiFetch(`/api/contacts/${contactId}/to-crm`, { method: 'POST' });
+  },
+  async deleteContact({ contactId }) {
+    return apiFetch(`/api/contacts/${contactId}`, { method: 'DELETE' });
+  },
   async setApiBase({ apiBase }) {
     await chrome.storage.local.set({ apiBase });
     return { ok: true };

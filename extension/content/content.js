@@ -540,6 +540,8 @@
 
     // 3. Inject Bulk Actions button into each post's social-action bar.
     injectBulkButtons();
+    // 4. If on a profile page, inject the "Find Contact" button.
+    injectFindContactButton();
   }
 
   // ── Bulk Actions: auto-reply / random-like across many comments ────────────
@@ -990,6 +992,168 @@
     setStatus(`Done. ${done} liked, ${errors} skipped.`);
   }
 
+  // ── Find Contact Info on LinkedIn profile pages (Hunter.io) ────────────────
+  const FIND_BTN_CLASS = 'bibix-find-btn';
+  const FIND_PROCESSED = 'data-bibix-find-processed';
+
+  function isProfilePage() { return /^\/in\//.test(location.pathname); }
+
+  function extractProfileInfo() {
+    const h1 = document.querySelector('main h1, h1');
+    const fullName = h1 ? (h1.innerText || '').trim() : '';
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    const firstName = parts[0] || '';
+    const lastName = parts.slice(1).join(' ') || '';
+    // Headline (job title + company line)
+    const headlineEl = document.querySelector(
+      'main .text-body-medium.break-words, '
+      + 'main [data-generated-suggestion-target] + div, '
+      + 'main section .text-body-medium'
+    );
+    const headline = headlineEl ? (headlineEl.innerText || '').trim() : '';
+    // Current company — try the "Current Company" badge next to the photo
+    let company = '';
+    const companyEl = document.querySelector(
+      'main [data-test-id="current-company"], '
+      + 'main button[aria-label*="Current company" i], '
+      + 'ul.pv-text-details__right-panel li button, '
+      + 'main section[data-section="currentPositionsDetails"] a'
+    );
+    if (companyEl) company = (companyEl.innerText || '').trim();
+    // Fallback — parse headline "Role at Company"
+    if (!company && /\bat\b|\sב\s/.test(headline)) {
+      const m = headline.match(/\b(?:at|@|ב)\s+([^|·•·\n]+)/i);
+      if (m) company = m[1].trim();
+    }
+    return { firstName, lastName, fullName, headline, company, linkedinUrl: location.href.split('?')[0] };
+  }
+
+  function injectFindContactButton() {
+    if (!isProfilePage()) return;
+    // Find the profile action bar (Connect / Message / More)
+    const actionsBar = document.querySelector(
+      'main section[data-section="profileActions"], '
+      + 'main .pv-top-card-v2-ctas, '
+      + 'main .ph5 .display-flex.mt2, '
+      + 'main .pv-top-card__cta-container'
+    );
+    // Fallback — anywhere near the h1
+    const h1 = document.querySelector('main h1, h1');
+    const target = actionsBar || (h1 && h1.parentElement && h1.parentElement.parentElement);
+    if (!target) return;
+    if (target.getAttribute(FIND_PROCESSED) === '1') return;
+    if (target.querySelector('.' + FIND_BTN_CLASS)) { target.setAttribute(FIND_PROCESSED, '1'); return; }
+    target.setAttribute(FIND_PROCESSED, '1');
+
+    const btn = el('button', {
+      className: FIND_BTN_CLASS,
+      type: 'button',
+      title: 'Find this person\'s email via Hunter.io',
+      onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
+    }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Contact']);
+    target.appendChild(btn);
+  }
+
+  function openFindContactDialog() {
+    closePopover();
+    const info = extractProfileInfo();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '460px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#4338ca,#6366f1);-webkit-background-clip:text;background-clip:text;color:transparent">
+        ✨ Find Contact — Hunter.io
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        We'll use first/last name + company to find a likely work email.
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">First name</div>
+          <input id="bfc-first" value="${(info.firstName || '').replace(/"/g, '&quot;')}" style="width:100%;padding:7px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Last name</div>
+          <input id="bfc-last" value="${(info.lastName || '').replace(/"/g, '&quot;')}" style="width:100%;padding:7px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Company</div>
+        <input id="bfc-company" value="${(info.company || '').replace(/"/g, '&quot;')}" placeholder="e.g. Stripe" style="width:100%;padding:7px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Company domain <span style="color:#94a3b8">(optional, more accurate)</span></div>
+        <input id="bfc-domain" placeholder="e.g. stripe.com" style="width:100%;padding:7px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+      </div>
+      <div id="bfc-result" style="min-height:30px;margin-bottom:10px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bfc-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
+        <button id="bfc-find" style="background:linear-gradient(135deg,#4338ca,#6366f1);color:#fff;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Find email</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const resultDiv = pop.querySelector('#bfc-result');
+    pop.querySelector('#bfc-close').addEventListener('click', () => closePopover());
+    pop.addEventListener('click', (e) => { if (e.target === pop) closePopover(); });
+
+    pop.querySelector('#bfc-find').addEventListener('click', async () => {
+      const firstName = pop.querySelector('#bfc-first').value.trim();
+      const lastName = pop.querySelector('#bfc-last').value.trim();
+      const company = pop.querySelector('#bfc-company').value.trim();
+      const domain = pop.querySelector('#bfc-domain').value.trim();
+      if (!firstName || !lastName) { resultDiv.innerHTML = '<span style="color:#ef4444">First and last name required</span>'; return; }
+      if (!company && !domain) { resultDiv.innerHTML = '<span style="color:#ef4444">Company or domain required</span>'; return; }
+      resultDiv.innerHTML = '<span style="color:#64748b">Looking up…</span>';
+      const res = await send('findEmail', {
+        firstName, lastName, company, domain,
+        linkedinUrl: info.linkedinUrl, headline: info.headline,
+      });
+      if (!res.ok) {
+        resultDiv.innerHTML = `<span style="color:#ef4444">${res.error || 'lookup failed'}</span>`;
+        return;
+      }
+      const d = res.data || {};
+      if (!d.email) {
+        resultDiv.innerHTML = '<span style="color:#f59e0b">No email found. Try a different domain.</span>';
+        return;
+      }
+      const confidence = d.score != null ? `${d.score}% confidence` : '';
+      const cachedTag = d.cached ? ' <span style="color:#10b981;font-size:10px">(cached)</span>' : '';
+      resultDiv.innerHTML = `
+        <div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">
+          <div style="font-weight:600;font-size:14px;color:#1f2937">${d.email}${cachedTag}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px">${confidence}${d.position ? ' · ' + d.position : ''}</div>
+          <div style="margin-top:10px;display:flex;gap:6px">
+            <button id="bfc-copy" style="flex:1;background:#f1f5f9;border:1px solid #e2e8f0;padding:6px 10px;border-radius:6px;font-size:11px;cursor:pointer">Copy email</button>
+            <button id="bfc-tocrm" style="flex:1;background:linear-gradient(135deg,#10b981,#059669);color:#fff;border:none;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">Save to Monday CRM</button>
+          </div>
+          <div id="bfc-crm-status" style="font-size:11px;color:#10b981;margin-top:6px"></div>
+        </div>`;
+      pop.querySelector('#bfc-copy').addEventListener('click', () => {
+        navigator.clipboard.writeText(d.email);
+        pop.querySelector('#bfc-copy').textContent = 'Copied!';
+      });
+      pop.querySelector('#bfc-tocrm').addEventListener('click', async () => {
+        const status = pop.querySelector('#bfc-crm-status');
+        status.textContent = 'Saving…';
+        const r = await send('contactToCrm', { contactId: d.contactId });
+        if (r.ok) status.textContent = `Saved as CRM contact #${r.data.contactNum}.`;
+        else status.textContent = 'Save failed: ' + (r.error || '');
+      });
+    });
+  }
+
   let scanTimer = null;
   function scheduleScan() { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 200); }
 
@@ -1009,7 +1173,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.2.10)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.0)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;

@@ -44,6 +44,27 @@
 .bibix-bulk-btn:hover { box-shadow: 0 3px 8px rgba(67, 56, 202, 0.4); }
 .bibix-bulk-btn .bibix-spark { font-size: 13px; }
 
+/* Find-Contact button injected on LinkedIn profile pages */
+.bibix-find-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff !important;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin: 6px 4px;
+  box-shadow: 0 1px 3px rgba(16, 185, 129, 0.3);
+  font-family: inherit;
+  line-height: 1;
+}
+.bibix-find-btn:hover { box-shadow: 0 3px 8px rgba(16, 185, 129, 0.4); }
+.bibix-find-btn .bibix-spark { font-size: 14px; }
+
 .bibix-popover {
   position: fixed;
   z-index: 2147483647;
