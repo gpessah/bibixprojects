@@ -203,9 +203,12 @@ router.post("/actions", authenticateFlexible, (req, res) => {
   var action_date    = b.action_date    || b.date            || null;
 
   if (!type) return res.status(400).json({ error: 'type required' });
-  var id = uuidv4();
+  // Accept a client-provided id so dual-write to prod+staging uses the
+  // SAME id on both, otherwise prod's actions wouldn't link to its own
+  // campaign rows. INSERT OR IGNORE makes the second write idempotent.
+  var id = b.id || uuidv4();
   db.prepare(`
-    INSERT INTO instagram_actions
+    INSERT OR IGNORE INTO instagram_actions
       (id,user_id,type,username,follower_count,post_url,reply_text,comment_text,campaign_id,my_profile,full_name,post_owner,action_date)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(id, req.user.id, type, username, follower_count, post_url, reply_text, comment_text, campaign_id, my_profile, full_name, post_owner, action_date);
@@ -242,10 +245,12 @@ router.get("/actions", authenticateFlexible, (req, res) => {
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 router.post("/campaigns", authenticateFlexible, (req, res) => {
-  const { type, notes } = req.body;
+  const { id: providedId, type, notes } = req.body;
   if (!type) return res.status(400).json({ error: 'type required' });
-  const id = uuidv4();
-  db.prepare(`INSERT INTO instagram_campaigns (id,user_id,type,notes) VALUES (?,?,?,?)`)
+  // Same idempotency as /actions — accept client-provided id so dual-write
+  // to prod+staging produces matching rows on both backends.
+  const id = providedId || uuidv4();
+  db.prepare(`INSERT OR IGNORE INTO instagram_campaigns (id,user_id,type,notes) VALUES (?,?,?,?)`)
     .run(id, req.user.id, type, notes||null);
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(id));
 });
