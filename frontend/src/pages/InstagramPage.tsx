@@ -376,6 +376,33 @@ export default function InstagramPage() {
   const [followerCountSeries, setFollowerCountSeries] = useState<FollowerCountSeries[]>([]);
   const [followerCountAgg, setFollowerCountAgg] = useState<'day'|'month'>('day');
   const [followerCountProfile, setFollowerCountProfile] = useState('');
+  const [followerRefreshBusy, setFollowerRefreshBusy] = useState(false);
+  const [followerRefreshNote, setFollowerRefreshNote] = useState<string | null>(null);
+
+  async function triggerFollowerCountNow() {
+    setFollowerRefreshBusy(true);
+    setFollowerRefreshNote(null);
+    try {
+      await api.post(`/instagram/follower-counts/trigger${qs}`);
+      setFollowerRefreshNote('Triggered — counts will appear within ~2 minutes on the device with Automation enabled.');
+      // Poll for fresh data a few times after the trigger
+      const reload = async () => {
+        const profile = followerCountProfile ? `&my_profile=${encodeURIComponent(followerCountProfile)}` : '';
+        const sep = qs ? `${qs}&` : '?';
+        try {
+          const r = await api.get(`/instagram/follower-counts${sep}aggregate=${followerCountAgg}${profile}`);
+          setFollowerCountSeries(Array.isArray(r.data) ? r.data as FollowerCountSeries[] : []);
+        } catch (_) {}
+      };
+      setTimeout(reload, 60000);
+      setTimeout(reload, 120000);
+      setTimeout(reload, 180000);
+    } catch (e: unknown) {
+      setFollowerRefreshNote('Failed to trigger: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setFollowerRefreshBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (tab !== 'followers') return;
@@ -1347,6 +1374,10 @@ export default function InstagramPage() {
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                 <h3 className="font-semibold text-gray-900">Daily follower history</h3>
                 <div className="flex items-center gap-2">
+                  <button onClick={triggerFollowerCountNow} disabled={followerRefreshBusy}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1">
+                    <RefreshCw size={12} /> {followerRefreshBusy ? 'Triggering…' : 'Refresh now'}
+                  </button>
                   <select value={followerCountProfile} onChange={e => setFollowerCountProfile(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
                     <option value="">All profiles</option>
@@ -1364,6 +1395,11 @@ export default function InstagramPage() {
                   </div>
                 </div>
               </div>
+              {followerRefreshNote && (
+                <div className="mb-3 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                  {followerRefreshNote}
+                </div>
+              )}
               <p className="text-xs text-gray-500 mb-3">
                 The extension opens each of your profiles in a background tab once a day and records the follower count from Instagram's public profile page. Make sure <b>Automation</b> is enabled in the extension popup.
               </p>

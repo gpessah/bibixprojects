@@ -166,6 +166,8 @@ try {
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_accounts TEXT'); } catch (_) {}
 // Older deployments created instagram_action_campaigns without as_account.
 try { db.exec('ALTER TABLE instagram_action_campaigns ADD COLUMN as_account TEXT'); } catch (_) {}
+// Manual follower-count trigger flag — Monday sets it, extension consumes it.
+try { db.exec('ALTER TABLE users ADD COLUMN instagram_follower_trigger_at DATETIME'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -1242,6 +1244,27 @@ router.get('/follower-counts', authenticateFlexible, (req, res) => {
   // Sort profiles by latest count desc for stable display
   out.sort((a, b) => (b.points[0]?.follower_count || 0) - (a.points[0]?.follower_count || 0));
   res.json(out);
+});
+
+// Monday calls this to force the extension to scrape follower counts on its
+// next 2-minute poll, instead of waiting for the daily cycle.
+router.post('/follower-counts/trigger', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare('UPDATE users SET instagram_follower_trigger_at = CURRENT_TIMESTAMP WHERE id = ?').run(uid);
+  res.json({ ok: true });
+});
+
+// Extension polls this on every alarm tick. If a trigger is pending, returns
+// should_run=true AND atomically clears the flag so we don't run twice.
+router.get('/follower-counts/should-trigger', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const row = db.prepare('SELECT instagram_follower_trigger_at FROM users WHERE id = ?').get(uid);
+  if (!row?.instagram_follower_trigger_at) return res.json({ should_run: false });
+  const result = db.prepare(`
+    UPDATE users SET instagram_follower_trigger_at = NULL
+    WHERE id = ? AND instagram_follower_trigger_at IS NOT NULL
+  `).run(uid);
+  res.json({ should_run: result.changes > 0 });
 });
 
 // ── AI caption generator (Groq) ──────────────────────────────────────────────
