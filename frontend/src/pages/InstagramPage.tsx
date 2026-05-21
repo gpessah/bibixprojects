@@ -3,7 +3,21 @@ import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calenda
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research' | 'permissions';
+
+interface ExtensionPermissionUser {
+  id: string; name: string; email: string; role: string;
+  allowed_tabs: string[] | null;
+}
+const EXTENSION_TABS: { key: string; label: string; description: string }[] = [
+  { key: 'engagement', label: 'Engagement',  description: 'Like, reply, follow, unfollow' },
+  { key: 'messaging',  label: 'Messaging',   description: 'Auto-reply unread DMs' },
+  { key: 'insights',   label: 'Insights',    description: 'Scan notifications, follower snapshots' },
+  { key: 'accounts',   label: 'Accounts',    description: 'Multi-account scan and switch' },
+  { key: 'schedule',   label: 'Schedule',    description: 'Check scheduled posts' },
+  { key: 'sync',       label: 'Sync',        description: 'Bibix token (always visible to avoid lockouts)' },
+  { key: 'pages',      label: 'Pages',       description: 'History, Dashboard, Campaigns links' },
+];
 
 interface ScrapeJob {
   id: string; target_username: string; post_count: number;
@@ -539,6 +553,50 @@ export default function InstagramPage() {
     } catch (_) { setViewingPosts([]); }
   }
 
+  // ── Extension tab permissions (admin only) ───────────────────────────────
+  const [permUsers, setPermUsers] = useState<ExtensionPermissionUser[]>([]);
+  const [permEdits, setPermEdits] = useState<Record<string, string[] | null>>({});
+  const [permSaving, setPermSaving] = useState<string | null>(null);
+
+  const loadPermissions = async () => {
+    try {
+      const r = await api.get('/instagram/admin/extension/permissions');
+      setPermUsers(Array.isArray(r.data) ? r.data as ExtensionPermissionUser[] : []);
+      setPermEdits({});
+    } catch (_) { setPermUsers([]); }
+  };
+  useEffect(() => {
+    if (tab === 'permissions' && isAdmin) loadPermissions();
+  }, [tab, isAdmin]);
+
+  function effectiveTabs(u: ExtensionPermissionUser): string[] | null {
+    if (u.id in permEdits) return permEdits[u.id];
+    return u.allowed_tabs;
+  }
+  function toggleTabFor(userId: string, tabKey: string, currentTabs: string[] | null) {
+    // null means "all visible". Start the editable set from "all" when the user toggles for the first time.
+    const baseline = currentTabs ?? EXTENSION_TABS.map(t => t.key);
+    const has = baseline.includes(tabKey);
+    const next = has ? baseline.filter(t => t !== tabKey) : [...baseline, tabKey];
+    setPermEdits(prev => ({ ...prev, [userId]: next }));
+  }
+  function resetToAll(userId: string) {
+    // Setting back to null means "all tabs visible" on the server.
+    setPermEdits(prev => ({ ...prev, [userId]: null as unknown as string[] }));
+  }
+  async function savePermissions(userId: string) {
+    const next = permEdits[userId];
+    setPermSaving(userId);
+    try {
+      await api.patch(`/instagram/admin/extension/permissions/${userId}`, {
+        allowed_tabs: next === null ? null : next,
+      });
+      await loadPermissions();
+    } catch (e: unknown) {
+      alert('Failed to save: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setPermSaving(null); }
+  }
+
   // ── Action campaigns (drafts that you build up, then Send) ───────────────
   // Flow: create empty draft → add up to 6 items (from Research or by URL)
   // → click Send → extension picks it up. Items can be edited (count) or
@@ -796,6 +854,7 @@ export default function InstagramPage() {
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
     { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
+    ...(isAdmin ? [{ id: 'permissions' as Tab, label: 'Permissions', icon: <Users size={15} /> }] : []),
   ];
 
   return (
@@ -1798,6 +1857,84 @@ export default function InstagramPage() {
                           <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(p.last_scraped_at)}</td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ PERMISSIONS ══════════════════════════════ */}
+        {tab === 'permissions' && isAdmin && (
+          <div className="space-y-4 max-w-5xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-2 flex items-center gap-2"><Users size={18} /> Extension tab visibility</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Control which tabs each user can see in the Chrome extension popup. <b>Sync</b> is always visible
+                (otherwise users would get locked out of pasting/refreshing their API token). Leave a user untouched
+                or click <b>Reset to all</b> to give them every tab.
+              </p>
+              {permUsers.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No users found.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium">User</th>
+                        {EXTENSION_TABS.map(t => (
+                          <th key={t.key} className="py-2 px-2 font-medium text-center" title={t.description}>
+                            {t.label}
+                          </th>
+                        ))}
+                        <th className="py-2 pl-3 font-medium text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {permUsers.map(u => {
+                        const eff = effectiveTabs(u);
+                        const isAll = eff === null;
+                        const allowedSet = new Set(eff ?? EXTENSION_TABS.map(t => t.key));
+                        const dirty = u.id in permEdits;
+                        return (
+                          <tr key={u.id} className="border-b border-gray-50 last:border-0">
+                            <td className="py-2 pr-3">
+                              <div className="font-medium text-gray-900 text-sm">{u.name || u.email}</div>
+                              <div className="text-xs text-gray-400">{u.email} · {u.role}</div>
+                            </td>
+                            {EXTENSION_TABS.map(t => {
+                              const checked = allowedSet.has(t.key);
+                              const isSync = t.key === 'sync';
+                              return (
+                                <td key={t.key} className="py-2 px-2 text-center">
+                                  <input type="checkbox"
+                                    checked={checked}
+                                    disabled={isSync}
+                                    title={isSync ? 'Sync is always visible' : t.description}
+                                    onChange={() => toggleTabFor(u.id, t.key, eff)}
+                                  />
+                                </td>
+                              );
+                            })}
+                            <td className="py-2 pl-3 text-right whitespace-nowrap">
+                              <span className={`text-xs mr-2 ${isAll ? 'text-gray-400' : 'text-gray-600'}`}>
+                                {isAll ? 'all tabs' : `${(eff || []).length} tab${(eff || []).length === 1 ? '' : 's'}`}
+                              </span>
+                              <button onClick={() => resetToAll(u.id)}
+                                className="text-xs text-gray-500 hover:text-gray-700 mr-2"
+                                title="Clear restrictions (user sees every tab)">
+                                Reset
+                              </button>
+                              <button onClick={() => savePermissions(u.id)}
+                                disabled={!dirty || permSaving === u.id}
+                                className="px-2 py-1 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                                {permSaving === u.id ? 'Saving…' : 'Save'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

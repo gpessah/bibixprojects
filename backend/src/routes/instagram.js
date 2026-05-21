@@ -168,6 +168,9 @@ try { db.exec('ALTER TABLE users ADD COLUMN instagram_accounts TEXT'); } catch (
 try { db.exec('ALTER TABLE instagram_action_campaigns ADD COLUMN as_account TEXT'); } catch (_) {}
 // Manual follower-count trigger flag — Monday sets it, extension consumes it.
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_follower_trigger_at DATETIME'); } catch (_) {}
+// Per-user extension tab visibility (JSON array of allowed section names).
+// NULL or empty array = all tabs visible (backward-compatible default).
+try { db.exec('ALTER TABLE users ADD COLUMN instagram_extension_tabs TEXT'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -1377,6 +1380,61 @@ router.post('/ai-caption', authenticateFlexible, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: e?.message || 'Groq fetch failed' });
   }
+});
+
+// ── Extension tab visibility per user ────────────────────────────────────────
+// The popup fetches this on open and hides any tab not in the returned list.
+// NULL/empty stored value means "all tabs visible" (backward-compatible
+// default). Admins manage these via the admin endpoint below.
+const VALID_EXT_TABS = ['engagement', 'messaging', 'insights', 'accounts', 'schedule', 'sync', 'pages'];
+
+router.get('/extension/permissions', authenticateFlexible, (req, res) => {
+  const uid = req.user.id;
+  const row = db.prepare('SELECT instagram_extension_tabs FROM users WHERE id = ?').get(uid);
+  let allowed = null;
+  try {
+    const parsed = row?.instagram_extension_tabs ? JSON.parse(row.instagram_extension_tabs) : null;
+    if (Array.isArray(parsed)) allowed = parsed.filter(t => VALID_EXT_TABS.includes(t));
+  } catch (_) {}
+  // null → frontend treats as "all"; explicit array → only those visible
+  res.json({ allowed_tabs: allowed && allowed.length ? allowed : null });
+});
+
+// Admin-only: list all users with their current tab settings
+router.get('/admin/extension/permissions', authenticate, (req, res) => {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const rows = db.prepare(`
+    SELECT id, name, email, role, instagram_extension_tabs
+    FROM users ORDER BY name ASC
+  `).all();
+  res.json(rows.map(r => {
+    let tabs = null;
+    try { tabs = r.instagram_extension_tabs ? JSON.parse(r.instagram_extension_tabs) : null; } catch (_) {}
+    return {
+      id: r.id, name: r.name, email: r.email, role: r.role,
+      // Empty array = explicit "no tabs"; null = "all tabs (default)"
+      allowed_tabs: Array.isArray(tabs) ? tabs : null,
+    };
+  }));
+});
+
+// Admin-only: update a single user's tab permissions
+router.patch('/admin/extension/permissions/:userId', authenticate, (req, res) => {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { allowed_tabs } = req.body || {};
+  let stored = null;
+  if (Array.isArray(allowed_tabs)) {
+    const clean = allowed_tabs.filter(t => VALID_EXT_TABS.includes(t));
+    stored = JSON.stringify(clean);
+  }
+  // allowed_tabs === null (or missing) clears the setting → user gets all tabs.
+  db.prepare(`UPDATE users SET instagram_extension_tabs = ? WHERE id = ?`)
+    .run(stored, req.params.userId);
+  res.json({ ok: true });
 });
 
 module.exports = router;
