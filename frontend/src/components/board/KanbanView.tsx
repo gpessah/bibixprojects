@@ -26,7 +26,7 @@ export default function KanbanView() {
     );
   }
 
-  const statusOptions = statusCol.settings?.options || [];
+  const statusOptions = Array.isArray(statusCol.settings?.options) ? statusCol.settings.options : [];
   const allStatuses = [{ label: '', color: '#c4c4c4' }, ...statusOptions];
 
   const getItemsByStatus = (label: string) =>

@@ -28,6 +28,16 @@ export interface Board {
   icon: string;
   created_by: string;
   created_at: string;
+  workspace_name?: string; // populated for boards shared directly (not via workspace)
+  access?: string;
+}
+
+export interface UserGroup {
+  id: string;
+  name: string;
+  color: string;
+  member_count?: number;
+  created_at?: string;
 }
 
 export type ColumnType = 'text' | 'status' | 'person' | 'date' | 'number' | 'checkbox' | 'tags' | 'priority' | 'link' | 'timeline' | 'attachments';

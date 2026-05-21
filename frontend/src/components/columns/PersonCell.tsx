@@ -20,7 +20,13 @@ async function fetchUsers(workspaceId?: string): Promise<User[]> {
     _promise = (workspaceId
       ? api.get(`/workspaces/${workspaceId}/members`)
       : api.get('/auth/users')
-    ).then(r => { _cache = r.data; return _cache!; });
+    ).then(r => {
+      _cache = Array.isArray(r.data) ? r.data : [];
+      return _cache!;
+    }).catch(() => {
+      _promise = null; // allow retry on failure
+      return [] as User[];
+    });
   }
   return _promise;
 }
@@ -65,7 +71,7 @@ export default function PersonCell({ value, onChange, workspaceId }: Props) {
           {users.length === 0 && (
             <div className="px-3 py-2 text-xs text-gray-400">No members found</div>
           )}
-          {users.map(u => (
+          {(Array.isArray(users) ? users : []).map(u => (
             <button key={u.id} onClick={() => { onChange(u.id); setOpen(false); }}
               className={`flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-gray-50 ${value === u.id ? 'bg-blue-50' : ''}`}>
               <Avatar name={u.name} color={u.avatar_color} size="xs" />

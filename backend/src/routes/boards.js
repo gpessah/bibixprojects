@@ -52,6 +52,22 @@ router.post('/', authenticate, (req, res) => {
   res.json(board);
 });
 
+// GET /boards/shared-with-me — boards where user is a direct board_member but NOT a workspace member
+router.get('/shared-with-me', authenticate, (req, res) => {
+  const boards = db.prepare(`
+    SELECT b.*, w.name as workspace_name, bm.access
+    FROM board_members bm
+    JOIN boards b ON b.id = bm.board_id
+    JOIN workspaces w ON w.id = b.workspace_id
+    WHERE bm.user_id = ?
+    AND NOT EXISTS (
+      SELECT 1 FROM workspace_members wm
+      WHERE wm.workspace_id = b.workspace_id AND wm.user_id = ?
+    )
+  `).all(req.user.id, req.user.id);
+  res.json(boards);
+});
+
 router.get('/:id', authenticate, (req, res) => {
   if (!canAccessBoard(req.params.id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
   const board = db.prepare('SELECT * FROM boards WHERE id = ?').get(req.params.id);

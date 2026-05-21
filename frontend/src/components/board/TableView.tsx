@@ -570,7 +570,7 @@ export default function TableView() {
                           {sortedColumns.map(col => {
                             const w = colWidths[col.id] || DEFAULT_COL_WIDTH;
                             const isOptionType = col.type === 'status' || col.type === 'priority';
-                            const opts = col.settings?.options ?? [];
+                            const opts = Array.isArray(col.settings?.options) ? col.settings.options : [];
                             const val = groupFilters[group.id]?.cols?.[col.id] ?? '';
                             return (
                               <div key={col.id} style={{ width: w, minWidth: w }}

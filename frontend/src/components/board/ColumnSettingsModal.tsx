@@ -58,7 +58,7 @@ export default function ColumnSettingsModal({ column, onClose }: Props) {
   const [name, setName]       = useState(column.name);
   const [type, setType]       = useState<ColumnType>(column.type);
   const [options, setOptions] = useState<StatusOption[]>(
-    column.settings?.options ? [...column.settings.options] : []
+    Array.isArray(column.settings?.options) ? [...column.settings.options] : []
   );
   const [saving, setSaving]   = useState(false);
 

@@ -5,9 +5,11 @@ import type { Workspace, Board } from '../types';
 interface WorkspaceState {
   workspaces: Workspace[];
   boards: Record<string, Board[]>;
+  sharedBoards: Board[];
   loading: boolean;
   loadWorkspaces: () => Promise<void>;
   loadBoards: (workspaceId: string) => Promise<void>;
+  loadSharedBoards: () => Promise<void>;
   createWorkspace: (name: string, description?: string) => Promise<Workspace>;
   updateWorkspace: (id: string, data: { name?: string; description?: string }) => Promise<void>;
   deleteWorkspace: (id: string) => Promise<void>;
@@ -18,18 +20,38 @@ interface WorkspaceState {
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   boards: {},
+  sharedBoards: [],
   loading: false,
 
   loadWorkspaces: async () => {
     set({ loading: true });
-    const { data } = await api.get('/workspaces');
-    set({ workspaces: data, loading: false });
-    for (const ws of data) get().loadBoards(ws.id);
+    try {
+      const { data } = await api.get('/workspaces');
+      const workspaces = Array.isArray(data) ? data : [];
+      set({ workspaces, loading: false });
+      for (const ws of workspaces) get().loadBoards(ws.id);
+    } catch {
+      set({ loading: false });
+    }
+    get().loadSharedBoards();
+  },
+
+  loadSharedBoards: async () => {
+    try {
+      const { data } = await api.get('/boards/shared-with-me');
+      set({ sharedBoards: Array.isArray(data) ? data : [] });
+    } catch {
+      set({ sharedBoards: [] });
+    }
   },
 
   loadBoards: async (workspaceId) => {
-    const { data } = await api.get(`/boards/workspace/${workspaceId}`);
-    set(state => ({ boards: { ...state.boards, [workspaceId]: data } }));
+    try {
+      const { data } = await api.get(`/boards/workspace/${workspaceId}`);
+      set(state => ({ boards: { ...state.boards, [workspaceId]: Array.isArray(data) ? data : [] } }));
+    } catch {
+      set(state => ({ boards: { ...state.boards, [workspaceId]: [] } }));
+    }
   },
 
   createWorkspace: async (name, description) => {

@@ -50,15 +50,37 @@ router.get('/', authenticate, (req, res) => {
   res.json(members);
 });
 
-// GET /boards/:boardId/available-users
+// GET /boards/:boardId/available-users — filtered by group visibility
 router.get('/available-users', authenticate, (req, res) => {
   const { boardId } = req.params;
   if (!canManageBoard(boardId, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+  const caller = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  const notInBoard = 'u.id NOT IN (SELECT user_id FROM board_members WHERE board_id = ?)';
+
+  // super_admin and admin see all users
+  if (caller && (caller.role === 'super_admin' || caller.role === 'admin')) {
+    return res.json(db.prepare(`SELECT u.id, u.name, u.email, u.avatar_color FROM users u WHERE ${notInBoard}`).all(boardId));
+  }
+
+  // Regular user with no groups: only see super_admin/admin
+  const callerGroups = db.prepare('SELECT group_id FROM user_group_members WHERE user_id = ?').all(req.user.id);
+  if (callerGroups.length === 0) {
+    return res.json(db.prepare(`SELECT u.id, u.name, u.email, u.avatar_color FROM users u WHERE u.role IN ('super_admin','admin') AND ${notInBoard}`).all(boardId));
+  }
+
+  // Regular user with groups: see users sharing at least one group + super_admin/admin
   const users = db.prepare(`
-    SELECT u.id, u.name, u.email, u.avatar_color
-    FROM users u
-    WHERE u.id NOT IN (SELECT user_id FROM board_members WHERE board_id = ?)
-  `).all(boardId);
+    SELECT DISTINCT u.id, u.name, u.email, u.avatar_color FROM users u
+    WHERE (
+      EXISTS (
+        SELECT 1 FROM user_group_members ugm1
+        JOIN user_group_members ugm2 ON ugm1.group_id = ugm2.group_id
+        WHERE ugm1.user_id = ? AND ugm2.user_id = u.id
+      )
+      OR u.role IN ('super_admin','admin')
+    )
+    AND ${notInBoard}
+  `).all(req.user.id, boardId);
   res.json(users);
 });
 

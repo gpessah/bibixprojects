@@ -107,14 +107,36 @@ router.delete('/:id/members/:userId', authenticate, (req, res) => {
   res.json({ success: true });
 });
 
-// Get all users for adding to workspace (admin/owner only)
+// Get all users for adding to workspace (admin/owner only), filtered by group visibility
 router.get('/:id/available-users', authenticate, (req, res) => {
   if (!canManageWorkspace(req.params.id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+  const caller = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+  const notInWorkspace = 'u.id NOT IN (SELECT user_id FROM workspace_members WHERE workspace_id = ?)';
+
+  // super_admin and admin see all users
+  if (caller && (caller.role === 'super_admin' || caller.role === 'admin')) {
+    return res.json(db.prepare(`SELECT u.id, u.name, u.email, u.avatar_color, u.role FROM users u WHERE ${notInWorkspace}`).all(req.params.id));
+  }
+
+  // Regular user with no groups: only see super_admin/admin
+  const callerGroups = db.prepare('SELECT group_id FROM user_group_members WHERE user_id = ?').all(req.user.id);
+  if (callerGroups.length === 0) {
+    return res.json(db.prepare(`SELECT u.id, u.name, u.email, u.avatar_color, u.role FROM users u WHERE u.role IN ('super_admin','admin') AND ${notInWorkspace}`).all(req.params.id));
+  }
+
+  // Regular user with groups: see users sharing at least one group + super_admin/admin
   const users = db.prepare(`
-    SELECT u.id, u.name, u.email, u.avatar_color, u.role
-    FROM users u
-    WHERE u.id NOT IN (SELECT user_id FROM workspace_members WHERE workspace_id = ?)
-  `).all(req.params.id);
+    SELECT DISTINCT u.id, u.name, u.email, u.avatar_color, u.role FROM users u
+    WHERE (
+      EXISTS (
+        SELECT 1 FROM user_group_members ugm1
+        JOIN user_group_members ugm2 ON ugm1.group_id = ugm2.group_id
+        WHERE ugm1.user_id = ? AND ugm2.user_id = u.id
+      )
+      OR u.role IN ('super_admin','admin')
+    )
+    AND ${notInWorkspace}
+  `).all(req.user.id, req.params.id);
   res.json(users);
 });
 

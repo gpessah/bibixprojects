@@ -8,11 +8,40 @@ const router = express.Router();
 
 const AVATAR_COLORS = ['#0073ea','#e2445c','#00c875','#ffcb00','#a25ddc','#037f4c','#bb3354','#ff642e','#9aadbd'];
 
+// ── Ensure user_groups tables exist (safe migrations) ────────────────────────
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS user_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#0073ea',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+} catch (_) {}
+try {
+  db.exec(`CREATE TABLE IF NOT EXISTS user_group_members (
+    group_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+  )`);
+} catch (_) {}
+try { db.exec("ALTER TABLE user_groups ADD COLUMN color TEXT DEFAULT '#0073ea'"); } catch (_) {}
+try { db.exec("ALTER TABLE user_groups ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"); } catch (_) {}
+
 // ── List users ─────────────────────────────────────────────────────────────────
 // super_admin: all users with workspace count
 // admin: only users sharing at least one workspace with the caller
 router.get('/users', authenticate, requireAdmin, (req, res) => {
   const caller = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+
+  const attachGroups = (users) => users.map(u => {
+    const groups = db.prepare(`
+      SELECT g.id, g.name, g.color FROM user_group_members ugm
+      JOIN user_groups g ON g.id = ugm.group_id
+      WHERE ugm.user_id = ?
+      ORDER BY g.name ASC
+    `).all(u.id);
+    return { ...u, permissions: JSON.parse(u.permissions || '{}'), groups };
+  });
 
   if (caller.role === 'super_admin') {
     const users = db.prepare(`
@@ -23,7 +52,7 @@ router.get('/users', authenticate, requireAdmin, (req, res) => {
       GROUP BY u.id
       ORDER BY u.created_at ASC
     `).all();
-    return res.json(users.map(u => ({ ...u, permissions: JSON.parse(u.permissions || '{}') })));
+    return res.json(attachGroups(users));
   }
 
   // plain admin — only users in shared workspaces
@@ -39,7 +68,7 @@ router.get('/users', authenticate, requireAdmin, (req, res) => {
     GROUP BY u.id
     ORDER BY u.created_at ASC
   `).all(req.user.id);
-  res.json(users.map(u => ({ ...u, permissions: JSON.parse(u.permissions || '{}') })));
+  res.json(attachGroups(users));
 });
 
 // ── Change a user's role (super_admin only) ────────────────────────────────────
@@ -137,6 +166,96 @@ router.post('/promote-self', authenticate, (req, res) => {
   if (count.c > 0) return res.status(403).json({ error: 'Admin already exists' });
   db.prepare("UPDATE users SET role = 'super_admin' WHERE id = ?").run(req.user.id);
   res.json({ success: true });
+});
+
+// ── User Groups ───────────────────────────────────────────────────────────────
+
+// List all groups with member count
+router.get('/groups', authenticate, requireAdmin, (req, res) => {
+  const groups = db.prepare(`
+    SELECT g.*, COUNT(ugm.user_id) as member_count
+    FROM user_groups g
+    LEFT JOIN user_group_members ugm ON ugm.group_id = g.id
+    GROUP BY g.id
+    ORDER BY g.name ASC
+  `).all();
+  res.json(groups);
+});
+
+// Create group
+router.post('/groups', authenticate, requireSuperAdmin, (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
+    const existing = db.prepare('SELECT id FROM user_groups WHERE name = ?').get(name.trim());
+    if (existing) return res.status(409).json({ error: 'Group name already exists' });
+    const id = uuidv4();
+    db.prepare('INSERT INTO user_groups (id, name, color) VALUES (?, ?, ?)')
+      .run(id, name.trim(), color || '#0073ea');
+    const group = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(id);
+    res.json(group);
+  } catch (e) {
+    console.error('[POST /admin/groups]', e);
+    res.status(500).json({ error: e.message || 'Internal server error' });
+  }
+});
+
+// Rename / recolor group
+router.put('/groups/:id', authenticate, requireSuperAdmin, (req, res) => {
+  const { name, color } = req.body;
+  db.prepare('UPDATE user_groups SET name = COALESCE(?, name), color = COALESCE(?, color) WHERE id = ?')
+    .run(name?.trim() || null, color || null, req.params.id);
+  res.json(db.prepare('SELECT * FROM user_groups WHERE id = ?').get(req.params.id));
+});
+
+// Delete group
+router.delete('/groups/:id', authenticate, requireSuperAdmin, (req, res) => {
+  db.prepare('DELETE FROM user_groups WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// Get members of a group
+router.get('/groups/:id/members', authenticate, requireAdmin, (req, res) => {
+  const members = db.prepare(`
+    SELECT u.id, u.name, u.email, u.avatar_color, u.role FROM user_group_members ugm
+    JOIN users u ON u.id = ugm.user_id
+    WHERE ugm.group_id = ?
+    ORDER BY u.name ASC
+  `).all(req.params.id);
+  res.json(members);
+});
+
+// Add user to group
+router.post('/groups/:id/members', authenticate, requireSuperAdmin, (req, res) => {
+  const { user_id } = req.body;
+  if (!user_id) return res.status(400).json({ error: 'user_id required' });
+  const existing = db.prepare('SELECT 1 FROM user_group_members WHERE group_id = ? AND user_id = ?')
+    .get(req.params.id, user_id);
+  if (existing) return res.status(409).json({ error: 'Already in group' });
+  db.prepare('INSERT INTO user_group_members (group_id, user_id) VALUES (?, ?)').run(req.params.id, user_id);
+  res.json({ success: true });
+});
+
+// Remove user from group
+router.delete('/groups/:id/members/:userId', authenticate, requireSuperAdmin, (req, res) => {
+  db.prepare('DELETE FROM user_group_members WHERE group_id = ? AND user_id = ?')
+    .run(req.params.id, req.params.userId);
+  res.json({ success: true });
+});
+
+// Set all groups for a user (replace)
+router.put('/users/:id/groups', authenticate, requireSuperAdmin, (req, res) => {
+  const { group_ids } = req.body; // array of group IDs
+  if (!Array.isArray(group_ids)) return res.status(400).json({ error: 'group_ids array required' });
+  db.prepare('DELETE FROM user_group_members WHERE user_id = ?').run(req.params.id);
+  for (const gid of group_ids) {
+    db.prepare('INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?)').run(gid, req.params.id);
+  }
+  const groups = db.prepare(`
+    SELECT g.id, g.name, g.color FROM user_group_members ugm
+    JOIN user_groups g ON g.id = ugm.group_id WHERE ugm.user_id = ?
+  `).all(req.params.id);
+  res.json(groups);
 });
 
 module.exports = router;

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, Shield, User, Eye, Settings2, ToggleLeft, ToggleRight, ChevronRight, Crown } from 'lucide-react';
+import { Plus, Pencil, Trash2, Shield, User, Eye, Settings2, ToggleLeft, ToggleRight, ChevronRight, Crown, Users, Tag, X, Check } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
-import type { User as UserType, UserRole, AppModule } from '../types';
+import type { User as UserType, UserRole, AppModule, UserGroup } from '../types';
 import Avatar from '../components/ui/Avatar';
 import Modal from '../components/ui/Modal';
 import toast from 'react-hot-toast';
@@ -35,6 +35,7 @@ interface AdminUser extends UserType {
   permissions: Partial<Record<AppModule, boolean>>;
   created_at: string;
   workspace_count?: number;
+  groups: UserGroup[];
 }
 
 interface FormState {
@@ -210,6 +211,266 @@ function RoleModal({ user, onClose, onSaved }: {
   );
 }
 
+// ── User Groups Panel ─────────────────────────────────────────────────────────
+
+const GROUP_COLORS = ['#0073ea','#e2445c','#00c875','#ffcb00','#a25ddc','#037f4c','#ff642e','#9aadbd','#bb3354'];
+
+function GroupsTab({ users, onUsersChanged, isSuperAdmin }: {
+  users: AdminUser[];
+  onUsersChanged: (users: AdminUser[]) => void;
+  isSuperAdmin: boolean;
+}) {
+  const [groups, setGroups] = useState<UserGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newColor, setNewColor] = useState('#0073ea');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [saving, setSaving] = useState(false);
+  // user group assignment modal
+  const [assignUser, setAssignUser] = useState<AdminUser | null>(null);
+  const [assignSelections, setAssignSelections] = useState<Set<string>>(new Set());
+
+  useEffect(() => { loadGroups(); }, []);
+
+  const loadGroups = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/admin/groups');
+      setGroups(Array.isArray(data) ? data : []);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  };
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    setSaving(true);
+    try {
+      const { data } = await api.post('/admin/groups', { name: newName.trim(), color: newColor });
+      setGroups(g => [...g, { ...data, member_count: 0 }]);
+      setNewName(''); setNewColor('#0073ea'); setShowCreate(false);
+      toast.success('Group created');
+    } catch (e: unknown) {
+      const err = e as { response?: { status?: number; data?: { error?: string } | string }; message?: string };
+      const detail = (typeof err?.response?.data === 'object' ? err?.response?.data?.error : String(err?.response?.data ?? '')) || err?.message || 'unknown';
+      toast.error(`Error ${err?.response?.status ?? ''}: ${detail}`.trim());
+    } finally { setSaving(false); }
+  };
+
+  const handleRename = async (id: string) => {
+    if (!editName.trim()) return setEditingId(null);
+    try {
+      await api.put(`/admin/groups/${id}`, { name: editName.trim() });
+      setGroups(g => g.map(x => x.id === id ? { ...x, name: editName.trim() } : x));
+      toast.success('Renamed');
+    } catch { toast.error('Failed'); }
+    setEditingId(null);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this group? Users will be removed from it.')) return;
+    try {
+      await api.delete(`/admin/groups/${id}`);
+      setGroups(g => g.filter(x => x.id !== id));
+      // update users list to remove group
+      onUsersChanged(users.map(u => ({ ...u, groups: (u.groups ?? []).filter(g => g.id !== id) })));
+      toast.success('Group deleted');
+    } catch { toast.error('Failed'); }
+  };
+
+  const openAssign = (u: AdminUser) => {
+    setAssignUser(u);
+    setAssignSelections(new Set((u.groups ?? []).map(g => g.id)));
+  };
+
+  const handleSaveAssign = async () => {
+    if (!assignUser) return;
+    setSaving(true);
+    try {
+      const { data } = await api.put(`/admin/users/${assignUser.id}/groups`, { group_ids: Array.from(assignSelections) });
+      const updated = users.map(u => u.id === assignUser.id ? { ...u, groups: data } : u);
+      onUsersChanged(updated);
+      await loadGroups(); // refresh counts
+      toast.success('Groups updated');
+      setAssignUser(null);
+    } catch { toast.error('Failed'); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div className="flex items-center justify-center py-20"><div className="animate-spin w-6 h-6 border-4 border-monday-blue border-t-transparent rounded-full" /></div>;
+
+  return (
+    <div className="space-y-6">
+      {/* Groups list */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h2 className="font-semibold text-gray-800">User Groups</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Users in the same group can see each other. Users with no group cannot see other users.</p>
+          </div>
+          {isSuperAdmin && (
+            <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 px-3 py-2 bg-monday-blue text-white rounded-lg text-sm font-medium hover:bg-blue-600">
+              <Plus size={14} /> New Group
+            </button>
+          )}
+        </div>
+
+        {showCreate && (
+          <div className="px-6 py-4 border-b border-gray-100 bg-blue-50/40">
+            <div className="flex items-center gap-3">
+              <input autoFocus value={newName} onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setShowCreate(false); }}
+                placeholder="Group name" className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-monday-blue" />
+              <div className="flex gap-1.5">
+                {GROUP_COLORS.map(c => (
+                  <button key={c} onClick={() => setNewColor(c)}
+                    className={`w-6 h-6 rounded-full transition-transform hover:scale-110 ${newColor === c ? 'ring-2 ring-offset-1 ring-gray-400' : ''}`}
+                    style={{ backgroundColor: c }} />
+                ))}
+              </div>
+              <button onClick={handleCreate} disabled={saving || !newName.trim()} className="px-3 py-2 bg-monday-blue text-white rounded-lg text-sm disabled:opacity-60">Create</button>
+              <button onClick={() => setShowCreate(false)} className="px-3 py-2 text-gray-500 hover:bg-gray-100 rounded-lg text-sm">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {groups.length === 0 ? (
+          <div className="text-center py-12 text-gray-400">
+            <Users size={32} className="mx-auto mb-2 opacity-40" />
+            <p className="text-sm">No groups yet. Create one to control user visibility.</p>
+          </div>
+        ) : (
+          <table className="w-full">
+            <thead><tr className="border-b border-gray-100 bg-gray-50">
+              <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Group</th>
+              <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Members</th>
+              {isSuperAdmin && <th className="px-6 py-3" />}
+            </tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {groups.map(g => (
+                <tr key={g.id} className="hover:bg-gray-50">
+                  <td className="px-6 py-3">
+                    {editingId === g.id ? (
+                      <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); handleRename(g.id); }}>
+                        <input autoFocus value={editName} onChange={e => setEditName(e.target.value)}
+                          onKeyDown={e => e.key === 'Escape' && setEditingId(null)}
+                          className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-monday-blue" />
+                        <button type="submit" className="text-green-500"><Check size={14} /></button>
+                        <button type="button" onClick={() => setEditingId(null)} className="text-gray-400"><X size={14} /></button>
+                      </form>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: g.color }} />
+                        <span className="text-sm font-medium text-gray-800">{g.name}</span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-3 text-sm text-gray-500">{g.member_count ?? 0} member{g.member_count !== 1 ? 's' : ''}</td>
+                  {isSuperAdmin && (
+                    <td className="px-6 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button onClick={() => { setEditingId(g.id); setEditName(g.name); }}
+                          className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><Pencil size={13} /></button>
+                        <button onClick={() => handleDelete(g.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Users with their group assignments */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-800">User Assignments</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Assign users to groups to control who can see whom.</p>
+        </div>
+        <table className="w-full">
+          <thead><tr className="border-b border-gray-100 bg-gray-50">
+            <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
+            <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Groups</th>
+            {isSuperAdmin && <th className="px-6 py-3" />}
+          </tr></thead>
+          <tbody className="divide-y divide-gray-50">
+            {users.map(u => (
+              <tr key={u.id} className="hover:bg-gray-50">
+                <td className="px-6 py-3">
+                  <div className="flex items-center gap-2">
+                    <Avatar name={u.name} color={u.avatar_color} size="sm" />
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{u.name}</div>
+                      <div className="text-xs text-gray-400">{u.email}</div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-6 py-3">
+                  {u.groups?.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {u.groups.map(g => (
+                        <span key={g.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium text-white"
+                          style={{ backgroundColor: g.color }}>
+                          {g.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-400 italic">No group — hidden from others</span>
+                  )}
+                </td>
+                {isSuperAdmin && (
+                  <td className="px-6 py-3 text-right">
+                    <button onClick={() => openAssign(u)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg border border-gray-200 hover:border-blue-200 transition-colors ml-auto">
+                      <Tag size={12} /> Assign groups
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Assign groups modal */}
+      {assignUser && (
+        <Modal title={`Assign groups — ${assignUser.name}`} onClose={() => setAssignUser(null)} size="sm">
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-gray-500">Select which groups this user belongs to.</p>
+            {groups.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">No groups yet. Create some in the Groups tab.</p>
+            ) : (
+              <div className="space-y-2">
+                {groups.map(g => {
+                  const on = assignSelections.has(g.id);
+                  return (
+                    <button key={g.id} onClick={() => setAssignSelections(s => { const n = new Set(s); on ? n.delete(g.id) : n.add(g.id); return n; })}
+                      className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors text-left ${on ? 'border-monday-blue bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                      <span className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: g.color }} />
+                      <span className="text-sm font-medium text-gray-800 flex-1">{g.name}</span>
+                      {on && <Check size={16} className="text-monday-blue flex-shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex gap-2 justify-end pt-2">
+              <button onClick={() => setAssignUser(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={handleSaveAssign} disabled={saving} className="px-4 py-2 text-sm bg-monday-blue text-white rounded-lg hover:bg-blue-600 disabled:opacity-60">
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
@@ -223,6 +484,7 @@ export default function AdminPage() {
   const [form, setForm] = useState<FormState>(emptyForm());
   const [saving, setSaving] = useState(false);
   const [accessLevel, setAccessLevel] = useState<'none' | 'admin' | 'super_admin'>('none');
+  const [activeTab, setActiveTab] = useState<'users' | 'groups'>('users');
 
   const isSuperAdmin = accessLevel === 'super_admin';
 
@@ -231,7 +493,7 @@ export default function AdminPage() {
   const checkAndLoad = async () => {
     try {
       const { data } = await api.get('/admin/users');
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : []);
       // Determine caller's level from the me store (already loaded by App)
       const myRole = me?.role;
       setAccessLevel(myRole === 'super_admin' ? 'super_admin' : myRole === 'admin' ? 'admin' : 'none');
@@ -311,7 +573,7 @@ export default function AdminPage() {
     <div className="flex-1 overflow-y-auto bg-gray-50">
       <div className="max-w-5xl mx-auto px-8 py-10">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-6">
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
@@ -326,20 +588,35 @@ export default function AdminPage() {
               {isSuperAdmin ? ' — showing all users' : ' — showing users in your workspaces'}
             </p>
           </div>
-          {isSuperAdmin && (
+          {isSuperAdmin && activeTab === 'users' && (
             <button onClick={openCreate} className="flex items-center gap-2 px-4 py-2.5 bg-monday-blue text-white rounded-lg hover:bg-blue-600 text-sm font-medium">
               <Plus size={16} /> New User
             </button>
           )}
         </div>
 
+        {/* Tabs */}
+        <div className="flex gap-1 mb-6 border-b border-gray-200">
+          <button onClick={() => setActiveTab('users')}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'users' ? 'border-monday-blue text-monday-blue' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+            <User size={15} /> Users
+          </button>
+          <button onClick={() => setActiveTab('groups')}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === 'groups' ? 'border-monday-blue text-monday-blue' : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
+            <Users size={15} /> Groups
+          </button>
+        </div>
+
+        {activeTab === 'groups' ? (
+          <GroupsTab users={users} onUsersChanged={setUsers} isSuperAdmin={isSuperAdmin} />
+        ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
-                <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Email</th>
                 <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
+                <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Groups</th>
                 <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Access</th>
                 <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Joined</th>
                 <th className="px-6 py-3" />
@@ -355,19 +632,20 @@ export default function AdminPage() {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <Avatar name={u.name} color={u.avatar_color} size="sm" />
-                        <div className="font-medium text-sm text-gray-900">
-                          {u.name}
-                          {u.id === me?.id && <span className="ml-2 text-xs text-gray-400">(you)</span>}
+                        <div>
+                          <div className="font-medium text-sm text-gray-900">
+                            {u.name}
+                            {u.id === me?.id && <span className="ml-2 text-xs text-gray-400">(you)</span>}
+                          </div>
+                          <div className="text-xs text-gray-400">{u.email}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">{u.email}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${roleMeta.color}`}>
                           {roleMeta.icon} {roleMeta.label}
                         </span>
-                        {/* Role change button — super_admin only, not for own account */}
                         {isSuperAdmin && u.id !== me?.id && (
                           <button onClick={() => setRoleUser(u)} title="Change role"
                             className="p-1 text-gray-300 hover:text-purple-500 hover:bg-purple-50 rounded transition-colors">
@@ -375,6 +653,20 @@ export default function AdminPage() {
                           </button>
                         )}
                       </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      {u.groups?.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {u.groups.map(g => (
+                            <span key={g.id} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
+                              style={{ backgroundColor: g.color }}>
+                              {g.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">No group</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <button
@@ -426,6 +718,7 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {/* Edit / Create user modal (super_admin only) */}

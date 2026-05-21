@@ -9,7 +9,7 @@ import WorkspaceMembersModal from '../workspace/WorkspaceMembersModal';
 import toast from 'react-hot-toast';
 
 export default function Sidebar() {
-  const { workspaces, boards, createWorkspace, createBoard, deleteBoard, deleteWorkspace, updateWorkspace } = useWorkspaceStore();
+  const { workspaces, boards, sharedBoards, createWorkspace, createBoard, deleteBoard, deleteWorkspace, updateWorkspace } = useWorkspaceStore();
   const { user, logout, hasPermission } = useAuthStore();
   const navigate = useNavigate();
   const { boardId } = useParams();
@@ -137,7 +137,7 @@ export default function Sidebar() {
             </button>
           </div>
 
-          {workspaces.map(ws => (
+          {(workspaces || []).map(ws => (
             <div key={ws.id} className="mb-1">
               <div className="flex items-center justify-between group px-2 py-1.5 rounded hover:bg-monday-sidebar-hover">
                 {editingWs === ws.id ? (
@@ -205,6 +205,23 @@ export default function Sidebar() {
               )}
             </div>
           ))}
+        {/* Shared with me */}
+        {(sharedBoards || []).length > 0 && (
+          <div className="mt-4 px-2">
+            <div className="px-2 mb-1">
+              <span className="text-xs font-semibold text-white/40 uppercase tracking-wider">Shared with me</span>
+            </div>
+            {(sharedBoards || []).map(board => (
+              <div key={board.id} className={`group flex items-center justify-between px-2 py-1.5 rounded text-sm mx-0 ${boardId === board.id ? 'bg-monday-blue text-white' : 'text-white/70 hover:text-white hover:bg-monday-sidebar-hover'}`}>
+                <Link to={`/board/${board.id}`} className="flex items-center gap-2 flex-1 min-w-0">
+                  <span>{board.icon}</span>
+                  <span className="truncate">{board.name}</span>
+                </Link>
+                <span className="text-white/30 text-xs truncate ml-1 hidden group-hover:block">{board.workspace_name}</span>
+              </div>
+            ))}
+          </div>
+        )}
         </div>
       </nav>
 

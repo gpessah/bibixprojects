@@ -18,7 +18,7 @@ interface Props {
 }
 
 export default function CellRenderer({ column, value, onChange, workspaceId, itemId }: Props) {
-  const opts = column.settings?.options || [];
+  const opts = Array.isArray(column.settings?.options) ? column.settings.options : [];
 
   switch (column.type) {
     case 'status':
