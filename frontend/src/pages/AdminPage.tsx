@@ -26,6 +26,21 @@ const MODULES: { id: AppModule; label: string; description: string; emoji: strin
   { id: 'marketing',  label: 'Marketing',            description: 'Social media and campaigns',      emoji: '📣' },
 ];
 
+// Sub-modules nested under "marketing" → toggleable when marketing is on.
+const MARKETING_CHILDREN: { key: string; label: string; description: string; emoji: string }[] = [
+  { key: 'marketing.instagram', label: 'Instagram', description: 'Access the Instagram tools',  emoji: '📷' },
+  { key: 'marketing.linkedin',  label: 'LinkedIn',  description: 'Access the LinkedIn tools',   emoji: '💼' },
+];
+// Tabs nested under "marketing.instagram" → visible in the Chrome extension popup.
+const INSTAGRAM_EXT_TABS: { key: string; label: string; description: string }[] = [
+  { key: 'marketing.instagram.engagement', label: 'Engagement',  description: 'Like, reply, follow, unfollow' },
+  { key: 'marketing.instagram.messaging',  label: 'Messaging',   description: 'Auto-reply unread DMs' },
+  { key: 'marketing.instagram.insights',   label: 'Insights',    description: 'Scan notifications, follower snapshots' },
+  { key: 'marketing.instagram.accounts',   label: 'Accounts',    description: 'Multi-account scan and switch' },
+  { key: 'marketing.instagram.schedule',   label: 'Schedule',    description: 'Check scheduled posts in the extension' },
+  { key: 'marketing.instagram.pages',      label: 'Pages',       description: 'History, Dashboard, Campaigns links' },
+];
+
 const AVATAR_COLORS = ['#0073ea','#e2445c','#00c875','#ffcb00','#a25ddc','#037f4c','#bb3354','#ff642e'];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -50,19 +65,29 @@ function PermissionsPanel({ user, canEdit, onClose, onSaved }: {
   onClose: () => void;
   onSaved: (updated: AdminUser) => void;
 }) {
-  const [perms, setPerms] = useState<Partial<Record<AppModule, boolean>>>(user.permissions ?? {});
+  // We extended the permissions JSON with nested dotted keys
+  // (marketing.instagram, marketing.instagram.engagement, etc), so the panel
+  // works in a generic Record<string, boolean> shape rather than the
+  // narrower AppModule one.
+  const [perms, setPerms] = useState<Record<string, boolean>>(
+    (user.permissions ?? {}) as Record<string, boolean>
+  );
   const [saving, setSaving] = useState(false);
 
   const isElevated = user.role === 'super_admin' || user.role === 'admin';
 
-  const toggle = (mod: AppModule) => {
+  // Generic toggle works for any permission key (top-level or nested).
+  const toggleKey = (key: string) => {
     setPerms(p => {
-      const current = p[mod] !== false;
-      return { ...p, [mod]: !current };
+      const current = p[key] !== false;
+      return { ...p, [key]: !current };
     });
   };
+  const getKey = (key: string) => perms[key] !== false;
 
-  const getValue = (mod: AppModule) => perms[mod] !== false;
+  // Back-compat helpers for the AppModule-typed loop below.
+  const toggle = (mod: AppModule) => toggleKey(mod);
+  const getValue = (mod: AppModule) => getKey(mod);
 
   const handleSave = async () => {
     setSaving(true);
@@ -109,27 +134,102 @@ function PermissionsPanel({ user, canEdit, onClose, onSaved }: {
               const on = getValue(mod.id);
               const disabled = isElevated || !canEdit;
               return (
-                <div key={mod.id}
-                  className={`flex items-center gap-3 p-4 rounded-xl border transition-colors ${
-                    disabled
-                      ? 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
-                      : on
-                        ? 'border-blue-200 bg-blue-50/50 cursor-pointer hover:bg-blue-50'
-                        : 'border-gray-200 bg-white cursor-pointer hover:bg-gray-50'
-                  }`}
-                  onClick={() => !disabled && toggle(mod.id)}
-                >
-                  <span className="text-xl flex-shrink-0">{mod.emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-800">{mod.label}</div>
-                    <div className="text-xs text-gray-400 mt-0.5">{mod.description}</div>
+                <div key={mod.id}>
+                  <div
+                    className={`flex items-center gap-3 p-4 rounded-xl border transition-colors ${
+                      disabled
+                        ? 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
+                        : on
+                          ? 'border-blue-200 bg-blue-50/50 cursor-pointer hover:bg-blue-50'
+                          : 'border-gray-200 bg-white cursor-pointer hover:bg-gray-50'
+                    }`}
+                    onClick={() => !disabled && toggle(mod.id)}
+                  >
+                    <span className="text-xl flex-shrink-0">{mod.emoji}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-800">{mod.label}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">{mod.description}</div>
+                    </div>
+                    <div className="flex-shrink-0">
+                      {isElevated || on
+                        ? <ToggleRight size={22} className="text-blue-500" />
+                        : <ToggleLeft  size={22} className="text-gray-300" />
+                      }
+                    </div>
                   </div>
-                  <div className="flex-shrink-0">
-                    {isElevated || on
-                      ? <ToggleRight size={22} className="text-blue-500" />
-                      : <ToggleLeft  size={22} className="text-gray-300" />
-                    }
-                  </div>
+
+                  {/* Marketing → Instagram / LinkedIn children */}
+                  {mod.id === 'marketing' && (isElevated || on) && (
+                    <div className="ml-6 mt-2 pl-3 border-l-2 border-gray-100 space-y-2">
+                      {MARKETING_CHILDREN.map(child => {
+                        const childOn = getKey(child.key);
+                        const childDisabled = isElevated || !canEdit;
+                        return (
+                          <div key={child.key}>
+                            <div
+                              className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+                                childDisabled
+                                  ? 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
+                                  : childOn
+                                    ? 'border-blue-200 bg-blue-50/50 cursor-pointer hover:bg-blue-50'
+                                    : 'border-gray-200 bg-white cursor-pointer hover:bg-gray-50'
+                              }`}
+                              onClick={() => !childDisabled && toggleKey(child.key)}
+                            >
+                              <span className="text-lg flex-shrink-0">{child.emoji}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium text-gray-800">{child.label}</div>
+                                <div className="text-xs text-gray-400 mt-0.5">{child.description}</div>
+                              </div>
+                              <div className="flex-shrink-0">
+                                {isElevated || childOn
+                                  ? <ToggleRight size={20} className="text-blue-500" />
+                                  : <ToggleLeft  size={20} className="text-gray-300" />
+                                }
+                              </div>
+                            </div>
+
+                            {/* Instagram extension-tab toggles, only when Instagram is on */}
+                            {child.key === 'marketing.instagram' && (isElevated || childOn) && (
+                              <div className="ml-6 mt-1.5 pl-3 border-l-2 border-gray-100 space-y-1.5">
+                                <p className="text-[11px] uppercase tracking-wider text-gray-400 mt-1 mb-1">
+                                  Extension popup tabs
+                                </p>
+                                {INSTAGRAM_EXT_TABS.map(tab => {
+                                  const tabOn = getKey(tab.key);
+                                  const tabDisabled = isElevated || !canEdit;
+                                  return (
+                                    <div key={tab.key}
+                                      className={`flex items-center gap-3 px-3 py-2 rounded-md border text-sm transition-colors ${
+                                        tabDisabled
+                                          ? 'border-gray-100 bg-gray-50 opacity-60 cursor-not-allowed'
+                                          : tabOn
+                                            ? 'border-blue-200 bg-blue-50/40 cursor-pointer hover:bg-blue-50'
+                                            : 'border-gray-200 bg-white cursor-pointer hover:bg-gray-50'
+                                      }`}
+                                      onClick={() => !tabDisabled && toggleKey(tab.key)}
+                                    >
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-medium text-gray-800">{tab.label}</div>
+                                        <div className="text-xs text-gray-400">{tab.description}</div>
+                                      </div>
+                                      {isElevated || tabOn
+                                        ? <ToggleRight size={18} className="text-blue-500" />
+                                        : <ToggleLeft  size={18} className="text-gray-300" />
+                                      }
+                                    </div>
+                                  );
+                                })}
+                                <p className="text-[11px] text-gray-400 italic mt-1">
+                                  Sync is always visible so users can paste their token.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

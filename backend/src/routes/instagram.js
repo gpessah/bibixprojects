@@ -1383,58 +1383,32 @@ router.post('/ai-caption', authenticateFlexible, async (req, res) => {
 });
 
 // ── Extension tab visibility per user ────────────────────────────────────────
-// The popup fetches this on open and hides any tab not in the returned list.
-// NULL/empty stored value means "all tabs visible" (backward-compatible
-// default). Admins manage these via the admin endpoint below.
+// Permissions live in users.permissions (the existing JSON column managed
+// from the admin User Management page) using nested dotted keys:
+//   marketing                            → enables the Marketing module
+//   marketing.instagram                  → enables Instagram inside Marketing
+//   marketing.instagram.engagement       → per-tab visibility (and so on)
+// Absent keys default to "enabled" — only an explicit `false` disables.
+// Elevated roles (super_admin / admin) always see everything.
 const VALID_EXT_TABS = ['engagement', 'messaging', 'insights', 'accounts', 'schedule', 'sync', 'pages'];
 
 router.get('/extension/permissions', authenticateFlexible, (req, res) => {
   const uid = req.user.id;
-  const row = db.prepare('SELECT instagram_extension_tabs FROM users WHERE id = ?').get(uid);
-  let allowed = null;
-  try {
-    const parsed = row?.instagram_extension_tabs ? JSON.parse(row.instagram_extension_tabs) : null;
-    if (Array.isArray(parsed)) allowed = parsed.filter(t => VALID_EXT_TABS.includes(t));
-  } catch (_) {}
-  // null → frontend treats as "all"; explicit array → only those visible
-  res.json({ allowed_tabs: allowed && allowed.length ? allowed : null });
-});
-
-// Admin-only: list all users with their current tab settings
-router.get('/admin/extension/permissions', authenticate, (req, res) => {
-  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
+  const row = db.prepare('SELECT permissions, role FROM users WHERE id = ?').get(uid);
+  // Elevated users always see every tab
+  if (row?.role === 'super_admin' || row?.role === 'admin') {
+    return res.json({ allowed_tabs: null });
   }
-  const rows = db.prepare(`
-    SELECT id, name, email, role, instagram_extension_tabs
-    FROM users ORDER BY name ASC
-  `).all();
-  res.json(rows.map(r => {
-    let tabs = null;
-    try { tabs = r.instagram_extension_tabs ? JSON.parse(r.instagram_extension_tabs) : null; } catch (_) {}
-    return {
-      id: r.id, name: r.name, email: r.email, role: r.role,
-      // Empty array = explicit "no tabs"; null = "all tabs (default)"
-      allowed_tabs: Array.isArray(tabs) ? tabs : null,
-    };
-  }));
-});
-
-// Admin-only: update a single user's tab permissions
-router.patch('/admin/extension/permissions/:userId', authenticate, (req, res) => {
-  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
+  let perms = {};
+  try { perms = JSON.parse(row?.permissions || '{}'); } catch (_) {}
+  // Marketing or Instagram module disabled → no popup tabs visible
+  if (perms.marketing === false || perms['marketing.instagram'] === false) {
+    return res.json({ allowed_tabs: [] });
   }
-  const { allowed_tabs } = req.body || {};
-  let stored = null;
-  if (Array.isArray(allowed_tabs)) {
-    const clean = allowed_tabs.filter(t => VALID_EXT_TABS.includes(t));
-    stored = JSON.stringify(clean);
-  }
-  // allowed_tabs === null (or missing) clears the setting → user gets all tabs.
-  db.prepare(`UPDATE users SET instagram_extension_tabs = ? WHERE id = ?`)
-    .run(stored, req.params.userId);
-  res.json({ ok: true });
+  // Per-tab: only explicit `false` hides a tab. Absent = visible.
+  const allowed = VALID_EXT_TABS.filter(t => perms[`marketing.instagram.${t}`] !== false);
+  // If everything's allowed, return null so the popup keeps its "show all" path
+  res.json({ allowed_tabs: allowed.length === VALID_EXT_TABS.length ? null : allowed });
 });
 
 module.exports = router;
