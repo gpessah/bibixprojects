@@ -638,7 +638,7 @@ export default function InstagramPage() {
   }
 
   async function createCampaign() {
-    if (!createAccount) { alert('Pick an Instagram account for the campaign.'); return; }
+    if (!createAccount) { alert('Pick an Instagram account for the batch.'); return; }
     const conc = Math.max(1, Math.min(6, parseInt(createConcurrency, 10) || 6));
     setCreateBusy(true);
     try {
@@ -656,7 +656,7 @@ export default function InstagramPage() {
       const newId = res.data?.id;
       if (newId) { setExpandedCampaign(newId); loadExpandedItems(newId); }
     } catch (e: unknown) {
-      alert('Failed to create campaign: ' + (e instanceof Error ? e.message : String(e)));
+      alert('Failed to create batch: ' + (e instanceof Error ? e.message : String(e)));
     } finally { setCreateBusy(false); }
   }
 
@@ -670,14 +670,14 @@ export default function InstagramPage() {
   }
 
   async function submitAddToCampaign() {
-    if (!addToCampaignId) { alert('Pick a campaign first (or create a new one).'); return; }
+    if (!addToCampaignId) { alert('Pick a batch first (or create a new one).'); return; }
     const count = Math.max(1, parseInt(addToCount, 10) || 1);
     const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
     if (selected.length === 0) { alert('No posts selected.'); return; }
     const camp = actionCampaigns.find(c => c.id === addToCampaignId);
     const remaining = camp ? 6 - (camp.items_count ?? 0) : 6;
     if (selected.length > remaining) {
-      alert(`That campaign has room for only ${remaining} more post(s). You selected ${selected.length}. Remove some or create a new campaign.`);
+      alert(`That batch has room for only ${remaining} more post(s). You selected ${selected.length}. Remove some or create a new batch.`);
       return;
     }
     const customReplies = addToReplySource === 'custom'
@@ -703,7 +703,7 @@ export default function InstagramPage() {
       setAddToReplyText('');
       await loadActionCampaigns();
     } catch (e: unknown) {
-      alert('Failed to add to campaign: ' + (e instanceof Error ? e.message : String(e)));
+      alert('Failed to add to batch: ' + (e instanceof Error ? e.message : String(e)));
     } finally { setAddToBusy(false); }
   }
 
@@ -747,7 +747,7 @@ export default function InstagramPage() {
   }
 
   async function removeItem(campaignId: string, itemId: string) {
-    if (!confirm('Remove this post from the campaign?')) return;
+    if (!confirm('Remove this post from the batch?')) return;
     try {
       await api.delete(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`);
       await loadExpandedItems(campaignId);
@@ -778,7 +778,7 @@ export default function InstagramPage() {
   }
 
   async function deleteCampaign(id: string) {
-    if (!confirm('Delete this campaign and all its items permanently?')) return;
+    if (!confirm('Delete this batch and all its items permanently?')) return;
     try {
       await api.delete(`/instagram/action-campaigns/${id}${qs}`);
       if (expandedCampaign === id) { setExpandedCampaign(null); setExpandedItems([]); }
@@ -789,7 +789,7 @@ export default function InstagramPage() {
   }
 
   async function cancelActionCampaign(id: string) {
-    if (!confirm('Cancel this campaign? Pending actions will be skipped; in-flight ones finish.')) return;
+    if (!confirm('Cancel this batch? Pending actions will be skipped; in-flight ones finish.')) return;
     await api.post(`/instagram/action-campaigns/${id}/cancel${qs}`);
     await loadActionCampaigns();
   }
@@ -818,7 +818,7 @@ export default function InstagramPage() {
   const TABS = [
     { id: 'dashboard' as Tab, label: 'Dashboard', icon: <BarChart2 size={15} /> },
     { id: 'history'   as Tab, label: 'History',   icon: <Clock size={15} /> },
-    { id: 'campaigns' as Tab, label: 'Campaigns', icon: <Zap size={15} /> },
+    { id: 'campaigns' as Tab, label: 'Batches',   icon: <Zap size={15} /> },
     { id: 'schedule'  as Tab, label: 'Schedule',  icon: <Calendar size={15} /> },
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
@@ -1680,7 +1680,7 @@ export default function InstagramPage() {
                       className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
                     <button onClick={openAddToCampaign}
                       className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-                      Add to campaign
+                      Add to batch
                     </button>
                   </div>
                 )}
@@ -1815,7 +1815,7 @@ export default function InstagramPage() {
                           jumpTab="schedule"
                         />
                         <Card
-                          title="Action batches"
+                          title="Action Batches"
                           status={ab.status}
                           primary={`${(ab.by_status.running || 0)} running · ${(ab.by_status.pending || 0)} pending`}
                           secondary={ab.stalled_running > 0 ? `⚠️ ${ab.stalled_running} stuck >1h` : sumStatuses(ab.by_status)}
@@ -1862,11 +1862,11 @@ export default function InstagramPage() {
           <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">New campaign</h3>
+                <h3 className="text-lg font-semibold text-gray-900">New batch</h3>
                 <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                The campaign starts as a draft. Add up to 6 posts (from Research or by URL), then click <b>Send</b> to start it.
+                The batch starts as a draft. Add up to 6 posts (from Research or by URL), then click <b>Send</b> to start it.
               </p>
               <div className="mb-3">
                 <label className="block text-xs font-medium text-gray-500 mb-1">Instagram account</label>
@@ -1915,23 +1915,23 @@ export default function InstagramPage() {
           <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowAddToCampaign(false)}>
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">Add to campaign</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Add to batch</h3>
                 <button onClick={() => setShowAddToCampaign(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a campaign. Each campaign holds up to 6 posts total.
+                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a batch. Each batch holds up to 6 posts total.
               </p>
               {actionCampaigns.filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6).length === 0 ? (
                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
-                  No campaigns available. <button className="underline" onClick={() => { setShowAddToCampaign(false); setShowCreateModal(true); }}>Create one first</button>.
+                  No batches available. <button className="underline" onClick={() => { setShowAddToCampaign(false); setShowCreateModal(true); }}>Create one first</button>.
                 </p>
               ) : (
                 <>
                   <div className="mb-3">
-                    <label className="block text-xs font-medium text-gray-500 mb-1">Campaign</label>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Batch</label>
                     <select value={addToCampaignId} onChange={e => setAddToCampaignId(e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                      <option value="">— pick a campaign —</option>
+                      <option value="">— pick a batch —</option>
                       {actionCampaigns
                         .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6)
                         .map(c => (
@@ -1984,7 +1984,7 @@ export default function InstagramPage() {
                 <button onClick={() => setShowAddToCampaign(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
                 <button onClick={submitAddToCampaign} disabled={addToBusy || !addToCampaignId}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                  {addToBusy ? 'Adding…' : 'Add to campaign'}
+                  {addToBusy ? 'Adding…' : 'Add to batch'}
                 </button>
               </div>
             </div>
@@ -1998,19 +1998,19 @@ export default function InstagramPage() {
             {/* Action campaigns header + create button */}
             <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-gray-900">Action campaigns <span className="text-gray-400 font-normal">({actionCampaigns.length})</span></h3>
+                <h3 className="font-semibold text-gray-900">Action Batches <span className="text-gray-400 font-normal">({actionCampaigns.length})</span></h3>
                 <div className="flex items-center gap-2">
                   <button onClick={loadActionCampaigns} className="text-gray-400 hover:text-gray-600" title="Refresh">
                     <RefreshCw size={16} />
                   </button>
                   <button onClick={() => { setCreateAccount(igAccounts[0] || ''); setShowCreateModal(true); }}
                     className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
-                    <Plus size={14} /> New campaign
+                    <Plus size={14} /> New batch
                   </button>
                 </div>
               </div>
               {actionCampaigns.length === 0 ? (
-                <p className="text-gray-400 text-sm py-6 text-center">No campaigns yet. Click <b>+ New campaign</b> to create your first one.</p>
+                <p className="text-gray-400 text-sm py-6 text-center">No batches yet. Click <b>+ New batch</b> to create your first one.</p>
               ) : (
                 <div className="space-y-2">
                   {actionCampaigns.map(c => {
@@ -2029,7 +2029,7 @@ export default function InstagramPage() {
                               else { setExpandedCampaign(c.id); loadExpandedItems(c.id); }
                             }} className="flex items-center gap-2 text-left flex-1">
                               <ChevronDown size={14} className={`text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                              <span className="font-medium text-gray-900 text-sm">{c.name || `Campaign ${c.id.slice(0, 8)}`}</span>
+                              <span className="font-medium text-gray-900 text-sm">{c.name || `Batch ${c.id.slice(0, 8)}`}</span>
                               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                                 c.status === 'draft'     ? 'bg-amber-100 text-amber-700'  :
                                 c.status === 'completed' ? 'bg-green-100 text-green-700'  :
