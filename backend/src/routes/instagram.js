@@ -323,13 +323,21 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
 });
 
 // ── Stats / Dashboard ─────────────────────────────────────────────────────────
-// Inbound event types the dashboard knows how to display. Some require an
-// extended notification scanner to populate; absent ones simply render as 0.
-const INBOUND_TYPES = [
-  'new_follower',
-  'got_like_post', 'got_like_reel', 'got_like_comment',
-  'got_comment', 'got_reply', 'got_mention',
-];
+// Inbound event types the dashboard knows how to display. The notification
+// scanner writes `received_*`; older code used `got_*`. We accept both names
+// for backwards-compat — each card sums all aliases together.
+const INBOUND_TYPE_ALIASES = {
+  new_follower:      ['new_follower'],
+  got_like_post:     ['received_like_post', 'got_like_post'],
+  got_like_reel:     ['received_like_reel', 'got_like_reel'],
+  got_like_comment:  ['received_like_comment', 'got_like_comment'],
+  got_comment:       ['received_comment', 'got_comment'],
+  got_reply:         ['received_reply', 'got_reply'],
+  got_mention:       ['received_mention', 'got_mention'],
+};
+// Every inbound type across all aliases — used in the funnel's
+// "any-engagement-back" check.
+const ALL_INBOUND_TYPES = Object.values(INBOUND_TYPE_ALIASES).flat();
 
 router.get("/stats", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
@@ -397,30 +405,36 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     GROUP BY username ORDER BY n DESC LIMIT 10
   `).all(...baseParams, ...af.params);
 
-  // ── Inbound counts by type (Phase 2 — most will be 0 until the
-  // notification scanner records granular types) ─────────────────────────
+  // ── Inbound counts by type ─────────────────────────────────────────────
+  // Each "Returns Received" card sums all aliases (received_* + got_*) so
+  // historic scans counted under the older naming still appear.
   const inboundCounts = {};
-  for (const t of INBOUND_TYPES) {
-    const row = db.prepare(`SELECT COUNT(*) AS n FROM instagram_actions WHERE ${baseWhere} AND type = ?`).get(...baseParams, t);
-    inboundCounts[t] = row?.n || 0;
+  for (const [canonical, aliases] of Object.entries(INBOUND_TYPE_ALIASES)) {
+    const placeholders = aliases.map(() => '?').join(',');
+    const row = db.prepare(`
+      SELECT COUNT(*) AS n FROM instagram_actions
+      WHERE ${baseWhere} AND type IN (${placeholders})
+    `).get(...baseParams, ...aliases);
+    inboundCounts[canonical] = row?.n || 0;
   }
 
-  // ── Funnel (Phase 3) — for each outbound action type, count distinct
-  // usernames we targeted and how many later appeared as a paired inbound
-  // event. Done with an EXISTS join instead of LOWER() correlated subquery
-  // so it stays cheap on indexes. ────────────────────────────────────────
-  const FUNNEL_PAIRS = [
-    { sent: 'follow',       returned: 'new_follower',     label: 'Follow → followed back' },
-    { sent: 'like',         returned: 'got_like_post',    label: 'Like post → got like back' },
-    { sent: 'comment',      returned: 'got_comment',      label: 'Comment → got comment back' },
-    { sent: 'comment_reply',returned: 'got_reply',        label: 'Reply → got reply back' },
+  // ── Funnel — "of unique users I targeted with action X, how many later
+  // engaged back in ANY way?" This is more useful than strict like→like
+  // pairings: when I like someone's comment, they often follow / like /
+  // mention me back rather than liking my own comment specifically.
+  const inboundPlaceholders = ALL_INBOUND_TYPES.map(() => '?').join(',');
+  const FUNNEL_ROWS = [
+    { sent: 'follow',        label: 'Follow → any engagement back' },
+    { sent: 'like',          label: 'Like → any engagement back' },
+    { sent: 'comment',       label: 'Comment → any engagement back' },
+    { sent: 'comment_reply', label: 'Reply → any engagement back' },
   ];
   const funnel = [];
-  for (const pair of FUNNEL_PAIRS) {
+  for (const row of FUNNEL_ROWS) {
     const sent = db.prepare(`
       SELECT COUNT(DISTINCT username) AS n FROM instagram_actions
       WHERE ${baseWhere} AND type = ? AND username IS NOT NULL
-    `).get(...baseParams, pair.sent)?.n || 0;
+    `).get(...baseParams, row.sent)?.n || 0;
     const returned = db.prepare(`
       SELECT COUNT(DISTINCT a.username) AS n FROM instagram_actions a
       WHERE a.user_id = ? AND a.type = ? AND a.username IS NOT NULL
@@ -428,14 +442,14 @@ router.get("/stats", authenticateFlexible, (req, res) => {
           SELECT 1 FROM instagram_actions b
           WHERE b.user_id = a.user_id
             AND b.username = a.username
-            AND b.type = ?
+            AND b.type IN (${inboundPlaceholders})
             AND b.created_at >= a.created_at
         )
-    `).get(uid, pair.sent, pair.returned)?.n || 0;
+    `).get(uid, row.sent, ...ALL_INBOUND_TYPES)?.n || 0;
     funnel.push({
-      action_type: pair.sent,
-      paired_with: pair.returned,
-      label: pair.label,
+      action_type: row.sent,
+      paired_with: 'any_inbound',
+      label: row.label,
       sent, returned,
       percent: sent > 0 ? Math.round((returned / sent) * 1000) / 10 : null,
     });
