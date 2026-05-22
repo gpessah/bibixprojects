@@ -349,11 +349,68 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     GROUP BY username ORDER BY n DESC LIMIT 10
   `).all(uid);
 
-  // (Conversion and bestPosts sections removed — their correlated
-  // subqueries with LOWER() were causing /stats to timeout on accounts
-  // with thousands of actions. The new dashboard redesign will compute
-  // these via more efficient JOINs + caching.)
-  res.json({ total, byType, follows, newFollowers, followBack, daily, topUsers });
+  // ── Follower growth (computed from instagram_follower_counts) ──────────
+  // For each profile we tracked counts on, find the latest count inside the
+  // period and the latest count BEFORE the period started. Sum across all
+  // profiles to get the total growth.
+  const sinceIso = `datetime('now', '-${Number(days)} days')`;
+  const profilesInPeriod = db.prepare(`
+    SELECT DISTINCT my_profile FROM instagram_follower_counts WHERE user_id = ?
+  `).all(uid).map(r => r.my_profile).filter(Boolean);
+
+  let curTotal = 0, prevTotal = 0;
+  const perAccount = [];
+  for (const profile of profilesInPeriod) {
+    const cur = db.prepare(`
+      SELECT follower_count FROM instagram_follower_counts
+      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) >= ${sinceIso}
+      ORDER BY captured_at DESC LIMIT 1
+    `).get(uid, profile);
+    const prev = db.prepare(`
+      SELECT follower_count FROM instagram_follower_counts
+      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) < ${sinceIso}
+      ORDER BY captured_at DESC LIMIT 1
+    `).get(uid, profile);
+    const curN  = cur?.follower_count  ?? null;
+    const prevN = prev?.follower_count ?? null;
+    if (curN  != null) curTotal  += curN;
+    if (prevN != null) prevTotal += prevN;
+    // Daily series for this profile (latest per day inside the period)
+    const series = db.prepare(`
+      SELECT date(captured_at) AS day, follower_count
+      FROM instagram_follower_counts
+      WHERE user_id = ? AND my_profile = ?
+        AND datetime(captured_at) >= ${sinceIso}
+      ORDER BY captured_at ASC
+    `).all(uid, profile);
+    // Collapse multiple same-day entries to the latest
+    const byDay = {};
+    for (const r of series) byDay[r.day] = r.follower_count;
+    perAccount.push({
+      profile,
+      current: curN,
+      previous: prevN,
+      delta: (curN != null && prevN != null) ? curN - prevN : null,
+      percent: (curN != null && prevN && prevN > 0)
+        ? Math.round(((curN - prevN) / prevN) * 1000) / 10
+        : null,
+      series: Object.entries(byDay).map(([day, count]) => ({ day, count })),
+    });
+  }
+  perAccount.sort((a, b) => (b.current || 0) - (a.current || 0));
+
+  const followerGrowth = {
+    current: curTotal,
+    previous: prevTotal,
+    delta: curTotal - prevTotal,
+    percent: prevTotal > 0 ? Math.round(((curTotal - prevTotal) / prevTotal) * 1000) / 10 : null,
+  };
+
+  res.json({
+    total, byType, follows, newFollowers, followBack, daily, topUsers,
+    followerGrowth,
+    perAccountGrowth: perAccount,
+  });
 });
 
 // ── Admin: list all users with stats ─────────────────────────────────────────

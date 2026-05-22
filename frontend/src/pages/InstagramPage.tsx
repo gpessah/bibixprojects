@@ -119,6 +119,14 @@ interface Stats {
   byType: { type: string; n: number }[];
   daily: { day: string; type: string; n: number }[];
   topUsers: { username: string; n: number }[];
+  followerGrowth?: {
+    current: number; previous: number; delta: number; percent: number | null;
+  };
+  perAccountGrowth?: {
+    profile: string; current: number | null; previous: number | null;
+    delta: number | null; percent: number | null;
+    series: { day: string; count: number }[];
+  }[];
 }
 
 interface AdminUser {
@@ -999,14 +1007,20 @@ export default function InstagramPage() {
 
         {/* ══════════════════════════════ DASHBOARD ══════════════════════════════ */}
         {tab === 'dashboard' && (
-          <div>
-            <div className="flex gap-2 mb-6">
-              {[7, 30, 90].map(d => (
-                <button key={d} onClick={() => setDays(d)}
-                  className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
-                  {d} days
-                </button>
-              ))}
+          <div className="space-y-4">
+            {/* ── Filter bar ── */}
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="text-lg font-semibold text-gray-900 mr-auto">Dashboard</h3>
+              <div className="flex gap-1.5">
+                {[7, 30, 90].map(d => (
+                  <button key={d} onClick={() => setDays(d)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                    }`}>
+                    {d} days
+                  </button>
+                ))}
+              </div>
             </div>
 
             {loading ? (
@@ -1015,24 +1029,150 @@ export default function InstagramPage() {
               </div>
             ) : stats && (
               <>
-                <div className="grid grid-cols-4 gap-4 mb-6">
-                  {[
-                    { label: 'Total Actions',  value: stats.total,                    color: 'text-blue-600',   bg: 'bg-blue-50' },
-                    { label: 'Follows Sent',   value: stats.follows,                  color: 'text-green-600',  bg: 'bg-green-50' },
-                    { label: 'New Followers',  value: stats.newFollowers,             color: 'text-purple-600', bg: 'bg-purple-50' },
-                    { label: 'Follow-back %',  value: `${stats.followBack}%`,         color: 'text-orange-600', bg: 'bg-orange-50' },
-                  ].map(c => (
-                    <div key={c.label} className={`${c.bg} rounded-xl p-5`}>
-                      <div className={`text-3xl font-bold ${c.color}`}>{c.value}</div>
-                      <div className="text-sm text-gray-600 mt-1">{c.label}</div>
+                {/* ── Hero row: New Followers + Daily follower growth chart ── */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Hero card */}
+                  <div className="bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 rounded-xl p-6 text-white shadow-md">
+                    <div className="text-xs uppercase tracking-wider text-white/80 mb-1">New Followers</div>
+                    <div className="text-5xl font-bold">
+                      {stats.followerGrowth?.delta != null
+                        ? (stats.followerGrowth.delta >= 0 ? '+' : '') + stats.followerGrowth.delta.toLocaleString()
+                        : '—'}
                     </div>
-                  ))}
+                    {stats.followerGrowth?.percent != null && (
+                      <div className="mt-2 inline-flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded-full text-sm">
+                        {stats.followerGrowth.percent >= 0 ? '↑' : '↓'} {Math.abs(stats.followerGrowth.percent).toFixed(1)}%
+                      </div>
+                    )}
+                    <div className="text-xs text-white/70 mt-3">
+                      {(stats.followerGrowth?.previous ?? 0).toLocaleString()} → {(stats.followerGrowth?.current ?? 0).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-white/60 mt-1">Last {days} days</div>
+                  </div>
+
+                  {/* Daily follower growth chart spanning 2 columns */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-5 lg:col-span-2">
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Daily follower count — all profiles combined</h4>
+                    {(() => {
+                      const acc = stats.perAccountGrowth || [];
+                      if (acc.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">No follower data yet. Set up an Automation or use Refresh now on Followers tab.</p>;
+                      // Combine per-day totals across accounts
+                      const dayTotals: Record<string, number> = {};
+                      for (const a of acc) {
+                        for (const pt of a.series) {
+                          dayTotals[pt.day] = (dayTotals[pt.day] || 0) + pt.count;
+                        }
+                      }
+                      const sortedDays = Object.keys(dayTotals).sort();
+                      if (sortedDays.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">Not enough data yet — need at least 1 follower-count snapshot.</p>;
+                      const values = sortedDays.map(d => dayTotals[d]);
+                      const min = Math.min(...values);
+                      const max = Math.max(...values);
+                      const range = Math.max(1, max - min);
+                      // Build SVG polyline
+                      const w = 600, h = 100;
+                      const points = sortedDays.map((d, i) => {
+                        const x = sortedDays.length > 1 ? (i / (sortedDays.length - 1)) * w : w / 2;
+                        const y = h - ((dayTotals[d] - min) / range) * (h - 10) - 5;
+                        return `${x.toFixed(1)},${y.toFixed(1)}`;
+                      }).join(' ');
+                      return (
+                        <>
+                          <svg viewBox={`0 0 ${w} ${h + 20}`} className="w-full h-28">
+                            <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="2" />
+                            {sortedDays.map((d, i) => {
+                              const x = sortedDays.length > 1 ? (i / (sortedDays.length - 1)) * w : w / 2;
+                              const y = h - ((dayTotals[d] - min) / range) * (h - 10) - 5;
+                              return <circle key={d} cx={x} cy={y} r="2.5" fill="#3b82f6" />;
+                            })}
+                          </svg>
+                          <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                            <span>{sortedDays[0]}</span>
+                            <span>{sortedDays[sortedDays.length - 1]}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-gray-500 mt-2">
+                            <span>Lowest: <b className="text-gray-700">{min.toLocaleString()}</b></span>
+                            <span>Highest: <b className="text-gray-700">{max.toLocaleString()}</b></span>
+                            <span>Latest: <b className="text-gray-700">{values[values.length - 1].toLocaleString()}</b></span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                {/* ── Quick Stats row — Actions you sent ── */}
+                <div>
+                  <h4 className="font-semibold text-gray-900 text-sm mb-2">Actions sent — last {days} days</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    {[
+                      { key: 'like',           label: 'Likes',       color: 'text-pink-600',    bg: 'bg-pink-50' },
+                      { key: 'comment_reply',  label: 'Replies',     color: 'text-blue-600',    bg: 'bg-blue-50' },
+                      { key: 'follow',         label: 'Follows',     color: 'text-green-600',   bg: 'bg-green-50' },
+                      { key: 'unfollow',       label: 'Unfollows',   color: 'text-orange-600',  bg: 'bg-orange-50' },
+                      { key: 'comment',        label: 'Comments',    color: 'text-purple-600',  bg: 'bg-purple-50' },
+                    ].map(c => {
+                      const n = (stats.byType || []).find(r => r.type === c.key)?.n || 0;
+                      return (
+                        <div key={c.key} className="bg-white border border-gray-200 rounded-xl p-3">
+                          <div className={`text-[10px] uppercase font-medium ${c.color}`}>{c.label}</div>
+                          <div className="text-2xl font-bold text-gray-900 mt-0.5">{n.toLocaleString()}</div>
+                        </div>
+                      );
+                    })}
+                    <div className="bg-gray-900 text-white rounded-xl p-3">
+                      <div className="text-[10px] uppercase font-medium text-gray-300">Total</div>
+                      <div className="text-2xl font-bold mt-0.5">{stats.total.toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Per-account follower growth ── */}
+                {(stats.perAccountGrowth || []).length > 0 && (
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
-                    <h3 className="font-semibold text-gray-900 mb-4">Actions by Type</h3>
-                    <div className="space-y-3">
+                    <h4 className="font-semibold text-gray-900 text-sm mb-3">Per-account follower growth</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {(stats.perAccountGrowth || []).map(a => {
+                        const series = a.series;
+                        const values = series.map(s => s.count);
+                        const min = values.length ? Math.min(...values) : 0;
+                        const max = values.length ? Math.max(...values) : 0;
+                        const range = Math.max(1, max - min);
+                        const w = 140, h = 36;
+                        const points = values.length > 0 ? series.map((s, i) => {
+                          const x = series.length > 1 ? (i / (series.length - 1)) * w : w / 2;
+                          const y = h - ((s.count - min) / range) * (h - 4) - 2;
+                          return `${x.toFixed(1)},${y.toFixed(1)}`;
+                        }).join(' ') : '';
+                        const deltaUp = (a.delta ?? 0) >= 0;
+                        return (
+                          <div key={a.profile} className="border border-gray-100 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <a href={`https://instagram.com/${a.profile}`} target="_blank" rel="noreferrer"
+                                className="text-sm font-medium text-blue-600 hover:underline">@{a.profile}</a>
+                              {a.delta != null && a.delta !== 0 && (
+                                <span className={`text-xs font-medium ${deltaUp ? 'text-green-600' : 'text-red-600'}`}>
+                                  {deltaUp ? '↑' : '↓'} {Math.abs(a.delta).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xl font-bold text-gray-900">{a.current?.toLocaleString() ?? '—'}</div>
+                            {points && (
+                              <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-9 mt-1">
+                                <polyline points={points} fill="none" stroke={deltaUp ? '#10b981' : '#ef4444'} strokeWidth="1.5" />
+                              </svg>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Action mix</h4>
+                    <div className="space-y-2">
                       {(stats.byType || []).map(r => (
                         <div key={r.type} className="flex items-center gap-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[r.type] || 'bg-gray-100 text-gray-600'}`}>
@@ -1050,7 +1190,7 @@ export default function InstagramPage() {
                   </div>
 
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
-                    <h3 className="font-semibold text-gray-900 mb-4">Top Users Engaged</h3>
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Top users engaged</h4>
                     <div className="space-y-2">
                       {(stats.topUsers || []).map((u, i) => (
                         <div key={u.username} className="flex items-center gap-3">
@@ -1067,43 +1207,40 @@ export default function InstagramPage() {
                   </div>
                 </div>
 
-                {/* ── Activity Over Time ── */}
+                {/* ── Activity Over Time (existing chart, polished a touch) ── */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <h3 className="font-semibold text-gray-900 mb-4">📅 Activity Over Time</h3>
+                  <h4 className="font-semibold text-gray-900 mb-3 text-sm">Activity over time</h4>
                   {(() => {
                     const daily = stats.daily || [];
-                    if (daily.length === 0) return <p className="text-gray-400 text-sm">No data yet</p>;
-                    // Pivot daily rows into per-day totals split outbound/inbound
+                    if (daily.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">No data yet</p>;
                     const OUTBOUND = new Set(['like', 'comment', 'reply', 'comment_reply', 'follow', 'unfollow']);
                     const INBOUND  = new Set(['new_follower', 'new_like', 'new_comment']);
-                    const days: Record<string, { outbound: number; inbound: number }> = {};
+                    const dmap: Record<string, { outbound: number; inbound: number }> = {};
                     for (const row of daily) {
-                      if (!days[row.day]) days[row.day] = { outbound: 0, inbound: 0 };
-                      if (OUTBOUND.has(row.type)) days[row.day].outbound += row.n;
-                      else if (INBOUND.has(row.type)) days[row.day].inbound += row.n;
+                      if (!dmap[row.day]) dmap[row.day] = { outbound: 0, inbound: 0 };
+                      if (OUTBOUND.has(row.type)) dmap[row.day].outbound += row.n;
+                      else if (INBOUND.has(row.type)) dmap[row.day].inbound += row.n;
                     }
-                    const sortedDays = Object.keys(days).sort();
-                    const maxVal = Math.max(1, ...sortedDays.map(d => Math.max(days[d].outbound, days[d].inbound)));
+                    const sortedDays = Object.keys(dmap).sort();
+                    const maxVal = Math.max(1, ...sortedDays.map(d => Math.max(dmap[d].outbound, dmap[d].inbound)));
                     return (
                       <>
                         <div className="flex items-end gap-1 h-32 overflow-x-auto pb-2">
                           {sortedDays.map(d => {
-                            const v = days[d];
-                            const outH = (v.outbound / maxVal) * 100;
-                            const inH = (v.inbound / maxVal) * 100;
+                            const v = dmap[d];
                             return (
                               <div key={d} className="flex flex-col items-center min-w-[40px]">
                                 <div className="flex items-end gap-0.5 h-28">
-                                  <div className="w-3 bg-blue-500 rounded-t" style={{ height: `${outH}%` }} title={`${v.outbound} outbound`} />
-                                  <div className="w-3 bg-green-500 rounded-t" style={{ height: `${inH}%` }} title={`${v.inbound} inbound`} />
+                                  <div className="w-3 bg-blue-500 rounded-t" style={{ height: `${(v.outbound / maxVal) * 100}%` }} title={`${v.outbound} outbound`} />
+                                  <div className="w-3 bg-green-500 rounded-t" style={{ height: `${(v.inbound / maxVal) * 100}%` }} title={`${v.inbound} inbound`} />
                                 </div>
                                 <span className="text-[10px] text-gray-400 mt-1 -rotate-45 origin-top-left whitespace-nowrap">{d.slice(5)}</span>
                               </div>
                             );
                           })}
                         </div>
-                        <div className="flex gap-4 text-xs text-gray-600 mt-4">
-                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded-sm" /> Outbound (likes / replies / follows)</span>
+                        <div className="flex gap-4 text-xs text-gray-600 mt-3">
+                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded-sm" /> Outbound</span>
                           <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded-sm" /> Inbound (new followers)</span>
                         </div>
                       </>
@@ -1111,6 +1248,16 @@ export default function InstagramPage() {
                   })()}
                 </div>
 
+                {/* ── Returns Received — placeholder for Phase 2 ── */}
+                <div className="bg-gradient-to-br from-gray-50 to-blue-50/30 rounded-xl border border-dashed border-blue-200 p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-semibold text-gray-900 text-sm">Returns Received <span className="text-xs font-normal text-gray-400">— coming soon</span></h4>
+                    <span className="text-[10px] uppercase tracking-wider bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Phase 2</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    Got-comment, got-like (post vs reel vs comment), got-reply, got-mention counts will appear here once we extend the notification scanner to track inbound types granularly. The funnel ("we sent X likes, got Y back") will follow.
+                  </p>
+                </div>
               </>
             )}
           </div>
