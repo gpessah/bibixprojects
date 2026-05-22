@@ -507,12 +507,88 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     percent: prevTotal > 0 ? Math.round(((curTotal - prevTotal) / prevTotal) * 1000) / 10 : null,
   };
 
+  // ── Conversion attribution ──────────────────────────────────────────────
+  // For each `new_follower` event in the period, look back at outbound
+  // actions targeting that same username (matching my_profile when known)
+  // and find the most recent one. That action gets the "credit" for the
+  // conversion, plus we expose time-to-convert in minutes.
+  // The scalar subquery picks a single id; SQLite then joins it once.
+  const attributionRows = db.prepare(`
+    SELECT
+      nf.username       AS follower,
+      nf.my_profile     AS my_profile,
+      nf.full_name      AS full_name,
+      nf.follower_count AS follower_count,
+      nf.created_at     AS followed_at,
+      a.type            AS attributed_type,
+      a.post_url        AS attributed_post,
+      a.post_owner      AS attributed_post_owner,
+      a.campaign_id     AS attributed_campaign,
+      a.created_at      AS attributed_at,
+      CAST((JULIANDAY(nf.created_at) - JULIANDAY(a.created_at)) * 24 * 60 AS INTEGER) AS minutes_to_convert
+    FROM instagram_actions nf
+    LEFT JOIN instagram_actions a ON a.id = (
+      SELECT inner_a.id FROM instagram_actions inner_a
+      WHERE inner_a.user_id = nf.user_id
+        AND inner_a.username = nf.username
+        AND (
+             inner_a.my_profile = nf.my_profile
+          OR inner_a.my_profile IS NULL
+          OR nf.my_profile IS NULL
+        )
+        AND inner_a.type IN ('like', 'comment', 'comment_reply', 'reply', 'follow')
+        AND datetime(inner_a.created_at) <= datetime(nf.created_at)
+      ORDER BY inner_a.created_at DESC
+      LIMIT 1
+    )
+    WHERE nf.user_id = ?
+      AND nf.type = 'new_follower'
+      ${(req.query.from && req.query.to)
+        ? `AND date(nf.created_at) BETWEEN ? AND ?`
+        : `AND datetime(nf.created_at) >= datetime('now', '-${days} days')`}
+      ${req.query.profiles ? `AND LOWER(nf.my_profile) IN (${String(req.query.profiles).split(',').map(() => '?').join(',')})` : ''}
+    ORDER BY nf.created_at DESC
+    LIMIT 100
+  `).all(
+    uid,
+    ...(req.query.from && req.query.to ? [String(req.query.from).slice(0,10), String(req.query.to).slice(0,10)] : []),
+    ...(req.query.profiles ? String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean) : [])
+  );
+
+  // Roll-up: how many of the attribution rows have a prior action vs not,
+  // average minutes-to-convert, and a breakdown by attributed type.
+  const attributed = attributionRows.filter(r => r.attributed_type);
+  const organic   = attributionRows.length - attributed.length;
+  const avgMinutes = attributed.length > 0
+    ? Math.round(attributed.reduce((s, r) => s + (r.minutes_to_convert || 0), 0) / attributed.length)
+    : null;
+  const breakdown = {};
+  for (const r of attributed) {
+    breakdown[r.attributed_type] = (breakdown[r.attributed_type] || 0) + 1;
+  }
+
+  const attribution = {
+    total_new_followers: attributionRows.length,
+    attributed_count: attributed.length,
+    organic_count: organic,
+    attribution_rate: attributionRows.length > 0
+      ? Math.round((attributed.length / attributionRows.length) * 1000) / 10
+      : null,
+    avg_minutes_to_convert: avgMinutes,
+    by_attributed_type: Object.entries(breakdown).map(([type, count]) => ({
+      type, count,
+      percent: attributed.length > 0 ? Math.round((count / attributed.length) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count),
+    rows: attributionRows,
+  };
+
   res.json({
     total, byType, follows, newFollowers, followBack, daily, topUsers,
     followerGrowth,
     perAccountGrowth: perAccount,
     inboundCounts,
     funnel,
+    attribution,
   });
 });
 

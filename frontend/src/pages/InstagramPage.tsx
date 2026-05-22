@@ -129,6 +129,27 @@ interface Stats {
   }[];
   inboundCounts?: Record<string, number>;
   funnel?: { action_type: string; paired_with: string; label: string; sent: number; returned: number; percent: number | null }[];
+  attribution?: {
+    total_new_followers: number;
+    attributed_count: number;
+    organic_count: number;
+    attribution_rate: number | null;
+    avg_minutes_to_convert: number | null;
+    by_attributed_type: { type: string; count: number; percent: number }[];
+    rows: {
+      follower: string;
+      my_profile: string | null;
+      full_name: string | null;
+      follower_count: number | null;
+      followed_at: string;
+      attributed_type: string | null;
+      attributed_post: string | null;
+      attributed_post_owner: string | null;
+      attributed_campaign: string | null;
+      attributed_at: string | null;
+      minutes_to_convert: number | null;
+    }[];
+  };
 }
 
 const INBOUND_CARDS: { key: string; label: string; color: string; bg: string; emoji: string }[] = [
@@ -1412,6 +1433,144 @@ export default function InstagramPage() {
                     Pairs without inbound data show 0/0 until the notification scanner records the matching event types.
                   </p>
                 </div>
+
+                {/* ── Conversion Attribution ── */}
+                {stats.attribution && (
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="font-semibold text-gray-900 text-sm">🔄 Conversion Attribution</h4>
+                        <p className="text-xs text-gray-500 mt-0.5">For each new follower, the most recent outbound action targeting them — and how long they took to convert.</p>
+                      </div>
+                    </div>
+
+                    {/* Rollup row */}
+                    {(() => {
+                      const a = stats.attribution!;
+                      const fmtMins = (m: number | null) => {
+                        if (m == null) return '—';
+                        if (m < 60) return `${m}m`;
+                        if (m < 24 * 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+                        const d = Math.floor(m / 1440);
+                        const h = Math.floor((m % 1440) / 60);
+                        return `${d}d ${h}h`;
+                      };
+                      return (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="bg-blue-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-blue-700">Total followers gained</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{a.total_new_followers.toLocaleString()}</div>
+                          </div>
+                          <div className="bg-green-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-green-700">Attributed to an action</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">
+                              {a.attributed_count} <span className="text-sm text-gray-500">({a.attribution_rate?.toFixed(1) ?? '0.0'}%)</span>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-gray-600">Organic (no prior action)</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{a.organic_count}</div>
+                          </div>
+                          <div className="bg-orange-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-orange-700">Avg time to convert</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{fmtMins(a.avg_minutes_to_convert)}</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Breakdown by attributed action type */}
+                    {stats.attribution.by_attributed_type.length > 0 && (
+                      <div className="mb-4">
+                        <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Which action types convert</div>
+                        <div className="flex flex-wrap gap-2">
+                          {stats.attribution.by_attributed_type.map(b => (
+                            <div key={b.type} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs">
+                              <span className={`font-medium ${TYPE_COLOR[b.type]?.split(' ')[1] || 'text-gray-700'}`}>{TYPE_LABEL[b.type] || b.type}</span>
+                              <span className="ml-2 text-gray-900 font-bold">{b.count}</span>
+                              <span className="ml-1 text-gray-500">({b.percent.toFixed(1)}%)</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-follower table */}
+                    {stats.attribution.rows.length === 0 ? (
+                      <p className="text-gray-400 text-sm py-4 text-center">No new follower events in this period.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                              <th className="py-2 pr-3 font-medium">Follower</th>
+                              <th className="py-2 pr-3 font-medium">Followed</th>
+                              <th className="py-2 pr-3 font-medium">When</th>
+                              <th className="py-2 pr-3 font-medium">Attributed action</th>
+                              <th className="py-2 pr-3 font-medium">On post</th>
+                              <th className="py-2 pr-3 font-medium text-right">Time to convert</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stats.attribution.rows.slice(0, 50).map((r, i) => {
+                              const shortPost = r.attributed_post
+                                ? r.attributed_post.match(/\/(p|reel)\/([\w-]+)/)?.[2] || r.attributed_post.slice(-12)
+                                : null;
+                              const isOrganic = !r.attributed_type;
+                              const fmtTime = (mins: number | null) => {
+                                if (mins == null) return '—';
+                                if (mins < 60) return `${mins}m`;
+                                if (mins < 24 * 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+                                const d = Math.floor(mins / 1440);
+                                const h = Math.floor((mins % 1440) / 60);
+                                return `${d}d ${h}h`;
+                              };
+                              return (
+                                <tr key={`${r.follower}-${r.followed_at}-${i}`} className="border-b border-gray-50 last:border-0">
+                                  <td className="py-2 pr-3">
+                                    <a href={`https://instagram.com/${r.follower}`} target="_blank" rel="noreferrer"
+                                      className="text-blue-600 hover:underline font-medium">@{r.follower}</a>
+                                    {r.full_name && <span className="text-xs text-gray-400 ml-2">({r.full_name})</span>}
+                                  </td>
+                                  <td className="py-2 pr-3 text-gray-700 text-xs">{r.my_profile ? `@${r.my_profile}` : '—'}</td>
+                                  <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(r.followed_at)}</td>
+                                  <td className="py-2 pr-3">
+                                    {isOrganic ? (
+                                      <span className="text-xs text-gray-400 italic">organic — no prior action</span>
+                                    ) : (
+                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLOR[r.attributed_type!] || 'bg-gray-100 text-gray-600'}`}>
+                                        {TYPE_LABEL[r.attributed_type!] || r.attributed_type}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3 text-xs">
+                                    {r.attributed_post ? (
+                                      <a href={r.attributed_post} target="_blank" rel="noreferrer"
+                                        className="text-blue-600 hover:underline">
+                                        {shortPost}
+                                      </a>
+                                    ) : '—'}
+                                    {r.attributed_post_owner && (
+                                      <span className="text-gray-400 ml-1">· @{r.attributed_post_owner}</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs">
+                                    {isOrganic ? '—' : <b className="text-gray-900">{fmtTime(r.minutes_to_convert)}</b>}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {stats.attribution.rows.length > 50 && (
+                          <p className="text-xs text-gray-400 mt-2 text-center">
+                            Showing 50 of {stats.attribution.rows.length} new followers. Narrow the date range to see fewer.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
