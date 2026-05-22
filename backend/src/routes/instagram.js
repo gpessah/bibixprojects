@@ -154,6 +154,10 @@ try {
       ON instagram_action_campaigns(user_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_follower_counts_user_profile
       ON instagram_follower_counts(user_id, my_profile, captured_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_created
+      ON instagram_actions(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_created
+      ON instagram_actions(user_id, type, created_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -325,59 +329,11 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     GROUP BY username ORDER BY n DESC LIMIT 10
   `).all(uid);
 
-  // Who followed you back — for each "follow" action, check if the same
-  // username later appears as a "new_follower" event. Gives conversion data.
-  const conversion = db.prepare(`
-    SELECT
-      f.username,
-      f.created_at AS followed_at,
-      f.full_name,
-      f.follower_count,
-      (SELECT MIN(nf.created_at)
-         FROM instagram_actions nf
-         WHERE nf.user_id = f.user_id
-           AND LOWER(nf.username) = LOWER(f.username)
-           AND nf.type = 'new_follower'
-           AND nf.created_at >= f.created_at
-      ) AS followed_back_at
-    FROM instagram_actions f
-    WHERE f.user_id = ?
-      AND f.type = 'follow'
-      AND f.username IS NOT NULL
-      AND datetime(f.created_at) >= ${since}
-    ORDER BY f.created_at DESC
-    LIMIT 100
-  `).all(uid);
-
-  // Best posts by follower conversion — for each post we engaged with,
-  // count unique users we touched and how many of them later followed.
-  const bestPosts = db.prepare(`
-    SELECT
-      a.post_url,
-      a.post_owner,
-      COUNT(DISTINCT a.username) AS engaged_users,
-      COUNT(DISTINCT CASE
-        WHEN EXISTS (
-          SELECT 1 FROM instagram_actions nf
-          WHERE nf.user_id = a.user_id
-            AND LOWER(nf.username) = LOWER(a.username)
-            AND nf.type = 'new_follower'
-            AND nf.created_at >= a.created_at
-        ) THEN a.username
-      END) AS converted
-    FROM instagram_actions a
-    WHERE a.user_id = ?
-      AND a.post_url IS NOT NULL
-      AND a.username IS NOT NULL
-      AND a.type IN ('like', 'comment', 'reply', 'follow')
-      AND datetime(a.created_at) >= ${since}
-    GROUP BY a.post_url
-    HAVING engaged_users > 0
-    ORDER BY converted DESC, engaged_users DESC
-    LIMIT 20
-  `).all(uid);
-
-  res.json({ total, byType, follows, newFollowers, followBack, daily, topUsers, conversion, bestPosts });
+  // (Conversion and bestPosts sections removed — their correlated
+  // subqueries with LOWER() were causing /stats to timeout on accounts
+  // with thousands of actions. The new dashboard redesign will compute
+  // these via more efficient JOINs + caching.)
+  res.json({ total, byType, follows, newFollowers, followBack, daily, topUsers });
 });
 
 // ── Admin: list all users with stats ─────────────────────────────────────────
