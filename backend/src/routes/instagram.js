@@ -1412,14 +1412,11 @@ router.get('/extension/permissions', authenticateFlexible, (req, res) => {
 });
 
 // ── System health / QA dashboard ─────────────────────────────────────────────
-// Aggregates status indicators for every Instagram-side feature so admins can
-// spot regressions and stuck schedules at a glance. Each block returns the
-// current counts + a derived `status` (ok / late / failing / unknown) the UI
-// uses to pick a color. Read-only, no side effects.
-router.get('/admin/health', authenticate, (req, res) => {
-  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
+// Per-user health summary — aggregates status indicators for every
+// Instagram-side feature so the user can spot regressions and stuck schedules
+// at a glance. Each block returns the current counts + a derived `status`
+// (ok / late / failing / unknown) the UI uses to pick a color. Read-only.
+router.get('/admin/health', authenticateFlexible, (req, res) => {
   const uid = req.user.id;
 
   // ── Daily follower counts ──────────────────────────────────────────────
@@ -1510,14 +1507,23 @@ router.get('/admin/health', authenticate, (req, res) => {
           : 'failing',
   };
 
-  // ── Permissions setup (admin-only metric) ──────────────────────────────
-  const permUsers = db.prepare(`
-    SELECT COUNT(*) AS n FROM users WHERE permissions IS NOT NULL AND permissions != '{}'
-  `).get()?.n || 0;
-  const totalUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get()?.n || 0;
+  // ── This user's own permissions ────────────────────────────────────────
+  // Read the current user's permissions JSON and surface which Instagram
+  // extension tabs they're allowed to see.
+  const userRow = db.prepare('SELECT permissions, role FROM users WHERE id = ?').get(uid);
+  let userPerms = {};
+  try { userPerms = JSON.parse(userRow?.permissions || '{}'); } catch (_) {}
+  const isElevated = userRow?.role === 'super_admin' || userRow?.role === 'admin';
+  const igTabs = ['engagement', 'messaging', 'insights', 'accounts', 'schedule', 'sync', 'pages'];
+  const tabsAllowed = isElevated
+    ? igTabs.length
+    : (userPerms.marketing === false || userPerms['marketing.instagram'] === false)
+      ? 1 // only Sync
+      : igTabs.filter(t => userPerms[`marketing.instagram.${t}`] !== false).length;
   const permissions = {
-    users_with_explicit_perms: permUsers,
-    total_users: totalUsers,
+    role: userRow?.role || 'user',
+    tabs_allowed: tabsAllowed,
+    total_tabs: igTabs.length,
     status: 'ok',
   };
 

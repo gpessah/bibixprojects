@@ -15,7 +15,7 @@ interface HealthResponse {
   action_batches: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
   scrape_jobs: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
   extension_activity: HealthBlock & { last_action_at: string | null; actions_last_24h: number };
-  permissions: HealthBlock & { users_with_explicit_perms: number; total_users: number };
+  permissions: HealthBlock & { role: string; tabs_allowed: number; total_tabs: number };
   accounts: HealthBlock & { count: number };
 }
 
@@ -565,8 +565,8 @@ export default function InstagramPage() {
     finally { setHealthBusy(false); }
   };
   useEffect(() => {
-    if (tab === 'health' && isAdmin) loadHealth();
-  }, [tab, isAdmin]);
+    if (tab === 'health') loadHealth();
+  }, [tab]);
 
   // ── Action campaigns (drafts that you build up, then Send) ───────────────
   // Flow: create empty draft → add up to 6 items (from Research or by URL)
@@ -825,7 +825,7 @@ export default function InstagramPage() {
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
     { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
-    ...(isAdmin ? [{ id: 'health' as Tab, label: 'Health', icon: <Zap size={15} /> }] : []),
+    { id: 'health'    as Tab, label: 'Health',    icon: <Zap size={15} /> },
   ];
 
   return (
@@ -1836,8 +1836,8 @@ export default function InstagramPage() {
           </div>
         )}
 
-        {/* ══════════════════════════════ HEALTH (admin) ══════════════════════════════ */}
-        {tab === 'health' && isAdmin && (
+        {/* ══════════════════════════════ HEALTH ══════════════════════════════ */}
+        {tab === 'health' && (
           <div className="space-y-4 max-w-6xl">
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1943,10 +1943,10 @@ export default function InstagramPage() {
                           jumpTab="accounts"
                         />
                         <Card
-                          title="Per-user permissions"
+                          title="Your permissions"
                           status={pp.status}
-                          primary={`${pp.users_with_explicit_perms} of ${pp.total_users} configured`}
-                          secondary="Manage in User Management → permissions"
+                          primary={`${pp.tabs_allowed} of ${pp.total_tabs} tabs`}
+                          secondary={`Role: ${pp.role}`}
                         />
                       </>
                     );
