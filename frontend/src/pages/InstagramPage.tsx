@@ -127,7 +127,26 @@ interface Stats {
     delta: number | null; percent: number | null;
     series: { day: string; count: number }[];
   }[];
+  inboundCounts?: Record<string, number>;
+  funnel?: { action_type: string; paired_with: string; label: string; sent: number; returned: number; percent: number | null }[];
 }
+
+const INBOUND_CARDS: { key: string; label: string; color: string; bg: string; emoji: string }[] = [
+  { key: 'got_comment',      label: 'Got Comment',     color: 'text-blue-600',   bg: 'bg-blue-50',   emoji: '💬' },
+  { key: 'got_like_post',    label: 'Got Like · Post', color: 'text-pink-600',   bg: 'bg-pink-50',   emoji: '❤️' },
+  { key: 'got_like_reel',    label: 'Got Like · Reel', color: 'text-rose-600',   bg: 'bg-rose-50',   emoji: '🎬' },
+  { key: 'got_like_comment', label: 'Got Like · Comment', color: 'text-purple-600', bg: 'bg-purple-50', emoji: '💗' },
+  { key: 'got_reply',        label: 'Got Reply',       color: 'text-cyan-600',   bg: 'bg-cyan-50',   emoji: '↩️' },
+  { key: 'got_mention',      label: 'Got Mention',     color: 'text-orange-600', bg: 'bg-orange-50', emoji: '@' },
+];
+
+const ACTION_TYPE_OPTIONS: { key: string; label: string }[] = [
+  { key: 'like',          label: 'Like comment' },
+  { key: 'comment_reply', label: 'Reply' },
+  { key: 'comment',       label: 'Comment' },
+  { key: 'follow',        label: 'Follow' },
+  { key: 'unfollow',      label: 'Unfollow' },
+];
 
 interface AdminUser {
   id: string; name: string; email: string; total_actions: number;
@@ -255,11 +274,26 @@ export default function InstagramPage() {
     if (isAdmin) api.get('/instagram/admin/users').then((r: { data: AdminUser[] }) => setAdminUsers(r.data));
   }, [isAdmin]);
 
+  // ── Dashboard filters ────────────────────────────────────────────────────
+  const [dashFrom, setDashFrom] = useState<string>('');   // 'YYYY-MM-DD' overrides days
+  const [dashTo,   setDashTo]   = useState<string>('');
+  const [dashProfiles, setDashProfiles] = useState<string[]>([]);
+  const [dashActionTypes, setDashActionTypes] = useState<string[]>([]);
+  const [dashBatchId, setDashBatchId] = useState<string>('');
+
   useEffect(() => {
     setLoading(true);
-    const q = asUser ? `?days=${days}&as_user=${asUser}` : `?days=${days}`;
-    api.get(`/instagram/stats${q}`).then((r: { data: Stats }) => setStats(r.data)).finally(() => setLoading(false));
-  }, [days, asUser]);
+    const params = new URLSearchParams();
+    if (dashFrom && dashTo) { params.set('from', dashFrom); params.set('to', dashTo); }
+    else { params.set('days', String(days)); }
+    if (dashProfiles.length > 0) params.set('profiles', dashProfiles.join(','));
+    if (dashActionTypes.length > 0) params.set('action_types', dashActionTypes.join(','));
+    if (dashBatchId) params.set('batch_id', dashBatchId);
+    if (asUser) params.set('as_user', asUser);
+    api.get(`/instagram/stats?${params.toString()}`)
+      .then((r: { data: Stats }) => setStats(r.data))
+      .finally(() => setLoading(false));
+  }, [days, asUser, dashFrom, dashTo, dashProfiles, dashActionTypes, dashBatchId]);
 
   useEffect(() => {
     // Load all actions for client-side filtering (matches chrome extension behaviour)
@@ -752,7 +786,7 @@ export default function InstagramPage() {
   };
 
   useEffect(() => {
-    if (tab === 'campaigns') loadActionCampaigns();
+    if (tab === 'campaigns' || tab === 'dashboard') loadActionCampaigns();
   }, [tab, asUser]);
 
   useEffect(() => {
@@ -1008,18 +1042,85 @@ export default function InstagramPage() {
         {/* ══════════════════════════════ DASHBOARD ══════════════════════════════ */}
         {tab === 'dashboard' && (
           <div className="space-y-4">
-            {/* ── Filter bar ── */}
-            <div className="flex flex-wrap items-center gap-3">
-              <h3 className="text-lg font-semibold text-gray-900 mr-auto">Dashboard</h3>
-              <div className="flex gap-1.5">
-                {[7, 30, 90].map(d => (
-                  <button key={d} onClick={() => setDays(d)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
-                    }`}>
-                    {d} days
-                  </button>
-                ))}
+            {/* ── Filter bar (dates · profiles · action types · batch) ── */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-lg font-semibold text-gray-900">Dashboard</h3>
+                <div className="flex gap-1.5 ml-auto">
+                  {[7, 30, 90].map(d => (
+                    <button key={d} onClick={() => { setDays(d); setDashFrom(''); setDashTo(''); }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        !dashFrom && days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                      }`}>
+                      {d} days
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-1 border border-gray-200 rounded-lg px-2 text-xs">
+                    <input type="date" value={dashFrom} onChange={e => setDashFrom(e.target.value)}
+                      className="border-0 outline-none text-xs py-1 bg-transparent" />
+                    <span className="text-gray-400">→</span>
+                    <input type="date" value={dashTo} onChange={e => setDashTo(e.target.value)}
+                      className="border-0 outline-none text-xs py-1 bg-transparent" />
+                  </div>
+                  {(dashFrom || dashTo || dashProfiles.length || dashActionTypes.length || dashBatchId) ? (
+                    <button onClick={() => { setDashFrom(''); setDashTo(''); setDashProfiles([]); setDashActionTypes([]); setDashBatchId(''); }}
+                      className="text-xs text-gray-500 hover:text-gray-700 px-2">
+                      Clear filters
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Profiles */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Profiles</label>
+                  <div className="border border-gray-200 rounded-lg p-2 max-h-24 overflow-y-auto text-xs">
+                    {igAccounts.length === 0 ? (
+                      <span className="text-gray-400">No accounts configured</span>
+                    ) : igAccounts.map(u => {
+                      const checked = dashProfiles.includes(u);
+                      return (
+                        <label key={u} className="flex items-center gap-1.5 px-1 py-0.5 hover:bg-gray-50 rounded cursor-pointer">
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setDashProfiles(p => checked ? p.filter(x => x !== u) : [...p, u])} />
+                          @{u}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Action types */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Action types</label>
+                  <div className="border border-gray-200 rounded-lg p-2 max-h-24 overflow-y-auto text-xs">
+                    {ACTION_TYPE_OPTIONS.map(at => {
+                      const checked = dashActionTypes.includes(at.key);
+                      return (
+                        <label key={at.key} className="flex items-center gap-1.5 px-1 py-0.5 hover:bg-gray-50 rounded cursor-pointer">
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setDashActionTypes(p => checked ? p.filter(x => x !== at.key) : [...p, at.key])} />
+                          {at.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Batch */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Action Batch</label>
+                  <select value={dashBatchId} onChange={e => setDashBatchId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white">
+                    <option value="">All batches</option>
+                    {actionCampaigns.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name || c.id.slice(0, 8)} ({c.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -1248,14 +1349,67 @@ export default function InstagramPage() {
                   })()}
                 </div>
 
-                {/* ── Returns Received — placeholder for Phase 2 ── */}
-                <div className="bg-gradient-to-br from-gray-50 to-blue-50/30 rounded-xl border border-dashed border-blue-200 p-5">
+                {/* ── Returns Received (6 inbound types) ── */}
+                <div>
                   <div className="flex items-center justify-between mb-2">
-                    <h4 className="font-semibold text-gray-900 text-sm">Returns Received <span className="text-xs font-normal text-gray-400">— coming soon</span></h4>
-                    <span className="text-[10px] uppercase tracking-wider bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Phase 2</span>
+                    <h4 className="font-semibold text-gray-900 text-sm">Returns Received</h4>
+                    <span className="text-[10px] text-gray-400">
+                      {Object.values(stats.inboundCounts || {}).every(n => n === 0)
+                        ? 'No inbound events yet — set up a "Scan notifications" automation to start tracking.'
+                        : ''}
+                    </span>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    Got-comment, got-like (post vs reel vs comment), got-reply, got-mention counts will appear here once we extend the notification scanner to track inbound types granularly. The funnel ("we sent X likes, got Y back") will follow.
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {INBOUND_CARDS.map(c => {
+                      const n = stats.inboundCounts?.[c.key] || 0;
+                      return (
+                        <div key={c.key} className={`${c.bg} border border-gray-200 rounded-xl p-3`}>
+                          <div className="text-xs flex items-center justify-between mb-1">
+                            <span className={`uppercase font-medium ${c.color}`}>{c.label}</span>
+                            <span className="text-base">{c.emoji}</span>
+                          </div>
+                          <div className="text-2xl font-bold text-gray-900">{n.toLocaleString()}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Funnel · Actions sent → Returns ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h4 className="font-semibold text-gray-900 mb-3 text-sm">Funnel · Actions sent → Returns received</h4>
+                  {(stats.funnel || []).length === 0 ? (
+                    <p className="text-gray-400 text-sm">No funnel data yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {(stats.funnel || []).map(row => {
+                        const max = Math.max(1, ...(stats.funnel || []).map(r => r.sent));
+                        const sentPct = (row.sent / max) * 100;
+                        const returnedPct = (row.returned / max) * 100;
+                        return (
+                          <div key={row.action_type + row.paired_with}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs text-gray-700 font-medium">{row.label}</span>
+                              <span className="text-xs text-gray-500">
+                                <b className="text-gray-900">{row.returned.toLocaleString()}</b> back from <b className="text-gray-900">{row.sent.toLocaleString()}</b> sent
+                                {row.percent != null && <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  row.percent >= 30 ? 'bg-green-100 text-green-700' :
+                                  row.percent >= 10 ? 'bg-yellow-100 text-yellow-700' :
+                                                      'bg-gray-100 text-gray-600'
+                                }`}>{row.percent.toFixed(1)}%</span>}
+                              </span>
+                            </div>
+                            <div className="relative h-5 bg-gray-100 rounded">
+                              <div className="absolute inset-y-0 left-0 bg-orange-200 rounded" style={{ width: `${sentPct}%` }} />
+                              <div className="absolute inset-y-0 left-0 bg-orange-500 rounded" style={{ width: `${returnedPct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-3 italic">
+                    Pairs without inbound data show 0/0 until the notification scanner records the matching event types.
                   </p>
                 </div>
               </>

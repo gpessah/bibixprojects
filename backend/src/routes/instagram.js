@@ -323,67 +323,168 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
 });
 
 // ── Stats / Dashboard ─────────────────────────────────────────────────────────
+// Inbound event types the dashboard knows how to display. Some require an
+// extended notification scanner to populate; absent ones simply render as 0.
+const INBOUND_TYPES = [
+  'new_follower',
+  'got_like_post', 'got_like_reel', 'got_like_comment',
+  'got_comment', 'got_reply', 'got_mention',
+];
+
 router.get("/stats", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  const { days = 30 } = req.query;
-  const since = `datetime('now', '-${Number(days)} days')`;
+  const days = parseInt(req.query.days, 10) || 30;
 
-  const total   = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND datetime(created_at) >= ${since}`).get(uid).n;
-  const byType  = db.prepare(`SELECT type, COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND datetime(created_at) >= ${since} GROUP BY type`).all(uid);
+  // ── Build a reusable WHERE clause + param list based on the query filters
+  // (profiles[], action_types[], batch_id, and a date range that can be
+  // either custom from/to or a relative `days` window).
+  const filtersBase = ['user_id = ?'];
+  const baseParams = [uid];
+
+  if (req.query.from && req.query.to) {
+    const from = String(req.query.from).slice(0, 10);
+    const to = String(req.query.to).slice(0, 10);
+    filtersBase.push(`date(created_at) BETWEEN ? AND ?`);
+    baseParams.push(from, to);
+  } else {
+    filtersBase.push(`datetime(created_at) >= datetime('now', '-${days} days')`);
+  }
+
+  if (req.query.profiles) {
+    const profiles = String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+    if (profiles.length > 0) {
+      filtersBase.push(`LOWER(my_profile) IN (${profiles.map(() => '?').join(',')})`);
+      baseParams.push(...profiles);
+    }
+  }
+
+  if (req.query.batch_id) {
+    filtersBase.push('campaign_id = ?');
+    baseParams.push(String(req.query.batch_id));
+  }
+
+  // action_types is applied separately: many sections want it; some don't
+  // (e.g. the inbound "Returns Received" section ignores it because that's
+  // about *what came back* regardless of which outbound type we filtered).
+  const actionFilterSql = () => {
+    if (!req.query.action_types) return { sql: '', params: [] };
+    const types = String(req.query.action_types).split(',').map(t => t.trim()).filter(Boolean);
+    if (types.length === 0) return { sql: '', params: [] };
+    return {
+      sql: ` AND type IN (${types.map(() => '?').join(',')})`,
+      params: types,
+    };
+  };
+
+  const baseWhere = filtersBase.join(' AND ');
+  const af = actionFilterSql();
+  const whereWithAction = baseWhere + af.sql;
+
+  // ── Outbound stats (filtered) ──────────────────────────────────────────
+  const total = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE ${whereWithAction}`).get(...baseParams, ...af.params).n;
+  const byType = db.prepare(`SELECT type, COUNT(*) as n FROM instagram_actions WHERE ${whereWithAction} GROUP BY type`).all(...baseParams, ...af.params);
   const follows = (byType.find(r => r.type === 'follow') || {}).n || 0;
-  // Count new_follower events recorded by the extension's scan notifications
-  const newFollowers = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE user_id = ? AND type = 'new_follower' AND datetime(created_at) >= ${since}`).get(uid).n;
+  const newFollowers = db.prepare(`SELECT COUNT(*) as n FROM instagram_actions WHERE ${baseWhere} AND type = 'new_follower'`).get(...baseParams).n;
   const followBack = total > 0 ? Math.round((newFollowers / total) * 100) : 0;
-
-  // Daily activity for chart
   const daily = db.prepare(`
     SELECT date(created_at) as day, type, COUNT(*) as n
-    FROM instagram_actions WHERE user_id = ? AND datetime(created_at) >= ${since}
+    FROM instagram_actions WHERE ${whereWithAction}
     GROUP BY day, type ORDER BY day ASC
-  `).all(uid);
-
-  // Top users interacted with
+  `).all(...baseParams, ...af.params);
   const topUsers = db.prepare(`
     SELECT username, COUNT(*) as n FROM instagram_actions
-    WHERE user_id = ? AND username IS NOT NULL AND datetime(created_at) >= ${since}
+    WHERE ${whereWithAction} AND username IS NOT NULL
     GROUP BY username ORDER BY n DESC LIMIT 10
-  `).all(uid);
+  `).all(...baseParams, ...af.params);
 
-  // ── Follower growth (computed from instagram_follower_counts) ──────────
-  // For each profile we tracked counts on, find the latest count inside the
-  // period and the latest count BEFORE the period started. Sum across all
-  // profiles to get the total growth.
-  const sinceIso = `datetime('now', '-${Number(days)} days')`;
-  const profilesInPeriod = db.prepare(`
+  // ── Inbound counts by type (Phase 2 — most will be 0 until the
+  // notification scanner records granular types) ─────────────────────────
+  const inboundCounts = {};
+  for (const t of INBOUND_TYPES) {
+    const row = db.prepare(`SELECT COUNT(*) AS n FROM instagram_actions WHERE ${baseWhere} AND type = ?`).get(...baseParams, t);
+    inboundCounts[t] = row?.n || 0;
+  }
+
+  // ── Funnel (Phase 3) — for each outbound action type, count distinct
+  // usernames we targeted and how many later appeared as a paired inbound
+  // event. Done with an EXISTS join instead of LOWER() correlated subquery
+  // so it stays cheap on indexes. ────────────────────────────────────────
+  const FUNNEL_PAIRS = [
+    { sent: 'follow',       returned: 'new_follower',     label: 'Follow → followed back' },
+    { sent: 'like',         returned: 'got_like_post',    label: 'Like post → got like back' },
+    { sent: 'comment',      returned: 'got_comment',      label: 'Comment → got comment back' },
+    { sent: 'comment_reply',returned: 'got_reply',        label: 'Reply → got reply back' },
+  ];
+  const funnel = [];
+  for (const pair of FUNNEL_PAIRS) {
+    const sent = db.prepare(`
+      SELECT COUNT(DISTINCT username) AS n FROM instagram_actions
+      WHERE ${baseWhere} AND type = ? AND username IS NOT NULL
+    `).get(...baseParams, pair.sent)?.n || 0;
+    const returned = db.prepare(`
+      SELECT COUNT(DISTINCT a.username) AS n FROM instagram_actions a
+      WHERE a.user_id = ? AND a.type = ? AND a.username IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM instagram_actions b
+          WHERE b.user_id = a.user_id
+            AND b.username = a.username
+            AND b.type = ?
+            AND b.created_at >= a.created_at
+        )
+    `).get(uid, pair.sent, pair.returned)?.n || 0;
+    funnel.push({
+      action_type: pair.sent,
+      paired_with: pair.returned,
+      label: pair.label,
+      sent, returned,
+      percent: sent > 0 ? Math.round((returned / sent) * 1000) / 10 : null,
+    });
+  }
+
+  // ── Follower growth — same logic as before, respecting profile filter ──
+  const sinceIso = (req.query.from && req.query.to)
+    ? `datetime('${String(req.query.to).slice(0, 10)}', '+1 day')`
+    : `datetime('now', '-${days} days')`;
+  // We don't filter follower-counts by date in the cur/prev queries — we
+  // want the latest snapshot inside the period and the latest snapshot
+  // before the period started.
+  const periodStart = (req.query.from && req.query.to)
+    ? `datetime('${String(req.query.from).slice(0, 10)}')`
+    : `datetime('now', '-${days} days')`;
+
+  let profilesInPeriod = db.prepare(`
     SELECT DISTINCT my_profile FROM instagram_follower_counts WHERE user_id = ?
   `).all(uid).map(r => r.my_profile).filter(Boolean);
+  // Respect the profiles filter if set
+  if (req.query.profiles) {
+    const want = new Set(String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean));
+    profilesInPeriod = profilesInPeriod.filter(p => want.has(String(p).toLowerCase()));
+  }
 
   let curTotal = 0, prevTotal = 0;
   const perAccount = [];
   for (const profile of profilesInPeriod) {
     const cur = db.prepare(`
       SELECT follower_count FROM instagram_follower_counts
-      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) >= ${sinceIso}
+      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) >= ${periodStart}
       ORDER BY captured_at DESC LIMIT 1
     `).get(uid, profile);
     const prev = db.prepare(`
       SELECT follower_count FROM instagram_follower_counts
-      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) < ${sinceIso}
+      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) < ${periodStart}
       ORDER BY captured_at DESC LIMIT 1
     `).get(uid, profile);
     const curN  = cur?.follower_count  ?? null;
     const prevN = prev?.follower_count ?? null;
     if (curN  != null) curTotal  += curN;
     if (prevN != null) prevTotal += prevN;
-    // Daily series for this profile (latest per day inside the period)
     const series = db.prepare(`
       SELECT date(captured_at) AS day, follower_count
       FROM instagram_follower_counts
       WHERE user_id = ? AND my_profile = ?
-        AND datetime(captured_at) >= ${sinceIso}
+        AND datetime(captured_at) >= ${periodStart}
       ORDER BY captured_at ASC
     `).all(uid, profile);
-    // Collapse multiple same-day entries to the latest
     const byDay = {};
     for (const r of series) byDay[r.day] = r.follower_count;
     perAccount.push({
@@ -410,6 +511,8 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     total, byType, follows, newFollowers, followBack, daily, topUsers,
     followerGrowth,
     perAccountGrowth: perAccount,
+    inboundCounts,
+    funnel,
   });
 });
 
