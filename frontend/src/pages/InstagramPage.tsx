@@ -3,7 +3,32 @@ import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calenda
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research' | 'health';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research' | 'automations' | 'health';
+
+interface Automation {
+  id: string;
+  name: string;
+  schedule_type: 'daily' | 'weekly' | 'interval';
+  schedule_time: string | null;
+  schedule_days: string | null;        // "1,3,5"
+  schedule_interval_minutes: number | null;
+  actions: string[];
+  accounts: string[];
+  enabled: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const AUTOMATION_ACTION_LABELS: Record<string, string> = {
+  follower_count: 'Daily follower count',
+  scan_notifications: 'Scan notifications (coming soon)',
+  snapshot_followers_full: 'Full follower snapshot (coming soon)',
+};
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 interface HealthBlock {
   status: 'ok' | 'late' | 'failing' | 'unknown';
@@ -551,6 +576,110 @@ export default function InstagramPage() {
     } catch (_) { setViewingPosts([]); }
   }
 
+  // ── Automations (recurring jobs) ─────────────────────────────────────────
+  const [automations, setAutomations] = useState<Automation[]>([]);
+  const [showAutomationModal, setShowAutomationModal] = useState(false);
+  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
+  const [aForm, setAForm] = useState<{
+    name: string; schedule_type: 'daily'|'weekly'|'interval';
+    schedule_time: string; schedule_days: number[];
+    schedule_interval_minutes: string;
+    actions: string[]; accounts: string[];
+  }>({
+    name: '', schedule_type: 'daily', schedule_time: '09:00',
+    schedule_days: [1, 2, 3, 4, 5], schedule_interval_minutes: '60',
+    actions: ['follower_count'], accounts: [],
+  });
+  const [aSaving, setASaving] = useState(false);
+
+  const loadAutomations = async () => {
+    try {
+      const r = await api.get(`/instagram/automations${qs}`);
+      setAutomations(Array.isArray(r.data) ? r.data as Automation[] : []);
+    } catch (_) { setAutomations([]); }
+  };
+  useEffect(() => {
+    if (tab === 'automations') loadAutomations();
+  }, [tab, asUser]);
+  // Auto-refresh while any automation just ran or is due soon
+  useEffect(() => {
+    if (tab !== 'automations') return;
+    const id = setInterval(loadAutomations, 30000);
+    return () => clearInterval(id);
+  }, [tab, asUser]);
+
+  function openNewAutomation() {
+    setEditingAutomation(null);
+    setAForm({
+      name: '', schedule_type: 'daily', schedule_time: '09:00',
+      schedule_days: [1, 2, 3, 4, 5], schedule_interval_minutes: '60',
+      actions: ['follower_count'], accounts: igAccounts.slice(0, 5),
+    });
+    setShowAutomationModal(true);
+  }
+  function openEditAutomation(a: Automation) {
+    setEditingAutomation(a);
+    setAForm({
+      name: a.name,
+      schedule_type: a.schedule_type,
+      schedule_time: a.schedule_time || '09:00',
+      schedule_days: a.schedule_days ? a.schedule_days.split(',').map(d => parseInt(d, 10)) : [1,2,3,4,5],
+      schedule_interval_minutes: String(a.schedule_interval_minutes || 60),
+      actions: a.actions || ['follower_count'],
+      accounts: a.accounts || [],
+    });
+    setShowAutomationModal(true);
+  }
+  async function submitAutomation() {
+    if (!aForm.name.trim()) { alert('Give the automation a name.'); return; }
+    if (aForm.actions.length === 0) { alert('Pick at least one action.'); return; }
+    if (aForm.accounts.length === 0) { alert('Pick at least one Instagram account.'); return; }
+    setASaving(true);
+    try {
+      const body = {
+        name: aForm.name.trim(),
+        schedule_type: aForm.schedule_type,
+        schedule_time: aForm.schedule_type === 'interval' ? null : aForm.schedule_time,
+        schedule_days: aForm.schedule_type === 'weekly' ? aForm.schedule_days : null,
+        schedule_interval_minutes: aForm.schedule_type === 'interval' ? parseInt(aForm.schedule_interval_minutes, 10) : null,
+        actions: aForm.actions,
+        accounts: aForm.accounts,
+      };
+      if (editingAutomation) {
+        await api.patch(`/instagram/automations/${editingAutomation.id}${qs}`, body);
+      } else {
+        await api.post(`/instagram/automations${qs}`, body);
+      }
+      setShowAutomationModal(false);
+      await loadAutomations();
+    } catch (e: unknown) {
+      alert('Failed to save: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setASaving(false); }
+  }
+  async function toggleAutomation(a: Automation) {
+    await api.patch(`/instagram/automations/${a.id}${qs}`, { enabled: !a.enabled });
+    await loadAutomations();
+  }
+  async function runAutomationNow(id: string) {
+    await api.post(`/instagram/automations/${id}/run-now${qs}`);
+    await loadAutomations();
+  }
+  async function deleteAutomation(id: string) {
+    if (!confirm('Delete this automation permanently?')) return;
+    await api.delete(`/instagram/automations/${id}${qs}`);
+    await loadAutomations();
+  }
+  function describeSchedule(a: Automation): string {
+    if (a.schedule_type === 'interval') return `Every ${a.schedule_interval_minutes || '?'} min`;
+    const t = a.schedule_time || '09:00';
+    if (a.schedule_type === 'daily') return `Daily ${t}`;
+    if (a.schedule_type === 'weekly') {
+      const days = a.schedule_days ? a.schedule_days.split(',').map(d => DAY_NAMES[parseInt(d, 10)]).filter(Boolean).join(' ') : 'no days';
+      return `${days} ${t}`;
+    }
+    return a.schedule_type;
+  }
+
   // ── System health (admin-only QA dashboard) ──────────────────────────────
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthBusy, setHealthBusy] = useState(false);
@@ -823,6 +952,7 @@ export default function InstagramPage() {
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
     { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
+    { id: 'automations' as Tab, label: 'Automations', icon: <RefreshCw size={15} /> },
     { id: 'health'    as Tab, label: 'Health',    icon: <Zap size={15} /> },
   ];
 
@@ -1732,6 +1862,208 @@ export default function InstagramPage() {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ AUTOMATIONS ══════════════════════════════ */}
+        {tab === 'automations' && (
+          <div className="space-y-4 max-w-6xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><RefreshCw size={18} /> Automations</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Recurring jobs the extension runs automatically. Backend computes the next run time; the extension polls every minute.</p>
+                </div>
+                <button onClick={openNewAutomation}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
+                  <Plus size={14} /> New automation
+                </button>
+              </div>
+
+              {automations.length === 0 ? (
+                <p className="text-gray-400 text-sm py-8 text-center">No automations yet. Click <b>+ New automation</b> to set up a recurring job.</p>
+              ) : (
+                <div className="space-y-2">
+                  {automations.map(a => {
+                    const statusPill =
+                      !a.enabled                   ? 'bg-gray-100 text-gray-600' :
+                      a.last_status === 'failed'   ? 'bg-red-100 text-red-700'   :
+                      (a.next_run_at && new Date(a.next_run_at).getTime() < Date.now() - 5 * 60 * 1000)
+                                                   ? 'bg-yellow-100 text-yellow-700' :
+                      a.last_status === 'ok'       ? 'bg-green-100 text-green-700'  :
+                                                     'bg-blue-100 text-blue-700';
+                    const statusLabel =
+                      !a.enabled                   ? 'Disabled' :
+                      a.last_status === 'failed'   ? 'Failed' :
+                      (a.next_run_at && new Date(a.next_run_at).getTime() < Date.now() - 5 * 60 * 1000)
+                                                   ? 'Late' :
+                      a.last_status === 'ok'       ? 'Working' :
+                                                     'Scheduled';
+                    return (
+                      <div key={a.id} className="border border-gray-100 rounded-lg p-3 hover:border-blue-200 transition-colors">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium text-gray-900 text-sm">{a.name}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${statusPill}`}>{statusLabel}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                              <span>📅 {describeSchedule(a)}</span>
+                              <span>👤 {a.accounts.length} account{a.accounts.length === 1 ? '' : 's'}</span>
+                              <span>⚙️ {a.actions.map(act => AUTOMATION_ACTION_LABELS[act] || act).join(', ')}</span>
+                              {a.next_run_at && <span>Next: {fmt(a.next_run_at)}</span>}
+                              {a.last_run_at && <span>Last: {fmt(a.last_run_at)}</span>}
+                            </div>
+                            {a.last_error && a.last_status === 'failed' && (
+                              <p className="text-xs text-red-600 mt-1.5">⚠ {a.last_error}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button onClick={() => runAutomationNow(a.id)}
+                              className="text-xs px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-medium">
+                              Run now
+                            </button>
+                            <button onClick={() => toggleAutomation(a)}
+                              className={`text-xs px-2 py-1 rounded font-medium ${a.enabled ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-green-100 hover:bg-green-200 text-green-700'}`}>
+                              {a.enabled ? 'Disable' : 'Enable'}
+                            </button>
+                            <button onClick={() => openEditAutomation(a)}
+                              className="text-gray-400 hover:text-gray-700 p-1" title="Edit">
+                              <Pencil size={14} />
+                            </button>
+                            <button onClick={() => deleteAutomation(a.id)}
+                              className="text-gray-400 hover:text-red-500 p-1" title="Delete">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══ Automation create/edit modal ══ */}
+        {showAutomationModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowAutomationModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">{editingAutomation ? 'Edit automation' : 'New automation'}</h3>
+                <button onClick={() => setShowAutomationModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+                <input type="text" value={aForm.name} onChange={e => setAForm({ ...aForm, name: e.target.value })}
+                  placeholder="e.g. Daily follower scan"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Schedule</label>
+                <div className="flex gap-2 mb-2">
+                  {(['daily','weekly','interval'] as const).map(t => (
+                    <button key={t} onClick={() => setAForm({ ...aForm, schedule_type: t })}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                        aForm.schedule_type === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}>
+                      {t === 'daily' ? 'Daily' : t === 'weekly' ? 'Weekly' : 'Interval'}
+                    </button>
+                  ))}
+                </div>
+                {aForm.schedule_type === 'daily' && (
+                  <input type="time" value={aForm.schedule_time}
+                    onChange={e => setAForm({ ...aForm, schedule_time: e.target.value })}
+                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                )}
+                {aForm.schedule_type === 'weekly' && (
+                  <>
+                    <div className="flex gap-1 mb-2">
+                      {DAY_NAMES.map((d, i) => (
+                        <button key={i} onClick={() => {
+                          const has = aForm.schedule_days.includes(i);
+                          const next = has ? aForm.schedule_days.filter(x => x !== i) : [...aForm.schedule_days, i].sort();
+                          setAForm({ ...aForm, schedule_days: next });
+                        }}
+                          className={`w-10 h-8 rounded text-xs font-medium ${
+                            aForm.schedule_days.includes(i) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}>
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <input type="time" value={aForm.schedule_time}
+                      onChange={e => setAForm({ ...aForm, schedule_time: e.target.value })}
+                      className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  </>
+                )}
+                {aForm.schedule_type === 'interval' && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Every</span>
+                    <input type="number" min={1} max={1440} value={aForm.schedule_interval_minutes}
+                      onChange={e => setAForm({ ...aForm, schedule_interval_minutes: e.target.value })}
+                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                    <span className="text-sm text-gray-600">minutes</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Actions to run</label>
+                <div className="space-y-1">
+                  {Object.entries(AUTOMATION_ACTION_LABELS).map(([key, label]) => {
+                    const checked = aForm.actions.includes(key);
+                    const isSoon = label.includes('coming soon');
+                    return (
+                      <label key={key} className={`flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm ${isSoon ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                        <input type="checkbox" checked={checked} disabled={isSoon}
+                          onChange={() => {
+                            if (isSoon) return;
+                            setAForm({
+                              ...aForm,
+                              actions: checked ? aForm.actions.filter(a => a !== key) : [...aForm.actions, key],
+                            });
+                          }} />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Instagram accounts ({aForm.accounts.length} selected)</label>
+                <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
+                  {igAccounts.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-2 text-center">No Instagram accounts configured. Add them in the Accounts tab first.</p>
+                  ) : igAccounts.map(u => {
+                    const checked = aForm.accounts.includes(u);
+                    return (
+                      <label key={u} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 rounded cursor-pointer text-sm">
+                        <input type="checkbox" checked={checked}
+                          onChange={() => setAForm({
+                            ...aForm,
+                            accounts: checked ? aForm.accounts.filter(a => a !== u) : [...aForm.accounts, u],
+                          })} />
+                        @{u}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowAutomationModal(false)}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={submitAutomation} disabled={aSaving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {aSaving ? 'Saving…' : (editingAutomation ? 'Save changes' : 'Create automation')}
+                </button>
+              </div>
             </div>
           </div>
         )}

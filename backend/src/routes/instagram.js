@@ -158,6 +158,26 @@ try {
       ON instagram_actions(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_created
       ON instagram_actions(user_id, type, created_at);
+    CREATE TABLE IF NOT EXISTS instagram_automations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      schedule_type TEXT NOT NULL,
+      schedule_time TEXT,
+      schedule_days TEXT,
+      schedule_interval_minutes INTEGER,
+      actions TEXT NOT NULL,
+      accounts TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      next_run_at DATETIME,
+      last_run_at DATETIME,
+      last_status TEXT,
+      last_error TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ig_automations_due
+      ON instagram_automations(enabled, next_run_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -1502,6 +1522,235 @@ router.get('/admin/health', authenticateFlexible, (req, res) => {
     permissions,
     accounts,
   });
+});
+
+// ── Automations (board-style recurring jobs) ─────────────────────────────────
+// Each automation is a recurring task. Backend computes next_run_at based on
+// the schedule definition. Extension polls /automations/due every minute,
+// runs the listed actions on the listed accounts, then reports back so the
+// backend computes the next next_run_at.
+
+const VALID_ACTIONS = ['follower_count', 'scan_notifications', 'snapshot_followers_full'];
+const VALID_SCHEDULE_TYPES = ['daily', 'weekly', 'interval'];
+
+// Compute the next time this automation should run, given the current time.
+// Daily: today at schedule_time if future, else tomorrow at schedule_time.
+// Weekly: next matching weekday at schedule_time.
+// Interval: now + schedule_interval_minutes.
+function computeNextRunAt(automation, baseDate = new Date()) {
+  const base = new Date(baseDate);
+  if (automation.schedule_type === 'interval') {
+    const mins = Math.max(1, Number(automation.schedule_interval_minutes) || 60);
+    return new Date(base.getTime() + mins * 60 * 1000).toISOString();
+  }
+  // Parse HH:MM (default 09:00)
+  const [hh, mm] = String(automation.schedule_time || '09:00').split(':').map(n => parseInt(n, 10));
+  const target = new Date(base);
+  target.setHours(hh || 9, mm || 0, 0, 0);
+
+  if (automation.schedule_type === 'daily') {
+    // Today at HH:MM if still in future, else tomorrow.
+    if (target <= base) target.setDate(target.getDate() + 1);
+    return target.toISOString();
+  }
+  if (automation.schedule_type === 'weekly') {
+    // schedule_days = comma-separated 0-6 (Sun=0). Find next allowed weekday >= today
+    const allowed = String(automation.schedule_days || '')
+      .split(',').map(d => parseInt(d.trim(), 10)).filter(d => d >= 0 && d <= 6);
+    if (allowed.length === 0) {
+      // Fallback to daily
+      if (target <= base) target.setDate(target.getDate() + 1);
+      return target.toISOString();
+    }
+    // Try today through next 7 days
+    for (let i = 0; i < 8; i++) {
+      const candidate = new Date(target);
+      candidate.setDate(target.getDate() + i);
+      if (allowed.includes(candidate.getDay()) && candidate > base) {
+        return candidate.toISOString();
+      }
+    }
+    // Safety net (shouldn't happen)
+    target.setDate(target.getDate() + 7);
+    return target.toISOString();
+  }
+  // Unknown type — default to 24h from now
+  return new Date(base.getTime() + 24 * 60 * 60 * 1000).toISOString();
+}
+
+function sanitizeAutomationBody(body, isUpdate = false) {
+  const out = {};
+  if (body.name !== undefined) out.name = String(body.name).slice(0, 200);
+  if (body.schedule_type !== undefined) {
+    if (!VALID_SCHEDULE_TYPES.includes(body.schedule_type)) {
+      throw new Error(`schedule_type must be one of: ${VALID_SCHEDULE_TYPES.join(', ')}`);
+    }
+    out.schedule_type = body.schedule_type;
+  }
+  if (body.schedule_time !== undefined) out.schedule_time = body.schedule_time ? String(body.schedule_time).slice(0, 5) : null;
+  if (body.schedule_days !== undefined) {
+    const arr = Array.isArray(body.schedule_days) ? body.schedule_days : String(body.schedule_days).split(',');
+    out.schedule_days = arr.map(d => parseInt(d, 10)).filter(d => d >= 0 && d <= 6).join(',') || null;
+  }
+  if (body.schedule_interval_minutes !== undefined) {
+    out.schedule_interval_minutes = Math.max(1, parseInt(body.schedule_interval_minutes, 10) || 60);
+  }
+  if (body.actions !== undefined) {
+    if (!Array.isArray(body.actions)) throw new Error('actions must be an array');
+    const clean = body.actions.filter(a => VALID_ACTIONS.includes(a));
+    if (clean.length === 0) throw new Error(`actions must contain at least one of: ${VALID_ACTIONS.join(', ')}`);
+    out.actions = JSON.stringify(clean);
+  }
+  if (body.accounts !== undefined) {
+    if (!Array.isArray(body.accounts)) throw new Error('accounts must be an array');
+    const clean = body.accounts.map(a => String(a).trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
+    out.accounts = JSON.stringify(clean);
+  }
+  if (body.enabled !== undefined) out.enabled = body.enabled ? 1 : 0;
+  if (!isUpdate) {
+    if (!out.name) throw new Error('name required');
+    if (!out.schedule_type) throw new Error('schedule_type required');
+    if (!out.actions) throw new Error('actions required');
+    if (!out.accounts) throw new Error('accounts required');
+  }
+  return out;
+}
+
+function parseAutomationRow(row) {
+  if (!row) return null;
+  let actions = [], accounts = [];
+  try { actions = row.actions ? JSON.parse(row.actions) : []; } catch (_) {}
+  try { accounts = row.accounts ? JSON.parse(row.accounts) : []; } catch (_) {}
+  return { ...row, actions, accounts, enabled: !!row.enabled };
+}
+
+// Monday lists all automations for this user
+router.get('/automations', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const rows = db.prepare(`
+    SELECT * FROM instagram_automations WHERE user_id = ?
+    ORDER BY created_at DESC LIMIT 200
+  `).all(uid);
+  res.json(rows.map(parseAutomationRow));
+});
+
+// Monday creates a new automation
+router.post('/automations', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  let fields;
+  try { fields = sanitizeAutomationBody(req.body, false); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  const id = uuidv4();
+  const next = computeNextRunAt(fields);
+  db.prepare(`
+    INSERT INTO instagram_automations
+      (id, user_id, name, schedule_type, schedule_time, schedule_days,
+       schedule_interval_minutes, actions, accounts, enabled, next_run_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id, uid, fields.name, fields.schedule_type,
+    fields.schedule_time || null, fields.schedule_days || null,
+    fields.schedule_interval_minutes || null,
+    fields.actions, fields.accounts,
+    fields.enabled === undefined ? 1 : fields.enabled,
+    next
+  );
+  res.json(parseAutomationRow(db.prepare('SELECT * FROM instagram_automations WHERE id = ?').get(id)));
+});
+
+// Monday updates an existing automation
+router.patch('/automations/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  let fields;
+  try { fields = sanitizeAutomationBody(req.body, true); }
+  catch (e) { return res.status(400).json({ error: e.message }); }
+  const existing = db.prepare('SELECT * FROM instagram_automations WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  const cols = [];
+  const params = [];
+  for (const [k, v] of Object.entries(fields)) {
+    cols.push(`${k} = ?`);
+    params.push(v);
+  }
+  // If anything that affects scheduling changed, recompute next_run_at
+  const scheduleChanged = ['schedule_type', 'schedule_time', 'schedule_days', 'schedule_interval_minutes', 'enabled']
+    .some(k => k in fields);
+  if (scheduleChanged) {
+    const merged = { ...parseAutomationRow(existing), ...fields };
+    // Use the parsed shape's *string* fields for the recompute helper.
+    const next = computeNextRunAt({
+      schedule_type: merged.schedule_type,
+      schedule_time: merged.schedule_time,
+      schedule_days: merged.schedule_days,
+      schedule_interval_minutes: merged.schedule_interval_minutes,
+    });
+    cols.push('next_run_at = ?');
+    params.push(next);
+  }
+  cols.push('updated_at = CURRENT_TIMESTAMP');
+  params.push(req.params.id, uid);
+
+  db.prepare(`UPDATE instagram_automations SET ${cols.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
+  res.json(parseAutomationRow(db.prepare('SELECT * FROM instagram_automations WHERE id = ?').get(req.params.id)));
+});
+
+// Monday deletes an automation
+router.delete('/automations/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare('DELETE FROM instagram_automations WHERE id = ? AND user_id = ?').run(req.params.id, uid);
+  res.json({ ok: true });
+});
+
+// Monday manually triggers a run. Sets next_run_at = now so the extension
+// picks it up immediately on its next poll.
+router.post('/automations/:id/run-now', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const row = db.prepare('SELECT * FROM instagram_automations WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  db.prepare(`
+    UPDATE instagram_automations
+    SET next_run_at = CURRENT_TIMESTAMP, enabled = 1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Extension polls this every minute and gets back the automations that are
+// due AND enabled for this user. The extension then executes them.
+router.get('/automations/due', authenticateFlexible, (req, res) => {
+  const uid = req.user.id;
+  const rows = db.prepare(`
+    SELECT * FROM instagram_automations
+    WHERE user_id = ?
+      AND enabled = 1
+      AND next_run_at IS NOT NULL
+      AND datetime(next_run_at) <= datetime('now')
+    ORDER BY next_run_at ASC
+    LIMIT 20
+  `).all(uid);
+  res.json(rows.map(parseAutomationRow));
+});
+
+// Extension reports completion. We compute the new next_run_at and store
+// run status so the UI can show health.
+router.patch('/automations/:id/done', authenticateFlexible, (req, res) => {
+  const uid = req.user.id;
+  const row = db.prepare('SELECT * FROM instagram_automations WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const status = String(req.body?.status || 'ok');
+  const err = req.body?.error || null;
+  const next = computeNextRunAt(row);
+  db.prepare(`
+    UPDATE instagram_automations
+    SET last_run_at = CURRENT_TIMESTAMP,
+        last_status = ?,
+        last_error = ?,
+        next_run_at = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(status, err, next, req.params.id);
+  res.json({ ok: true });
 });
 
 module.exports = router;
