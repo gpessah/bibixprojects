@@ -3,7 +3,21 @@ import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calenda
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research' | 'health';
+
+interface HealthBlock {
+  status: 'ok' | 'late' | 'failing' | 'unknown';
+}
+interface HealthResponse {
+  generated_at: string;
+  follower_counts: HealthBlock & { last_capture_at: string | null; profiles_tracked: number };
+  scheduled_posts: HealthBlock & { by_status: Record<string, number>; overdue: number };
+  action_batches: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
+  scrape_jobs: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
+  extension_activity: HealthBlock & { last_action_at: string | null; actions_last_24h: number };
+  permissions: HealthBlock & { users_with_explicit_perms: number; total_users: number };
+  accounts: HealthBlock & { count: number };
+}
 
 interface ScrapeJob {
   id: string; target_username: string; post_count: number;
@@ -539,6 +553,21 @@ export default function InstagramPage() {
     } catch (_) { setViewingPosts([]); }
   }
 
+  // ── System health (admin-only QA dashboard) ──────────────────────────────
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const loadHealth = async () => {
+    setHealthBusy(true);
+    try {
+      const r = await api.get('/instagram/admin/health');
+      setHealth(r.data as HealthResponse);
+    } catch (_) { setHealth(null); }
+    finally { setHealthBusy(false); }
+  };
+  useEffect(() => {
+    if (tab === 'health' && isAdmin) loadHealth();
+  }, [tab, isAdmin]);
+
   // ── Action campaigns (drafts that you build up, then Send) ───────────────
   // Flow: create empty draft → add up to 6 items (from Research or by URL)
   // → click Send → extension picks it up. Items can be edited (count) or
@@ -796,6 +825,7 @@ export default function InstagramPage() {
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
     { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
+    ...(isAdmin ? [{ id: 'health' as Tab, label: 'Health', icon: <Zap size={15} /> }] : []),
   ];
 
   return (
@@ -1800,6 +1830,127 @@ export default function InstagramPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ HEALTH (admin) ══════════════════════════════ */}
+        {tab === 'health' && isAdmin && (
+          <div className="space-y-4 max-w-6xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Zap size={18} /> System Health</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Quick view of every Instagram feature. Click a card for the underlying page.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {health?.generated_at && (
+                    <span className="text-xs text-gray-400">Updated {fmt(health.generated_at)}</span>
+                  )}
+                  <button onClick={loadHealth} disabled={healthBusy}
+                    className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-medium disabled:opacity-50 flex items-center gap-1">
+                    <RefreshCw size={12} /> {healthBusy ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              {!health ? (
+                <p className="text-gray-400 text-sm py-6 text-center">Loading health data…</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {(() => {
+                    const pillFor = (s: string) =>
+                      s === 'ok'      ? 'bg-green-100 text-green-700' :
+                      s === 'late'    ? 'bg-yellow-100 text-yellow-700' :
+                      s === 'failing' ? 'bg-red-100 text-red-700' :
+                                        'bg-gray-100 text-gray-500';
+                    const dotFor = (s: string) =>
+                      s === 'ok'      ? 'bg-green-500' :
+                      s === 'late'    ? 'bg-yellow-500' :
+                      s === 'failing' ? 'bg-red-500' :
+                                        'bg-gray-400';
+                    const Card = ({ title, status, primary, secondary, onClick, jumpTab }: {
+                      title: string; status: string; primary: string; secondary?: string;
+                      onClick?: () => void; jumpTab?: Tab;
+                    }) => (
+                      <div onClick={onClick || (jumpTab ? () => setTab(jumpTab) : undefined)}
+                        className={`bg-white border border-gray-200 rounded-xl p-4 ${onClick || jumpTab ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm' : ''} transition-all`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${dotFor(status)}`} />
+                            {title}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${pillFor(status)}`}>
+                            {status}
+                          </span>
+                        </div>
+                        <div className="text-xl font-bold text-gray-900">{primary}</div>
+                        {secondary && <div className="text-xs text-gray-500 mt-1">{secondary}</div>}
+                      </div>
+                    );
+                    const fc = health.follower_counts;
+                    const sp = health.scheduled_posts;
+                    const ab = health.action_batches;
+                    const sj = health.scrape_jobs;
+                    const ea = health.extension_activity;
+                    const pp = health.permissions;
+                    const ac = health.accounts;
+                    const sumStatuses = (obj: Record<string, number>) => Object.entries(obj).map(([k, v]) => `${k}:${v}`).join(' · ') || 'none';
+                    return (
+                      <>
+                        <Card
+                          title="Daily follower counts"
+                          status={fc.status}
+                          primary={`${fc.profiles_tracked} profile${fc.profiles_tracked === 1 ? '' : 's'}`}
+                          secondary={fc.last_capture_at ? `Last captured ${fmt(fc.last_capture_at)}` : 'No data yet'}
+                          jumpTab="followers"
+                        />
+                        <Card
+                          title="Scheduled posts"
+                          status={sp.status}
+                          primary={sp.overdue > 0 ? `${sp.overdue} overdue` : `${(sp.by_status.scheduled || 0)} pending`}
+                          secondary={sumStatuses(sp.by_status)}
+                          jumpTab="schedule"
+                        />
+                        <Card
+                          title="Action batches"
+                          status={ab.status}
+                          primary={`${(ab.by_status.running || 0)} running · ${(ab.by_status.pending || 0)} pending`}
+                          secondary={ab.stalled_running > 0 ? `⚠️ ${ab.stalled_running} stuck >1h` : sumStatuses(ab.by_status)}
+                          jumpTab="campaigns"
+                        />
+                        <Card
+                          title="Scrape jobs"
+                          status={sj.status}
+                          primary={`${(sj.by_status.completed || 0)} completed`}
+                          secondary={sj.stalled_running > 0 ? `⚠️ ${sj.stalled_running} stuck` : sumStatuses(sj.by_status)}
+                          jumpTab="research"
+                        />
+                        <Card
+                          title="Extension activity"
+                          status={ea.status}
+                          primary={`${ea.actions_last_24h} actions / 24h`}
+                          secondary={ea.last_action_at ? `Last action ${fmt(ea.last_action_at)}` : 'No activity recorded'}
+                          jumpTab="history"
+                        />
+                        <Card
+                          title="Instagram accounts"
+                          status={ac.status}
+                          primary={`${ac.count} configured`}
+                          secondary={ac.count > 0 ? 'Synced from the extension' : 'Scan accounts in the popup'}
+                          jumpTab="accounts"
+                        />
+                        <Card
+                          title="Per-user permissions"
+                          status={pp.status}
+                          primary={`${pp.users_with_explicit_perms} of ${pp.total_users} configured`}
+                          secondary="Manage in User Management → permissions"
+                        />
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>

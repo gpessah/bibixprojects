@@ -1411,4 +1411,135 @@ router.get('/extension/permissions', authenticateFlexible, (req, res) => {
   res.json({ allowed_tabs: allowed.length === VALID_EXT_TABS.length ? null : allowed });
 });
 
+// ── System health / QA dashboard ─────────────────────────────────────────────
+// Aggregates status indicators for every Instagram-side feature so admins can
+// spot regressions and stuck schedules at a glance. Each block returns the
+// current counts + a derived `status` (ok / late / failing / unknown) the UI
+// uses to pick a color. Read-only, no side effects.
+router.get('/admin/health', authenticate, (req, res) => {
+  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const uid = req.user.id;
+
+  // ── Daily follower counts ──────────────────────────────────────────────
+  const fcLast = db.prepare(`
+    SELECT MAX(captured_at) AS last_at,
+           (SELECT COUNT(DISTINCT my_profile) FROM instagram_follower_counts WHERE user_id = ?) AS profiles_tracked
+    FROM instagram_follower_counts WHERE user_id = ?
+  `).get(uid, uid);
+  const fcAgeMs = fcLast?.last_at ? (Date.now() - new Date(fcLast.last_at).getTime()) : null;
+  const followerCounts = {
+    last_capture_at: fcLast?.last_at || null,
+    profiles_tracked: fcLast?.profiles_tracked || 0,
+    status: !fcLast?.last_at ? 'unknown'
+          : fcAgeMs < 26 * 3600 * 1000 ? 'ok'
+          : fcAgeMs < 72 * 3600 * 1000 ? 'late'
+          : 'failing',
+  };
+
+  // ── Scheduled posts ─────────────────────────────────────────────────────
+  const spByStatus = db.prepare(`
+    SELECT status, COUNT(*) AS n FROM instagram_scheduled_posts
+    WHERE user_id = ? GROUP BY status
+  `).all(uid);
+  const spOverdue = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_scheduled_posts
+    WHERE user_id = ? AND status IN ('scheduled', 'claimed')
+      AND datetime(scheduled_at) < datetime('now', '-15 minutes')
+  `).get(uid)?.n || 0;
+  const scheduledPosts = {
+    by_status: Object.fromEntries(spByStatus.map(r => [r.status, r.n])),
+    overdue: spOverdue,
+    status: spOverdue > 0 ? 'late'
+          : (spByStatus.find(r => r.status === 'failed')?.n || 0) > 0 ? 'failing'
+          : 'ok',
+  };
+
+  // ── Action batches (formerly Campaigns) ────────────────────────────────
+  const abByStatus = db.prepare(`
+    SELECT status, COUNT(*) AS n FROM instagram_action_campaigns
+    WHERE user_id = ? GROUP BY status
+  `).all(uid);
+  const abStalledRunning = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_action_campaigns
+    WHERE user_id = ? AND status = 'running'
+      AND datetime(started_at) < datetime('now', '-1 hour')
+  `).get(uid)?.n || 0;
+  const actionBatches = {
+    by_status: Object.fromEntries(abByStatus.map(r => [r.status, r.n])),
+    stalled_running: abStalledRunning,
+    status: abStalledRunning > 0 ? 'late'
+          : (abByStatus.find(r => r.status === 'paused')?.n || 0) > 0 ? 'failing'
+          : 'ok',
+  };
+
+  // ── Scrape jobs ────────────────────────────────────────────────────────
+  const sjByStatus = db.prepare(`
+    SELECT status, COUNT(*) AS n FROM instagram_scrape_jobs
+    WHERE user_id = ? GROUP BY status
+  `).all(uid);
+  const sjStalledRunning = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_scrape_jobs
+    WHERE user_id = ? AND status = 'running'
+      AND datetime(started_at) < datetime('now', '-15 minutes')
+  `).get(uid)?.n || 0;
+  const scrapeJobs = {
+    by_status: Object.fromEntries(sjByStatus.map(r => [r.status, r.n])),
+    stalled_running: sjStalledRunning,
+    status: sjStalledRunning > 0 ? 'late'
+          : (sjByStatus.find(r => r.status === 'failed')?.n || 0) > 0 ? 'failing'
+          : 'ok',
+  };
+
+  // ── Extension activity (proxy: how recent any action was logged) ───────
+  const extLastAction = db.prepare(`
+    SELECT MAX(created_at) AS last_at FROM instagram_actions WHERE user_id = ?
+  `).get(uid)?.last_at;
+  const ext24h = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_actions
+    WHERE user_id = ? AND datetime(created_at) >= datetime('now', '-1 day')
+  `).get(uid)?.n || 0;
+  const extAgeMs = extLastAction ? (Date.now() - new Date(extLastAction).getTime()) : null;
+  const extensionActivity = {
+    last_action_at: extLastAction || null,
+    actions_last_24h: ext24h,
+    status: !extLastAction ? 'unknown'
+          : extAgeMs < 24 * 3600 * 1000 ? 'ok'
+          : extAgeMs < 7 * 24 * 3600 * 1000 ? 'late'
+          : 'failing',
+  };
+
+  // ── Permissions setup (admin-only metric) ──────────────────────────────
+  const permUsers = db.prepare(`
+    SELECT COUNT(*) AS n FROM users WHERE permissions IS NOT NULL AND permissions != '{}'
+  `).get()?.n || 0;
+  const totalUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get()?.n || 0;
+  const permissions = {
+    users_with_explicit_perms: permUsers,
+    total_users: totalUsers,
+    status: 'ok',
+  };
+
+  // ── IG accounts configured ─────────────────────────────────────────────
+  const acctRow = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(uid);
+  let accountsCount = 0;
+  try { accountsCount = JSON.parse(acctRow?.instagram_accounts || '[]').length; } catch (_) {}
+  const accounts = {
+    count: accountsCount,
+    status: accountsCount > 0 ? 'ok' : 'unknown',
+  };
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    follower_counts: followerCounts,
+    scheduled_posts: scheduledPosts,
+    action_batches: actionBatches,
+    scrape_jobs: scrapeJobs,
+    extension_activity: extensionActivity,
+    permissions,
+    accounts,
+  });
+});
+
 module.exports = router;
