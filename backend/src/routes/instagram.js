@@ -1392,7 +1392,10 @@ router.get('/action-queue/pending', authenticateFlexible, (req, res) => {
 router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const { status, count_done, error_message } = req.body || {};
-  const isTerminal = status === 'completed' || status === 'failed' || status === 'cancelled';
+  // 'no_targets' = the extension reached the post but found nothing to act on
+  // (e.g. no comments to like, no reply buttons). Treated as terminal so the
+  // batch can finish, but NOT counted as a successful completion in the rollup.
+  const isTerminal = status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'no_targets';
 
   const item = db.prepare('SELECT * FROM instagram_action_queue WHERE id = ? AND user_id = ?').get(req.params.id, uid);
   if (!item) return res.status(404).json({ error: 'not found' });
