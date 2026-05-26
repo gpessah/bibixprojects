@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X, Search, RefreshCw, ArrowLeft, ExternalLink } from 'lucide-react';
+import { useEffect, useState, useMemo, Fragment } from 'react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X, Search, RefreshCw, ArrowLeft, ExternalLink, Copy } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
@@ -42,6 +42,12 @@ interface HealthResponse {
   extension_activity: HealthBlock & { last_action_at: string | null; actions_last_24h: number };
   permissions: HealthBlock & { role: string; tabs_allowed: number; total_tabs: number };
   accounts: HealthBlock & { count: number };
+  automations?: HealthBlock & {
+    total: number;
+    enabled: number;
+    last_run_at: string | null;
+    last_status: string | null;
+  };
 }
 
 interface ScrapeJob {
@@ -268,6 +274,31 @@ export default function InstagramPage() {
   const [tab, setTab]               = useState<Tab>('dashboard');
   const [days, setDays]             = useState(30);
   const [asUser, setAsUser]         = useState('');
+  // Clock-drift display: server time vs user local time. Refreshed once a
+  // minute (and once on mount). Helps users understand "when will my
+  // automation actually fire" since scheduling uses server time.
+  const [serverTimeMs, setServerTimeMs] = useState<number | null>(null);
+  const [serverTimeFetchedAt, setServerTimeFetchedAt] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const fetchServerTime = async () => {
+      try {
+        const r = await api.get('/instagram/server-time');
+        const t = new Date(r.data?.server_time).getTime();
+        if (Number.isFinite(t)) {
+          setServerTimeMs(t);
+          setServerTimeFetchedAt(Date.now());
+        }
+      } catch (_) { /* drift display hidden on failure */ }
+    };
+    fetchServerTime();
+    const id = setInterval(fetchServerTime, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30 * 1000);
+    return () => clearInterval(id);
+  }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [stats, setStats]           = useState<Stats | null>(null);
   const [actions, setActions]       = useState<Action[]>([]);
@@ -523,9 +554,25 @@ export default function InstagramPage() {
       .then((r: { data: unknown }) => setIgAccounts(Array.isArray(r.data) ? r.data as string[] : []))
       .catch(() => setIgAccounts([]));
   useEffect(() => { loadAccounts(); }, [asUser]);
+  // Mirror of the backend reserved-words check so we can show a friendly
+  // error before the round-trip.
+  const RESERVED_IG_USERNAMES = new Set([
+    'close', 'cancel', 'save', 'back', 'next', 'done', 'more', 'menu',
+    'home', 'search', 'explore', 'profile', 'messages', 'notifications',
+    'create', 'settings', 'about', 'help', 'logout', 'login', 'signup',
+    'instagram', 'meta', 'facebook', 'reels', 'feed', 'inbox',
+  ]);
   async function addAccount() {
-    const u = newAccount.trim().replace(/^@/, '');
+    const u = newAccount.trim().replace(/^@/, '').toLowerCase();
     if (!u) return;
+    if (!/^[a-z0-9._]{1,30}$/.test(u)) {
+      alert(`"${u}" is not a valid Instagram username (lowercase letters, numbers, dot, underscore only).`);
+      return;
+    }
+    if (RESERVED_IG_USERNAMES.has(u)) {
+      alert(`"${u}" looks like a UI label, not an Instagram username. Please double-check.`);
+      return;
+    }
     try {
       await api.post('/instagram/accounts', { username: u });
       setNewAccount('');
@@ -615,9 +662,25 @@ export default function InstagramPage() {
     return () => clearInterval(id);
   }, [tab, scrapeJobs, asUser]);
 
+  // Accept the username in any common form: `elizabethvasilenko`,
+  // `@elizabethvasilenko`, `https://www.instagram.com/elizabethvasilenko/`,
+  // `instagram.com/elizabethvasilenko`. Return the bare lowercase username
+  // or empty string if nothing recognizable.
+  function extractIgUsername(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    // Try URL pattern first
+    const urlMatch = trimmed.match(/instagram\.com\/([^/?#@\s]+)/i);
+    if (urlMatch) return urlMatch[1].toLowerCase();
+    // Plain or @-prefixed
+    return trimmed.replace(/^@/, '').toLowerCase();
+  }
   async function createScrapeJob() {
-    const target = scrapeTarget.trim().replace(/^@/, '').toLowerCase();
-    if (!target) { alert('Enter an Instagram username (e.g. elizabethvasilenko)'); return; }
+    const target = extractIgUsername(scrapeTarget);
+    if (!target || !/^[a-z0-9._]{1,30}$/.test(target)) {
+      alert(`"${scrapeTarget}" doesn't look like a valid Instagram username or URL.`);
+      return;
+    }
     const count = Math.max(1, Math.min(200, parseInt(scrapeCount, 10) || 25));
     setScrapeBusy(true);
     try {
@@ -627,6 +690,45 @@ export default function InstagramPage() {
     } catch (e: unknown) {
       alert('Failed to queue scrape: ' + (e instanceof Error ? e.message : String(e)));
     } finally { setScrapeBusy(false); }
+  }
+
+  async function deleteScrapeJob(id: string) {
+    if (!confirm('Delete this scrape job?')) return;
+    try {
+      await api.delete(`/instagram/scrape-jobs/${id}${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function clearScrapeJobs(onlyFailed: boolean) {
+    const label = onlyFailed ? 'failed scrape jobs' : 'all scrape jobs';
+    if (!confirm(`Delete ${label}? This does not delete the scraped post data.`)) return;
+    try {
+      const suffix = onlyFailed ? '?status=failed' : '';
+      await api.delete(`/instagram/scrape-jobs${suffix}${qs ? (suffix ? '&' : '?') + qs.slice(1) : ''}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to clear: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function deleteScrapedProfile(username: string) {
+    if (!confirm(`Delete all scraped posts for @${username}?`)) return;
+    try {
+      await api.delete(`/instagram/scraped-profiles/${encodeURIComponent(username)}${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function clearAllScrapedProfiles() {
+    if (!confirm('Delete ALL scraped post data for every profile? This cannot be undone.')) return;
+    try {
+      await api.delete(`/instagram/scraped-profiles${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to clear: ' + (e instanceof Error ? e.message : String(e)));
+    }
   }
 
   async function openScrapedUser(username: string) {
@@ -938,6 +1040,40 @@ export default function InstagramPage() {
     }
   }
 
+  // Inline editor for the reply config of a pending batch item.
+  const [editingReplyItemId, setEditingReplyItemId] = useState<string | null>(null);
+  const [editReplySource, setEditReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [editReplyText, setEditReplyText] = useState('');
+  function startEditReply(item: ActionItem) {
+    setEditingReplyItemId(item.id);
+    setEditReplySource((item.reply_source as 'default'|'custom'|'ai') || 'default');
+    let texts: string[] = [];
+    if (item.reply_texts) { try { texts = JSON.parse(item.reply_texts) || []; } catch (_) {} }
+    setEditReplyText(texts.join('\n'));
+  }
+  function cancelEditReply() {
+    setEditingReplyItemId(null);
+    setEditReplyText('');
+  }
+  async function saveEditReply(campaignId: string, itemId: string) {
+    const replies = editReplySource === 'custom'
+      ? editReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+      : null;
+    if (editReplySource === 'custom' && (!replies || replies.length === 0)) {
+      alert('Type at least one reply (one per line) — or pick another source.'); return;
+    }
+    try {
+      await api.patch(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`, {
+        reply_source: editReplySource,
+        reply_texts: replies,
+      });
+      setEditingReplyItemId(null);
+      await loadExpandedItems(campaignId);
+    } catch (e: unknown) {
+      alert('Failed to save reply: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function removeItem(campaignId: string, itemId: string) {
     if (!confirm('Remove this post from the batch?')) return;
     try {
@@ -989,6 +1125,20 @@ export default function InstagramPage() {
     await api.post(`/instagram/action-campaigns/${id}/resume${qs}`);
     await loadActionCampaigns();
   }
+  async function duplicateCampaign(id: string) {
+    try {
+      const res = await api.post(`/instagram/action-campaigns/${id}/duplicate${qs}`);
+      await loadActionCampaigns();
+      // Open the new draft so the user can review/edit before sending.
+      const newId = res.data?.id;
+      if (newId) {
+        setExpandedCampaign(newId);
+        loadExpandedItems(newId);
+      }
+    } catch (e: unknown) {
+      alert('Failed to duplicate: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
 
   useEffect(() => {
     if (tab !== 'followers') return;
@@ -1032,6 +1182,27 @@ export default function InstagramPage() {
             <div>
               <h1 className="text-xl font-bold text-gray-900">Instagram Analytics</h1>
               <p className="text-sm text-gray-500">Track your automation history and performance</p>
+              {serverTimeMs && serverTimeFetchedAt && (() => {
+                // Server "now" approximated by (fetched server time) + (elapsed since fetch).
+                const serverNow = serverTimeMs + (nowMs - serverTimeFetchedAt);
+                const driftMs = nowMs - serverNow;
+                const driftAbsMin = Math.round(Math.abs(driftMs) / 60000);
+                const fmtT = (d: Date) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                const fmtTUtc = (d: Date) => `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+                const tzOffsetMin = -new Date().getTimezoneOffset();
+                const tzLabel = (tzOffsetMin === 0 ? 'UTC' : `UTC${tzOffsetMin > 0 ? '+' : ''}${tzOffsetMin / 60}`);
+                const driftLabel = driftAbsMin === 0
+                  ? '✓ in sync'
+                  : `Δ ${driftMs > 0 ? '+' : '−'}${driftAbsMin}m`;
+                return (
+                  <p className="text-[11px] text-gray-400 mt-1 font-mono">
+                    Server {fmtTUtc(new Date(serverNow))} UTC · You {fmtT(new Date(nowMs))} {tzLabel} ·{' '}
+                    <span className={driftAbsMin === 0 ? 'text-green-600' : driftAbsMin >= 5 ? 'text-orange-600' : 'text-gray-400'}>
+                      {driftLabel}
+                    </span>
+                  </p>
+                );
+              })()}
             </div>
           </div>
           {isAdmin && adminUsers.length > 0 && (
@@ -2037,7 +2208,10 @@ export default function InstagramPage() {
             {/* ── Daily follower count history (auto-scraped by the extension) ── */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                <h3 className="font-semibold text-gray-900">Daily follower history</h3>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Daily follower history</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Latest snapshot per day shown — manual "Refresh now" captures extra intraday points without cluttering the chart.</p>
+                </div>
                 <div className="flex items-center gap-2">
                   <button onClick={triggerFollowerCountNow} disabled={followerRefreshBusy}
                     className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1">
@@ -2132,7 +2306,15 @@ export default function InstagramPage() {
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Your accounts <span className="text-gray-400 font-normal">({igAccounts.length})</span></h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Your accounts <span className="text-gray-400 font-normal">({igAccounts.length})</span></h3>
+                <button onClick={loadAccounts} className="text-gray-400 hover:text-gray-600" title="Refresh from server">
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">
+                Accounts are validated when scanned — UI labels like "Close" or "Cancel" are rejected. If you see something that shouldn't be here, use the trash icon to remove it.
+              </p>
               {igAccounts.length === 0 ? (
                 <p className="text-gray-400 text-sm py-6 text-center">No accounts yet. Add one above or scan from the extension.</p>
               ) : (
@@ -2181,10 +2363,24 @@ export default function InstagramPage() {
 
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-gray-900">Scrape jobs</h3>
-                <button onClick={loadResearch} className="text-gray-400 hover:text-gray-600" title="Refresh">
-                  <RefreshCw size={16} />
-                </button>
+                <h3 className="font-semibold text-gray-900">Scrape jobs <span className="text-gray-400 font-normal">({scrapeJobs.length})</span></h3>
+                <div className="flex items-center gap-2">
+                  {scrapeJobs.some(j => j.status === 'failed') && (
+                    <button onClick={() => clearScrapeJobs(true)}
+                      className="px-2 py-1 text-xs text-orange-600 hover:bg-orange-50 rounded border border-orange-200">
+                      Clear failed
+                    </button>
+                  )}
+                  {scrapeJobs.length > 0 && (
+                    <button onClick={() => clearScrapeJobs(false)}
+                      className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200">
+                      Clear all
+                    </button>
+                  )}
+                  <button onClick={loadResearch} className="text-gray-400 hover:text-gray-600" title="Refresh">
+                    <RefreshCw size={16} />
+                  </button>
+                </div>
               </div>
               {scrapeJobs.length === 0 ? (
                 <p className="text-gray-400 text-sm py-6 text-center">No scrape jobs yet. Queue one above.</p>
@@ -2198,6 +2394,7 @@ export default function InstagramPage() {
                         <th className="py-2 pr-3 font-medium">Status</th>
                         <th className="py-2 pr-3 font-medium">Scraped</th>
                         <th className="py-2 pr-3 font-medium">Created</th>
+                        <th className="py-2 pr-3 font-medium w-8"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2218,6 +2415,12 @@ export default function InstagramPage() {
                           </td>
                           <td className="py-2 pr-3 text-gray-600">{j.posts_scraped || 0}</td>
                           <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(j.created_at)}</td>
+                          <td className="py-2 pr-3 text-right">
+                            <button onClick={() => deleteScrapeJob(j.id)}
+                              className="text-gray-300 hover:text-red-500" title="Delete this scrape job">
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2227,20 +2430,34 @@ export default function InstagramPage() {
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Scraped profiles <span className="text-gray-400 font-normal">({scrapedSummary.length})</span></h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Scraped profiles <span className="text-gray-400 font-normal">({scrapedSummary.length})</span></h3>
+                {scrapedSummary.length > 0 && (
+                  <button onClick={clearAllScrapedProfiles}
+                    className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200">
+                    Clear all
+                  </button>
+                )}
+              </div>
               {scrapedSummary.length === 0 ? (
                 <p className="text-gray-400 text-sm py-6 text-center">No data yet. Queue a scrape job above.</p>
               ) : (
                 <div className="divide-y divide-gray-100">
                   {scrapedSummary.map(s => (
-                    <button key={s.target_username} onClick={() => openScrapedUser(s.target_username)}
-                      className="w-full flex items-center justify-between py-2.5 hover:bg-gray-50 px-2 rounded">
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-blue-600">@{s.target_username}</span>
-                        <span className="text-xs text-gray-400">{s.post_count} posts</span>
-                      </div>
-                      <span className="text-xs text-gray-500">Last scraped {fmt(s.last_scraped_at)}</span>
-                    </button>
+                    <div key={s.target_username} className="flex items-center justify-between py-2.5 hover:bg-gray-50 px-2 rounded group">
+                      <button onClick={() => openScrapedUser(s.target_username)}
+                        className="flex-1 flex items-center justify-between text-left">
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-medium text-blue-600">@{s.target_username}</span>
+                          <span className="text-xs text-gray-400">{s.post_count} posts</span>
+                        </div>
+                        <span className="text-xs text-gray-500 mr-3">Last scraped {fmt(s.last_scraped_at)}</span>
+                      </button>
+                      <button onClick={() => deleteScrapedProfile(s.target_username)}
+                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition" title={`Delete scraped data for @${s.target_username}`}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
@@ -2640,6 +2857,21 @@ export default function InstagramPage() {
                           primary={`${pp.tabs_allowed} of ${pp.total_tabs} tabs`}
                           secondary={`Role: ${pp.role}`}
                         />
+                        {health.automations && (
+                          <Card
+                            title="Automations"
+                            status={health.automations.status}
+                            primary={`${health.automations.enabled} active · ${health.automations.total} total`}
+                            secondary={
+                              health.automations.last_run_at
+                                ? `Last fired ${fmt(health.automations.last_run_at)}${health.automations.last_status ? ` (${health.automations.last_status})` : ''}`
+                                : (health.automations.total === 0
+                                    ? 'No automations yet'
+                                    : 'Never fired')
+                            }
+                            jumpTab="automations"
+                          />
+                        )}
                       </>
                     );
                   })()}
@@ -2846,6 +3078,8 @@ export default function InstagramPage() {
                                 <button onClick={() => resumeActionCampaign(c.id)}
                                   className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
                               )}
+                              <button onClick={() => duplicateCampaign(c.id)} title="Duplicate into new draft"
+                                className="text-gray-400 hover:text-blue-600"><Copy size={14} /></button>
                               <button onClick={() => deleteCampaign(c.id)} title="Delete"
                                 className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
                             </div>
@@ -2902,88 +3136,168 @@ export default function InstagramPage() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {expandedItems.map(it => (
-                                    <tr key={it.id} className="border-t border-gray-200">
-                                      <td className="py-1.5 pr-2">
-                                        <a href={it.post_url} target="_blank" rel="noreferrer"
-                                          className="text-blue-600 hover:underline text-xs flex items-center gap-1">
-                                          {it.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || it.post_url.slice(-15)}
-                                          <ExternalLink size={10} />
-                                        </a>
-                                      </td>
-                                      <td className="py-1.5 pr-2 text-gray-600 capitalize text-xs">{it.action_type}</td>
-                                      <td className="py-1.5 pr-2">
-                                        {it.status === 'pending' ? (
-                                          <input type="number" min={1} max={100} defaultValue={it.count_requested}
-                                            onBlur={e => {
-                                              const v = parseInt(e.target.value, 10);
-                                              if (v !== it.count_requested && v >= 1) patchItemCount(c.id, it.id, v);
-                                            }}
-                                            className="w-16 border border-gray-200 rounded px-1 py-0.5 text-xs bg-white" />
-                                        ) : (
-                                          <span className="text-xs text-gray-600">{it.count_done}/{it.count_requested}</span>
+                                  {expandedItems.map(it => {
+                                    // Pretty summary of the current reply config (shown on Reply rows).
+                                    let replySummary = '';
+                                    if (it.action_type === 'reply') {
+                                      if (it.reply_source === 'custom') {
+                                        let arr: string[] = [];
+                                        if (it.reply_texts) { try { arr = JSON.parse(it.reply_texts) || []; } catch (_) {} }
+                                        replySummary = arr.length > 0
+                                          ? `custom (${arr.length} variant${arr.length === 1 ? '' : 's'})`
+                                          : 'custom (empty!)';
+                                      } else if (it.reply_source === 'ai') {
+                                        replySummary = 'AI (Groq)';
+                                      } else {
+                                        replySummary = 'default replies';
+                                      }
+                                    }
+                                    const isEditingReply = editingReplyItemId === it.id;
+                                    return (
+                                      <Fragment key={it.id}>
+                                        <tr className="border-t border-gray-200">
+                                          <td className="py-1.5 pr-2">
+                                            <a href={it.post_url} target="_blank" rel="noreferrer"
+                                              className="text-blue-600 hover:underline text-xs flex items-center gap-1">
+                                              {it.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || it.post_url.slice(-15)}
+                                              <ExternalLink size={10} />
+                                            </a>
+                                          </td>
+                                          <td className="py-1.5 pr-2 text-gray-600 capitalize text-xs">
+                                            {it.action_type}
+                                            {it.action_type === 'reply' && (
+                                              <span className={`block text-[10px] font-normal ${it.reply_source === 'custom' && (!it.reply_texts || it.reply_texts === '[]') ? 'text-orange-600' : 'text-gray-400'}`}>
+                                                {replySummary}
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            {it.status === 'pending' ? (
+                                              <input type="number" min={1} max={100} defaultValue={it.count_requested}
+                                                onBlur={e => {
+                                                  const v = parseInt(e.target.value, 10);
+                                                  if (v !== it.count_requested && v >= 1) patchItemCount(c.id, it.id, v);
+                                                }}
+                                                className="w-16 border border-gray-200 rounded px-1 py-0.5 text-xs bg-white" />
+                                            ) : (
+                                              <span className="text-xs text-gray-600">{it.count_done}/{it.count_requested}</span>
+                                            )}
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                              it.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                              it.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                                              it.status === 'claimed'   ? 'bg-blue-50 text-blue-600'    :
+                                              it.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                              it.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
+                                                                          'bg-amber-100 text-amber-700'
+                                            }`}>{it.status}</span>
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            {it.status === 'pending' && (
+                                              <div className="flex items-center gap-1 justify-end">
+                                                {it.action_type === 'reply' && !isEditingReply && (
+                                                  <button onClick={() => startEditReply(it)} title="Edit reply text"
+                                                    className="text-gray-400 hover:text-blue-600"><Pencil size={12} /></button>
+                                                )}
+                                                <button onClick={() => removeItem(c.id, it.id)} title="Remove"
+                                                  className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
+                                              </div>
+                                            )}
+                                          </td>
+                                        </tr>
+                                        {isEditingReply && (
+                                          <tr className="border-t border-gray-200 bg-blue-50">
+                                            <td colSpan={5} className="py-2 px-3">
+                                              <div className="flex gap-2 items-start mb-2">
+                                                <select value={editReplySource}
+                                                  onChange={e => setEditReplySource(e.target.value as 'default'|'custom'|'ai')}
+                                                  className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+                                                  <option value="default">Default replies</option>
+                                                  <option value="custom">Custom text</option>
+                                                  <option value="ai">AI (Groq)</option>
+                                                </select>
+                                                {editReplySource === 'custom' && (
+                                                  <textarea rows={2}
+                                                    placeholder={'One reply per line\nAmazing! 🔥\nLove this 😍'}
+                                                    value={editReplyText}
+                                                    onChange={e => setEditReplyText(e.target.value)}
+                                                    className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs bg-white" />
+                                                )}
+                                              </div>
+                                              <div className="flex gap-2 justify-end">
+                                                <button onClick={cancelEditReply}
+                                                  className="text-xs px-3 py-1 bg-white border border-gray-200 text-gray-600 rounded hover:bg-gray-50">Cancel</button>
+                                                <button onClick={() => saveEditReply(c.id, it.id)}
+                                                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+                                              </div>
+                                            </td>
+                                          </tr>
                                         )}
-                                      </td>
-                                      <td className="py-1.5 pr-2">
-                                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
-                                          it.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                          it.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
-                                          it.status === 'claimed'   ? 'bg-blue-50 text-blue-600'    :
-                                          it.status === 'failed'    ? 'bg-red-100 text-red-700'     :
-                                          it.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
-                                                                      'bg-amber-100 text-amber-700'
-                                        }`}>{it.status}</span>
-                                      </td>
-                                      <td className="py-1.5 pr-2">
-                                        {it.status === 'pending' && (
-                                          <button onClick={() => removeItem(c.id, it.id)} title="Remove"
-                                            className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  ))}
+                                      </Fragment>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             )}
 
                             {/* Add by URL form */}
-                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6 && (
-                              <div className="border-t border-gray-200 pt-3">
-                                <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({6 - (c.items_count ?? 0)} slot{6 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
-                                <div className="flex flex-wrap gap-2 items-end">
-                                  <input type="text" placeholder="https://www.instagram.com/p/SHORTCODE/"
-                                    value={byUrlInput} onChange={e => setByUrlInput(e.target.value)}
-                                    className="flex-1 min-w-[200px] border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
-                                  <select value={byUrlActionType} onChange={e => setByUrlActionType(e.target.value as 'like'|'reply')}
-                                    className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
-                                    <option value="like">Like</option>
-                                    <option value="reply">Reply</option>
-                                  </select>
-                                  <input type="number" min={1} max={100} value={byUrlCount}
-                                    onChange={e => setByUrlCount(e.target.value)}
-                                    className="w-16 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
-                                  <button onClick={() => addByUrl(c.id)} disabled={byUrlBusy}
-                                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-                                    {byUrlBusy ? 'Adding…' : 'Add'}
-                                  </button>
-                                </div>
-                                {byUrlActionType === 'reply' && (
-                                  <div className="mt-2 flex gap-2">
-                                    <select value={byUrlReplySource} onChange={e => setByUrlReplySource(e.target.value as 'default'|'custom'|'ai')}
+                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6 && (() => {
+                              // Compute whether the form is valid; disable Add button until it is.
+                              const customMissing = byUrlActionType === 'reply'
+                                && byUrlReplySource === 'custom'
+                                && byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length === 0;
+                              const urlMissing = !byUrlInput.trim();
+                              const canAdd = !byUrlBusy && !urlMissing && !customMissing;
+                              return (
+                                <div className="border-t border-gray-200 pt-3">
+                                  <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({6 - (c.items_count ?? 0)} slot{6 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
+                                  <div className="flex flex-wrap gap-2 items-end">
+                                    <input type="text" placeholder="https://www.instagram.com/p/SHORTCODE/"
+                                      value={byUrlInput} onChange={e => setByUrlInput(e.target.value)}
+                                      className="flex-1 min-w-[200px] border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                    <select value={byUrlActionType} onChange={e => setByUrlActionType(e.target.value as 'like'|'reply')}
                                       className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
-                                      <option value="default">Default replies</option>
-                                      <option value="custom">Custom text</option>
-                                      <option value="ai">AI (Groq)</option>
+                                      <option value="like">Like</option>
+                                      <option value="reply">Reply</option>
                                     </select>
-                                    {byUrlReplySource === 'custom' && (
-                                      <input type="text" placeholder="Amazing!, Love this 😍, So true"
-                                        value={byUrlReplyText} onChange={e => setByUrlReplyText(e.target.value)}
-                                        className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
-                                    )}
+                                    <input type="number" min={1} max={100} value={byUrlCount}
+                                      onChange={e => setByUrlCount(e.target.value)}
+                                      className="w-16 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                    <button onClick={() => addByUrl(c.id)} disabled={!canAdd}
+                                      title={customMissing ? 'Type at least one custom reply first' : (urlMissing ? 'Paste a post URL first' : '')}
+                                      className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                      {byUrlBusy ? 'Adding…' : 'Add'}
+                                    </button>
                                   </div>
-                                )}
-                              </div>
-                            )}
+                                  {byUrlActionType === 'reply' && (
+                                    <div className="mt-2 space-y-2">
+                                      <div className="flex gap-2 items-start">
+                                        <select value={byUrlReplySource} onChange={e => setByUrlReplySource(e.target.value as 'default'|'custom'|'ai')}
+                                          className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
+                                          <option value="default">Default replies</option>
+                                          <option value="custom">Custom text</option>
+                                          <option value="ai">AI (Groq)</option>
+                                        </select>
+                                        {byUrlReplySource === 'custom' && (
+                                          <textarea
+                                            placeholder={'One reply per line, e.g.:\nAmazing! 🔥\nLove this 😍\nSo true'}
+                                            rows={3}
+                                            value={byUrlReplyText} onChange={e => setByUrlReplyText(e.target.value)}
+                                            className={`flex-1 border rounded px-2 py-1.5 text-sm bg-white ${customMissing ? 'border-orange-400' : 'border-gray-200'}`} />
+                                        )}
+                                      </div>
+                                      {byUrlReplySource === 'custom' && customMissing && (
+                                        <p className="text-xs text-orange-600">Type at least one reply (one per line) — then click Add.</p>
+                                      )}
+                                      {byUrlReplySource === 'custom' && !customMissing && (
+                                        <p className="text-xs text-gray-500">{byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} reply variant(s) — one picked at random per comment.</p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>

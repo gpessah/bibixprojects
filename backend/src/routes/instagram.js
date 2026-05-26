@@ -782,35 +782,67 @@ router.get('/scheduled-posts/pending-accounts', authenticateFlexible, (req, res)
 // ── Account list (multi-profile management) ──────────────────────────────────
 // The extension scans IG's "Switch accounts" modal and submits the list here;
 // the frontend reads it back to populate dropdowns. We also union in any
+// UI button labels that the extension's account auto-detector accidentally
+// picked up as if they were Instagram usernames. Real IG usernames are
+// always lowercase, but case-insensitive match here for safety.
+const RESERVED_IG_USERNAMES = new Set([
+  'close', 'cancel', 'save', 'back', 'next', 'done', 'more', 'menu',
+  'home', 'search', 'explore', 'profile', 'messages', 'notifications',
+  'create', 'settings', 'about', 'help', 'logout', 'login', 'signup',
+  'instagram', 'meta', 'facebook', 'reels', 'feed', 'inbox',
+]);
+
+// Normalize + validate an Instagram username. Returns the canonical
+// lowercase form on success, or null if the input doesn't look like a
+// real IG handle (UI label, empty, bad chars, reserved word).
+function normalizeIgUsername(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().replace(/^@/, '').toLowerCase();
+  if (!trimmed) return null;
+  if (!/^[a-z0-9._]{1,30}$/.test(trimmed)) return null;
+  if (RESERVED_IG_USERNAMES.has(trimmed)) return null;
+  return trimmed;
+}
+
 // my_profile values seen in the user's data so manual entries aren't lost.
 // Merges the scanned list with whatever's already stored — so manual entries
 // added via the UI aren't wiped every time the extension scans.
 router.post('/accounts/scan', authenticateFlexible, (req, res) => {
-  const incoming = Array.isArray(req.body.accounts)
-    ? req.body.accounts.filter(a => typeof a === 'string' && a.length > 0)
-    : [];
+  const incoming = Array.isArray(req.body.accounts) ? req.body.accounts : [];
+  const cleaned = [];
+  const rejected = [];
+  for (const raw of incoming) {
+    const u = normalizeIgUsername(raw);
+    if (u) cleaned.push(u);
+    else if (typeof raw === 'string' && raw.trim()) rejected.push(raw.trim());
+  }
   const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(req.user.id);
   let existing = [];
   if (row?.instagram_accounts) {
     try { existing = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
   }
-  const merged = [...new Set([...existing, ...incoming])].sort();
+  // Also strip any previously stored reserved/invalid entries on each scan
+  // so phantom rows like "@Close" auto-clean themselves.
+  existing = existing.filter(a => normalizeIgUsername(a) !== null);
+  const merged = [...new Set([...existing, ...cleaned])].sort();
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
     .run(JSON.stringify(merged), req.user.id);
-  res.json({ ok: true, count: merged.length, accounts: merged });
+  res.json({ ok: true, count: merged.length, accounts: merged, rejected });
 });
 
 // Add a single account manually (e.g. for accounts not yet logged into IG)
 router.post('/accounts', authenticateFlexible, (req, res) => {
-  const username = (req.body.username || '').trim().replace(/^@/, '');
-  if (!/^[a-zA-Z0-9._]{1,30}$/.test(username)) {
-    return res.status(400).json({ error: 'Invalid Instagram username' });
+  const username = normalizeIgUsername(req.body.username || '');
+  if (!username) {
+    return res.status(400).json({ error: 'Invalid Instagram username (must be lowercase a-z, 0-9, dot, underscore — and not a UI label like "close" or "cancel")' });
   }
   const row = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(req.user.id);
   let list = [];
   if (row?.instagram_accounts) {
     try { list = JSON.parse(row.instagram_accounts) || []; } catch (_) {}
   }
+  // Strip any pre-existing phantom entries
+  list = list.filter(a => normalizeIgUsername(a) !== null);
   if (!list.includes(username)) list.push(username);
   list = [...new Set(list)].sort();
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
@@ -987,6 +1019,44 @@ router.patch('/scrape-jobs/:id', authenticateFlexible, (req, res) => {
     WHERE id = ? AND user_id = ?
   `).run(status || null, error_message || null, posts_scraped ?? null, isTerminal ? 1 : 0, req.params.id, uid);
   res.json({ ok: true });
+});
+
+// Delete a single scrape job. Does NOT delete the scraped posts the job
+// produced — those live in instagram_scraped_posts and represent the data.
+router.delete('/scrape-jobs/:id', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const r = db.prepare('DELETE FROM instagram_scrape_jobs WHERE id = ? AND user_id = ?')
+    .run(req.params.id, uid);
+  if (r.changes === 0) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+// Bulk-clear scrape jobs. Optional `?status=failed` to only clear failed
+// ones (handy after the URL-parsing bug filled the list with junk rows).
+router.delete('/scrape-jobs', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const status = typeof req.query.status === 'string' ? req.query.status : null;
+  const r = status
+    ? db.prepare('DELETE FROM instagram_scrape_jobs WHERE user_id = ? AND status = ?').run(uid, status)
+    : db.prepare('DELETE FROM instagram_scrape_jobs WHERE user_id = ?').run(uid);
+  res.json({ ok: true, deleted: r.changes });
+});
+
+// Delete all scraped posts for a single profile.
+router.delete('/scraped-profiles/:username', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const target = String(req.params.username || '').trim().replace(/^@/, '').toLowerCase();
+  if (!target) return res.status(400).json({ error: 'username required' });
+  const r = db.prepare('DELETE FROM instagram_scraped_posts WHERE user_id = ? AND target_username = ?')
+    .run(uid, target);
+  res.json({ ok: true, deleted: r.changes });
+});
+
+// Bulk-clear all scraped post data for the current user.
+router.delete('/scraped-profiles', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const r = db.prepare('DELETE FROM instagram_scraped_posts WHERE user_id = ?').run(uid);
+  res.json({ ok: true, deleted: r.changes });
 });
 
 // Extension uploads scraped data — bulk upsert
@@ -1174,8 +1244,11 @@ router.post('/action-campaigns/:id/items', authenticateFlexible, (req, res) => {
   res.json(db.prepare('SELECT * FROM instagram_action_queue WHERE id = ?').get(itemId));
 });
 
-// Edit an item's count_requested (only allowed while it's still pending —
-// once claimed/running/completed, edits are rejected).
+// Edit an item (only allowed while it's still pending — once
+// claimed/running/completed, edits are rejected). Accepts any subset of:
+//   count_requested, post_url, action_type, reply_source, reply_texts
+// so the user can fix a typo in a URL, swap a reply source from default to
+// custom, etc. without having to recreate the batch.
 router.patch('/action-campaigns/:id/items/:itemId', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const item = db.prepare(`
@@ -1186,13 +1259,48 @@ router.patch('/action-campaigns/:id/items/:itemId', authenticateFlexible, (req, 
   if (item.status !== 'pending') {
     return res.status(400).json({ error: `Cannot edit item with status '${item.status}'.` });
   }
-  const cnt = Math.max(1, parseInt(req.body?.count_requested, 10) || 1);
-  db.prepare(`UPDATE instagram_action_queue SET count_requested = ? WHERE id = ?`).run(cnt, item.id);
 
-  const stats = db.prepare(`
-    SELECT SUM(count_requested) AS req FROM instagram_action_queue WHERE campaign_id = ?
-  `).get(req.params.id);
-  db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(stats?.req || 0, req.params.id);
+  // Build the UPDATE dynamically from whichever fields the client sent.
+  const sets = [];
+  const params = [];
+  const { count_requested, post_url, action_type, reply_source, reply_texts } = req.body || {};
+  if (count_requested !== undefined) {
+    sets.push('count_requested = ?');
+    params.push(Math.max(1, parseInt(count_requested, 10) || 1));
+  }
+  if (typeof post_url === 'string' && post_url.trim()) {
+    sets.push('post_url = ?');
+    params.push(post_url.trim());
+  }
+  if (action_type === 'like' || action_type === 'reply') {
+    sets.push('action_type = ?');
+    params.push(action_type);
+  }
+  if (reply_source === 'default' || reply_source === 'custom' || reply_source === 'ai') {
+    sets.push('reply_source = ?');
+    params.push(reply_source);
+  } else if (reply_source === null) {
+    sets.push('reply_source = NULL');
+  }
+  if (Array.isArray(reply_texts)) {
+    sets.push('reply_texts = ?');
+    params.push(JSON.stringify(reply_texts));
+  } else if (reply_texts === null) {
+    sets.push('reply_texts = NULL');
+  }
+  if (sets.length === 0) {
+    return res.status(400).json({ error: 'No editable fields supplied.' });
+  }
+  params.push(item.id);
+  db.prepare(`UPDATE instagram_action_queue SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+  // Refresh campaign-level total_requested only if count changed.
+  if (count_requested !== undefined) {
+    const stats = db.prepare(`
+      SELECT SUM(count_requested) AS req FROM instagram_action_queue WHERE campaign_id = ?
+    `).get(req.params.id);
+    db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(stats?.req || 0, req.params.id);
+  }
 
   res.json({ ok: true });
 });
@@ -1263,6 +1371,57 @@ router.delete('/action-campaigns/:id', authenticateFlexible, (req, res) => {
   if (r.changes === 0) return res.status(404).json({ error: 'not found' });
   db.prepare('DELETE FROM instagram_action_queue WHERE campaign_id = ? AND user_id = ?').run(req.params.id, uid);
   res.json({ ok: true });
+});
+
+// Duplicate a campaign into a fresh draft. Copies as_account, concurrency,
+// and every queue item (post_url, action_type, count_requested, reply_source,
+// reply_texts) — but with new UUIDs and reset execution state so the user
+// can re-run the same plan or tweak it before sending.
+router.post('/action-campaigns/:id/duplicate', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const src = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!src) return res.status(404).json({ error: 'not found' });
+  const items = db.prepare('SELECT * FROM instagram_action_queue WHERE campaign_id = ? AND user_id = ?').all(req.params.id, uid);
+
+  const newId = uuidv4();
+  // Append " (copy)" to the name, but if it already ends with that and a
+  // number, increment. e.g. "Foo" → "Foo (copy)" → "Foo (copy 2)" → "Foo (copy 3)".
+  const baseName = (src.name || `Batch ${src.id.slice(0, 8)}`).replace(/\s+\(copy(?:\s+\d+)?\)\s*$/i, '');
+  const existing = db.prepare(
+    `SELECT name FROM instagram_action_campaigns WHERE user_id = ? AND name LIKE ?`
+  ).all(uid, `${baseName}%`).map(r => r.name);
+  let suffix = ' (copy)';
+  let n = 2;
+  while (existing.includes(baseName + suffix)) {
+    suffix = ` (copy ${n})`;
+    n++;
+  }
+  const newName = baseName + suffix;
+
+  db.prepare(`
+    INSERT INTO instagram_action_campaigns
+      (id, user_id, name, as_account, status, total_requested, concurrency, start_at)
+    VALUES (?, ?, ?, ?, 'draft', 0, ?, NULL)
+  `).run(newId, uid, newName, src.as_account, src.concurrency || 6);
+
+  // Copy items with fresh UUIDs and reset execution state.
+  const insertItem = db.prepare(`
+    INSERT INTO instagram_action_queue
+      (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  let total = 0;
+  for (const it of items) {
+    total += it.count_requested || 0;
+    insertItem.run(
+      uuidv4(), newId, uid, it.as_account || src.as_account,
+      it.post_url, it.action_type, it.count_requested,
+      it.reply_source, it.reply_texts
+    );
+  }
+  db.prepare('UPDATE instagram_action_campaigns SET total_requested = ? WHERE id = ?').run(total, newId);
+
+  res.json(db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(newId));
 });
 
 // Monday: campaign detail + per-action breakdown
@@ -1765,6 +1924,37 @@ router.get('/admin/health', authenticateFlexible, (req, res) => {
     status: accountsCount > 0 ? 'ok' : 'unknown',
   };
 
+  // ── Automations ────────────────────────────────────────────────────────
+  // Total + enabled count + last fire status. WARN if there are some
+  // automations but none enabled; FAILING if the last fire reported failure.
+  const autoStats = db.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN is_enabled = 1 THEN 1 ELSE 0 END) AS enabled,
+           MAX(last_run_at) AS last_run
+    FROM instagram_automations WHERE user_id = ?
+  `).get(uid) || {};
+  let lastStatus = null;
+  if (autoStats.last_run) {
+    lastStatus = db.prepare(`
+      SELECT last_status FROM instagram_automations
+      WHERE user_id = ? AND last_run_at = ?
+      LIMIT 1
+    `).get(uid, autoStats.last_run)?.last_status || null;
+  }
+  const automations = {
+    total: autoStats.total || 0,
+    enabled: autoStats.enabled || 0,
+    last_run_at: autoStats.last_run || null,
+    last_status: lastStatus,
+    status: !autoStats.total
+      ? 'unknown'
+      : lastStatus === 'failed'
+        ? 'failing'
+        : (autoStats.enabled === 0)
+          ? 'late'
+          : 'ok',
+  };
+
   res.json({
     generated_at: new Date().toISOString(),
     follower_counts: followerCounts,
@@ -1774,6 +1964,7 @@ router.get('/admin/health', authenticateFlexible, (req, res) => {
     extension_activity: extensionActivity,
     permissions,
     accounts,
+    automations,
   });
 });
 
@@ -2004,6 +2195,19 @@ router.patch('/automations/:id/done', authenticateFlexible, (req, res) => {
     WHERE id = ?
   `).run(status, err, next, req.params.id);
   res.json({ ok: true });
+});
+
+// ── Server time / clock-drift helper ─────────────────────────────────────────
+// Returns the server's authoritative ISO timestamp. The frontend uses this to
+// detect drift between the user's local clock and the server (which is where
+// automations are scheduled). Helps debug "why did the automation fire then?"
+// surprises caused by misaligned clocks.
+router.get('/server-time', authenticateFlexible, (req, res) => {
+  const now = new Date();
+  res.json({
+    server_time: now.toISOString(),
+    server_tz_offset_minutes: now.getTimezoneOffset(),
+  });
 });
 
 module.exports = router;
