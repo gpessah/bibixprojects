@@ -81,7 +81,7 @@ interface ActionItem {
   post_url: string; action_type: 'like' | 'reply';
   count_requested: number; count_done: number;
   reply_source: string | null; reply_texts: string | null;
-  status: 'pending' | 'claimed' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'claimed' | 'running' | 'completed' | 'partial' | 'no_targets' | 'failed' | 'cancelled';
   claimed_at: string | null; started_at: string | null; completed_at: string | null;
   error_message: string | null;
 }
@@ -3351,12 +3351,16 @@ export default function InstagramPage() {
                                           <td className="py-1.5 pr-2">
                                             <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
                                               it.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                              it.status === 'partial'   ? 'bg-orange-100 text-orange-700' :
+                                              it.status === 'no_targets'? 'bg-yellow-100 text-yellow-700' :
                                               it.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
                                               it.status === 'claimed'   ? 'bg-blue-50 text-blue-600'    :
                                               it.status === 'failed'    ? 'bg-red-100 text-red-700'     :
                                               it.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
                                                                           'bg-amber-100 text-amber-700'
-                                            }`}>{it.status}</span>
+                                            }`} title={(it.status === 'partial' || it.status === 'failed') ? (it.error_message || '') : ''}>
+                                              {it.status === 'partial' ? `partial (${it.count_done}/${it.count_requested})` : it.status}
+                                            </span>
                                           </td>
                                           <td className="py-1.5 pr-2">
                                             {it.status === 'pending' && (
