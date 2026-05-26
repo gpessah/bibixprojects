@@ -549,6 +549,74 @@ export default function InstagramPage() {
   // ── Multi-account: list of detected Instagram accounts ──────────────────
   const [igAccounts, setIgAccounts] = useState<string[]>([]);
   const [newAccount, setNewAccount] = useState('');
+
+  // ── AI providers: gate the "AI" reply option in batches/automations on
+  //    whether the user has at least one provider key configured.
+  const [hasAiKey, setHasAiKey] = useState(false);
+  interface AiCatalogEntry { id: string; display: string; default_model: string; docs_url: string; free_tier: boolean }
+  interface AiUserProvider { provider: string; model: string | null; base_url: string | null; is_default: boolean; api_key_masked: string }
+  const [aiCatalog, setAiCatalog] = useState<AiCatalogEntry[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiUserProvider[]>([]);
+  const [aiAddProvider, setAiAddProvider] = useState<string>('groq');
+  const [aiAddKey, setAiAddKey] = useState('');
+  const [aiAddModel, setAiAddModel] = useState('');
+  const [aiTestStatus, setAiTestStatus] = useState<{kind:'ok'|'err'; msg:string} | null>(null);
+  const [aiKeyBusy, setAiKeyBusy] = useState(false);
+  const loadAiHasKey = () =>
+    api.get('/ai/has-key')
+      .then((r: { data: { has_key: boolean } }) => setHasAiKey(!!r.data?.has_key))
+      .catch(() => setHasAiKey(false));
+  const loadAiCatalog = () =>
+    api.get('/ai/catalog')
+      .then((r: { data: AiCatalogEntry[] }) => setAiCatalog(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setAiCatalog([]));
+  const loadAiProviders = () =>
+    api.get('/ai/providers')
+      .then((r: { data: AiUserProvider[] }) => setAiProviders(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setAiProviders([]));
+  useEffect(() => { loadAiHasKey(); loadAiCatalog(); loadAiProviders(); }, []);
+  async function addAiProvider() {
+    if (!aiAddKey || aiAddKey.trim().length < 8) {
+      alert('Paste a real API key (at least 8 chars).'); return;
+    }
+    setAiKeyBusy(true); setAiTestStatus(null);
+    try {
+      // Test first so the user finds out immediately if the key is wrong,
+      // before we persist it (which we'll do on success).
+      const testRes = await api.post('/ai/test', {
+        provider: aiAddProvider,
+        api_key: aiAddKey.trim(),
+        model: aiAddModel || undefined,
+      });
+      if (!testRes.data?.ok) {
+        setAiTestStatus({ kind: 'err', msg: testRes.data?.error || 'Key did not validate.' });
+        return;
+      }
+      await api.post('/ai/providers', {
+        provider: aiAddProvider,
+        api_key: aiAddKey.trim(),
+        model: aiAddModel || undefined,
+      });
+      setAiAddKey(''); setAiAddModel('');
+      setAiTestStatus({ kind: 'ok', msg: `Saved. Test reply: "${(testRes.data?.sample || '').slice(0, 60)}"` });
+      await loadAiProviders(); await loadAiHasKey();
+    } catch (e: unknown) {
+      setAiTestStatus({ kind: 'err', msg: e instanceof Error ? e.message : String(e) });
+    } finally { setAiKeyBusy(false); }
+  }
+  async function removeAiProvider(provider: string) {
+    if (!confirm(`Remove your ${provider} API key? Batches using this provider will start failing until you add a new key.`)) return;
+    try {
+      await api.delete(`/ai/providers/${provider}`);
+      await loadAiProviders(); await loadAiHasKey();
+    } catch (e: unknown) { alert((e instanceof Error ? e.message : String(e))); }
+  }
+  async function setDefaultAiProvider(provider: string) {
+    try {
+      await api.post(`/ai/providers/${provider}/default`);
+      await loadAiProviders();
+    } catch (e: unknown) { alert((e instanceof Error ? e.message : String(e))); }
+  }
   const loadAccounts = () =>
     api.get(`/instagram/accounts${qs}`)
       .then((r: { data: unknown }) => setIgAccounts(Array.isArray(r.data) ? r.data as string[] : []))
@@ -2328,6 +2396,100 @@ export default function InstagramPage() {
                 </div>
               )}
             </div>
+
+            {/* ─── AI providers ─── */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <Zap size={18} /> AI providers
+                {aiProviders.length > 0 && (
+                  <span className="text-xs text-gray-400 font-normal">({aiProviders.length} configured)</span>
+                )}
+              </h3>
+              <p className="text-sm text-gray-500 mb-3">
+                Add an API key from any supported provider so the system can generate AI replies for your batches. Free tiers available on Groq, Gemini, and Z.AI.
+              </p>
+              <div className="flex flex-wrap gap-2 items-end mb-2">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Provider</label>
+                  <select value={aiAddProvider} onChange={e => setAiAddProvider(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    {aiCatalog.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.display}{p.free_tier ? ' (has free tier)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-[2] min-w-[200px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">API key</label>
+                  <input type="password" placeholder="sk-... / gsk_... / pplx-..." value={aiAddKey}
+                    onChange={e => setAiAddKey(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+                </div>
+                <div className="w-44">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Model <span className="text-gray-400">(optional)</span>
+                  </label>
+                  <input type="text" placeholder={aiCatalog.find(p => p.id === aiAddProvider)?.default_model || ''}
+                    value={aiAddModel} onChange={e => setAiAddModel(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+                </div>
+                <button onClick={addAiProvider} disabled={aiKeyBusy || !aiAddKey}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {aiKeyBusy ? 'Testing…' : 'Test + Save'}
+                </button>
+              </div>
+              {(() => {
+                const cur = aiCatalog.find(p => p.id === aiAddProvider);
+                return cur ? (
+                  <p className="text-xs text-gray-400 mb-2">
+                    Default model: <code className="bg-gray-100 px-1 rounded">{cur.default_model}</code>
+                    {' · '}
+                    <a href={cur.docs_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Get a key</a>
+                  </p>
+                ) : null;
+              })()}
+              {aiTestStatus && (
+                <p className={`text-xs mt-1 ${aiTestStatus.kind === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
+                  {aiTestStatus.kind === 'ok' ? '✓ ' : '✗ '}{aiTestStatus.msg}
+                </p>
+              )}
+
+              {aiProviders.length > 0 && (
+                <div className="mt-4 divide-y divide-gray-100">
+                  {aiProviders.map(p => {
+                    const cat = aiCatalog.find(c => c.id === p.provider);
+                    return (
+                      <div key={p.provider} className="flex items-center justify-between py-2.5">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">{cat?.display || p.provider}</span>
+                            {p.is_default && (
+                              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">default</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-400 font-mono">
+                            {p.api_key_masked} · model: {p.model || cat?.default_model || '—'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!p.is_default && (
+                            <button onClick={() => setDefaultAiProvider(p.provider)}
+                              className="text-xs px-2 py-1 text-blue-600 hover:bg-blue-50 rounded">
+                              Set default
+                            </button>
+                          )}
+                          <button onClick={() => removeAiProvider(p.provider)}
+                            className="text-gray-400 hover:text-red-500" title="Remove">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -2989,8 +3151,11 @@ export default function InstagramPage() {
                           className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
                           <option value="default">Built-in defaults</option>
                           <option value="custom">Custom text</option>
-                          <option value="ai">AI (Groq)</option>
+                          {hasAiKey && <option value="ai">AI (your default provider)</option>}
                         </select>
+                        {!hasAiKey && (
+                          <p className="text-xs text-gray-400 mt-1">Want AI-generated replies? Add a provider key in <button type="button" onClick={() => setTab('accounts')} className="underline text-blue-500">Accounts → AI providers</button>.</p>
+                        )}
                       </div>
                       {addToReplySource === 'custom' && (
                         <div className="mb-3">
@@ -3147,7 +3312,7 @@ export default function InstagramPage() {
                                           ? `custom (${arr.length} variant${arr.length === 1 ? '' : 's'})`
                                           : 'custom (empty!)';
                                       } else if (it.reply_source === 'ai') {
-                                        replySummary = 'AI (Groq)';
+                                        replySummary = 'AI (default provider)';
                                       } else {
                                         replySummary = 'default replies';
                                       }
@@ -3215,7 +3380,7 @@ export default function InstagramPage() {
                                                   className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
                                                   <option value="default">Default replies</option>
                                                   <option value="custom">Custom text</option>
-                                                  <option value="ai">AI (Groq)</option>
+                                                  {hasAiKey && <option value="ai">AI (default provider)</option>}
                                                 </select>
                                                 {editReplySource === 'custom' && (
                                                   <textarea rows={2}
@@ -3277,7 +3442,7 @@ export default function InstagramPage() {
                                           className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
                                           <option value="default">Default replies</option>
                                           <option value="custom">Custom text</option>
-                                          <option value="ai">AI (Groq)</option>
+                                          {hasAiKey && <option value="ai">AI (default provider)</option>}
                                         </select>
                                         {byUrlReplySource === 'custom' && (
                                           <textarea

@@ -1765,8 +1765,13 @@ router.get('/follower-counts/should-trigger', authenticateFlexible, (req, res) =
 // user typed. Requires GROQ_API_KEY in backend/.env.
 const fetchFn = (typeof fetch === 'function') ? fetch : require('node-fetch');
 router.post('/ai-caption', authenticateFlexible, async (req, res) => {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'GROQ_API_KEY is not set on the server.' });
+  // Prefer the user's configured Groq key (from /api/ai/providers); fall
+  // back to the server-wide env var for back-compat / single-user setups.
+  const userRow = db.prepare(
+    "SELECT api_key FROM user_ai_providers WHERE user_id = ? AND provider = 'groq'"
+  ).get(req.user.id);
+  const apiKey = userRow?.api_key || process.env.GROQ_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'No Groq API key configured. Add one in Settings → AI providers, or set GROQ_API_KEY in backend/.env.' });
 
   const { topic, tone, include_hashtags, comments, image_b64, mime_type } = req.body || {};
   const isImage = !!(mime_type && /^image\//i.test(mime_type) && image_b64);

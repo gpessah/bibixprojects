@@ -69,6 +69,7 @@ app.use('/api/invoices',    require('./routes/invoices'));
 const instagramRouter = require('./routes/instagram');
 app.use('/api/instagram',      instagramRouter);
 app.use('/api/linkedin',       require('./routes/linkedin'));
+app.use('/api/ai',             require('./routes/ai'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');
