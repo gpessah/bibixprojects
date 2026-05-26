@@ -958,7 +958,14 @@ router.get('/followers/snapshots', authenticateFlexible, (req, res) => {
 // post tiles via hover overlay → results upserted into instagram_scraped_posts.
 
 function cleanUsername(u) {
-  return String(u || '').trim().replace(/^@/, '').toLowerCase();
+  // Accept any common form: bare `name`, `@name`, or a full IG URL like
+  // `https://www.instagram.com/name/` — return the canonical lowercase
+  // username, or empty string if nothing recognizable was found.
+  const raw = String(u || '').trim();
+  if (!raw) return '';
+  const urlMatch = raw.match(/instagram\.com\/([^/?#@\s]+)/i);
+  if (urlMatch) return urlMatch[1].toLowerCase();
+  return raw.replace(/^@/, '').toLowerCase();
 }
 
 // Monday creates a job
@@ -966,6 +973,12 @@ router.post('/scrape-jobs', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const target = cleanUsername(req.body?.target_username);
   if (!target) return res.status(400).json({ error: 'target_username required' });
+  // Defense in depth — reject anything that doesn't look like a valid IG
+  // username after normalization. Frontend already validates but the
+  // backend can't trust that for direct API calls.
+  if (!/^[a-z0-9._]{1,30}$/.test(target)) {
+    return res.status(400).json({ error: `"${req.body?.target_username}" doesn't look like a valid Instagram username. Use just the handle (e.g. "natgeo") or a full profile URL.` });
+  }
   const count = Math.max(1, Math.min(200, parseInt(req.body?.post_count, 10) || 25));
   const id = uuidv4();
   db.prepare(`
@@ -987,9 +1000,23 @@ router.get('/scrape-jobs', authenticateFlexible, (req, res) => {
   res.json(rows);
 });
 
-// Extension polls for the next pending job, claiming it atomically
+// Extension polls for the next pending job, claiming it atomically.
+//
+// Before picking a new job we sweep any stale `running` claims for this user
+// — if a previous extension crashed or the Chrome tab was closed mid-scrape,
+// the job would otherwise sit in `running` forever and block the queue.
+// 2 minutes is plenty for a real scrape; anything older is presumed dead.
 router.get('/scrape-jobs/pending', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  db.prepare(`
+    UPDATE instagram_scrape_jobs
+    SET status = 'failed',
+        error_message = COALESCE(error_message, 'Abandoned: extension never reported completion (stale claim).'),
+        completed_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND status = 'running'
+      AND datetime(started_at) < datetime('now', '-2 minutes')
+  `).run(uid);
+
   const job = db.prepare(`
     SELECT * FROM instagram_scrape_jobs
     WHERE user_id = ? AND status = 'pending'
@@ -1469,6 +1496,22 @@ router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => 
 // Lets the extension know which accounts it should consider switching to.
 router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  // Sweep stale claimed/running rows before listing pending accounts. If a
+  // previous Chrome tab crashed or the user closed it, the row would sit in
+  // `claimed`/`running` forever and the rest of the batch would stall.
+  // 10 minutes is the generous upper bound for a real comment-like batch.
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = 'failed',
+        error_message = COALESCE(error_message, 'Abandoned: extension never reported completion (stale claim).'),
+        completed_at = CURRENT_TIMESTAMP
+    WHERE user_id = ? AND status IN ('claimed', 'running')
+      AND (
+        (claimed_at IS NOT NULL AND datetime(claimed_at) < datetime('now', '-10 minutes'))
+        OR (claimed_at IS NULL AND started_at IS NOT NULL AND datetime(started_at) < datetime('now', '-10 minutes'))
+      )
+  `).run(uid);
+
   // Order accounts by the created_at of their oldest eligible pending
   // campaign — strict FIFO across accounts. If @A's oldest campaign was
   // created before @B's oldest, the extension switches to @A first.
