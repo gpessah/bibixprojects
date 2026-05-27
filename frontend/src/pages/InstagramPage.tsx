@@ -2892,6 +2892,24 @@ export default function InstagramPage() {
                     <span className="text-sm text-gray-600">minutes</span>
                   </div>
                 )}
+                {/* Time-conversion preview: confirms the job is set in YOUR
+                    time and shows the UTC equivalent for transparency. */}
+                {aForm.schedule_type !== 'interval' && aForm.schedule_time && (() => {
+                  const [hh, mm] = aForm.schedule_time.split(':').map((n: string) => parseInt(n, 10));
+                  if (!Number.isFinite(hh)) return null;
+                  const offsetMin = -new Date().getTimezoneOffset();
+                  let utcMin = (hh * 60 + (mm || 0)) - offsetMin;
+                  utcMin = ((utcMin % 1440) + 1440) % 1440;
+                  const utcHH = String(Math.floor(utcMin / 60)).padStart(2, '0');
+                  const utcMM = String(utcMin % 60).padStart(2, '0');
+                  const tzLbl = offsetMin === 0 ? 'UTC' : `UTC${offsetMin > 0 ? '+' : ''}${offsetMin / 60}`;
+                  return (
+                    <p className="text-xs text-gray-500 mt-2">
+                      ⏰ Runs at <b>{aForm.schedule_time}</b> your time ({tzLbl})
+                      {' · '}<span className="text-gray-400">{utcHH}:{utcMM} UTC on the server</span>
+                    </p>
+                  );
+                })()}
               </div>
 
               <div className="mb-3">
