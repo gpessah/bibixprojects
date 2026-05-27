@@ -199,6 +199,14 @@ try { db.exec('ALTER TABLE users ADD COLUMN instagram_extension_tabs TEXT'); } c
 // (e.g. the daily follower-count scrape). These can be edited/disabled but
 // not deleted — removing the IG account is how you get rid of them.
 try { db.exec('ALTER TABLE instagram_automations ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// tz_offset_minutes: the user's UTC offset (e.g. +180 for UTC+3) captured
+// when the automation was created/edited. schedule_time is interpreted as
+// LOCAL time in this offset, so "Daily 10:00" fires at 10:00 the user's
+// time regardless of the server's own timezone. Default 0 = treat as UTC.
+try { db.exec('ALTER TABLE instagram_automations ADD COLUMN tz_offset_minutes INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// Remembered per-user default offset so server-created system automations
+// can use the right timezone too.
+try { db.exec('ALTER TABLE users ADD COLUMN instagram_tz_offset_minutes INTEGER'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -2066,38 +2074,51 @@ function computeNextRunAt(automation, baseDate = new Date()) {
     const mins = Math.max(1, Number(automation.schedule_interval_minutes) || 60);
     return new Date(base.getTime() + mins * 60 * 1000).toISOString();
   }
-  // Parse HH:MM (default 09:00)
-  const [hh, mm] = String(automation.schedule_time || '09:00').split(':').map(n => parseInt(n, 10));
+
+  // schedule_time is the user's LOCAL HH:MM. Convert to a UTC minute-of-day
+  // using their stored offset so the job fires at the intended local time
+  // regardless of the server's own timezone.
+  const offsetMin = Number(automation.tz_offset_minutes) || 0; // e.g. +180 for UTC+3
+  const [hhRaw, mmRaw] = String(automation.schedule_time || '09:00').split(':').map(n => parseInt(n, 10));
+  const localHH = Number.isFinite(hhRaw) ? hhRaw : 9;
+  const localMM = Number.isFinite(mmRaw) ? mmRaw : 0;
+  // local minute-of-day → UTC minute-of-day
+  let utcMinutes = (localHH * 60 + localMM) - offsetMin;
+  utcMinutes = ((utcMinutes % 1440) + 1440) % 1440; // normalize 0..1439
+  const utcHH = Math.floor(utcMinutes / 60);
+  const utcMM = utcMinutes % 60;
+
+  // Build the target using UTC setters (timezone-independent).
   const target = new Date(base);
-  target.setHours(hh || 9, mm || 0, 0, 0);
+  target.setUTCHours(utcHH, utcMM, 0, 0);
 
   if (automation.schedule_type === 'daily') {
-    // Today at HH:MM if still in future, else tomorrow.
-    if (target <= base) target.setDate(target.getDate() + 1);
+    if (target <= base) target.setUTCDate(target.getUTCDate() + 1);
     return target.toISOString();
   }
   if (automation.schedule_type === 'weekly') {
-    // schedule_days = comma-separated 0-6 (Sun=0). Find next allowed weekday >= today
+    // schedule_days = comma-separated 0-6 (Sun=0) in the USER's local frame.
+    // We approximate by matching against the UTC weekday of the candidate;
+    // for offsets within ±12h this is correct on the chosen day in almost
+    // all cases (the firing instant lands on the same local day).
     const allowed = String(automation.schedule_days || '')
       .split(',').map(d => parseInt(d.trim(), 10)).filter(d => d >= 0 && d <= 6);
     if (allowed.length === 0) {
-      // Fallback to daily
-      if (target <= base) target.setDate(target.getDate() + 1);
+      if (target <= base) target.setUTCDate(target.getUTCDate() + 1);
       return target.toISOString();
     }
-    // Try today through next 7 days
     for (let i = 0; i < 8; i++) {
       const candidate = new Date(target);
-      candidate.setDate(target.getDate() + i);
-      if (allowed.includes(candidate.getDay()) && candidate > base) {
+      candidate.setUTCDate(target.getUTCDate() + i);
+      // Weekday as seen in the user's local timezone (shift by offset).
+      const localDay = new Date(candidate.getTime() + offsetMin * 60 * 1000).getUTCDay();
+      if (allowed.includes(localDay) && candidate > base) {
         return candidate.toISOString();
       }
     }
-    // Safety net (shouldn't happen)
-    target.setDate(target.getDate() + 7);
+    target.setUTCDate(target.getUTCDate() + 7);
     return target.toISOString();
   }
-  // Unknown type — default to 24h from now
   return new Date(base.getTime() + 24 * 60 * 60 * 1000).toISOString();
 }
 
@@ -2130,6 +2151,11 @@ function sanitizeAutomationBody(body, isUpdate = false) {
     out.accounts = JSON.stringify(clean);
   }
   if (body.enabled !== undefined) out.enabled = body.enabled ? 1 : 0;
+  if (body.tz_offset_minutes !== undefined) {
+    const n = parseInt(body.tz_offset_minutes, 10);
+    // Sane bounds: -14h..+14h covers every real timezone.
+    out.tz_offset_minutes = (Number.isFinite(n) && n >= -840 && n <= 840) ? n : 0;
+  }
   if (!isUpdate) {
     if (!out.name) throw new Error('name required');
     if (!out.schedule_type) throw new Error('schedule_type required');
@@ -2144,7 +2170,7 @@ function parseAutomationRow(row) {
   let actions = [], accounts = [];
   try { actions = row.actions ? JSON.parse(row.actions) : []; } catch (_) {}
   try { accounts = row.accounts ? JSON.parse(row.accounts) : []; } catch (_) {}
-  return { ...row, actions, accounts, enabled: !!row.enabled, is_system: !!row.is_system };
+  return { ...row, actions, accounts, enabled: !!row.enabled, is_system: !!row.is_system, tz_offset_minutes: row.tz_offset_minutes || 0 };
 }
 
 // Auto-create the built-in "Daily follower count" automation for each tracked
@@ -2152,10 +2178,30 @@ function parseAutomationRow(row) {
 // staggered 20 min apart starting at 09:00 so multiple accounts don't all
 // hit Instagram simultaneously. Idempotent — safe to call repeatedly.
 function ensureSystemAutomations(userId) {
-  const acctRow = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(userId);
+  const acctRow = db.prepare('SELECT instagram_accounts, instagram_tz_offset_minutes FROM users WHERE id = ?').get(userId);
   let accounts = [];
   try { accounts = JSON.parse(acctRow?.instagram_accounts || '[]') || []; } catch (_) {}
   if (!accounts.length) return;
+  // Use the user's remembered timezone offset (captured when they last
+  // created/edited an automation in Monday). Defaults to 0/UTC if unknown —
+  // the user can edit the time afterward.
+  const userOffset = Number.isFinite(acctRow?.instagram_tz_offset_minutes)
+    ? acctRow.instagram_tz_offset_minutes : 0;
+
+  // Self-correct existing system automations whose stored offset is stale
+  // (e.g. created before the user's timezone was known). Keep their
+  // schedule_time but apply the correct offset and recompute next_run_at.
+  if (Number.isFinite(acctRow?.instagram_tz_offset_minutes)) {
+    const staleSystem = db.prepare(
+      'SELECT * FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND tz_offset_minutes != ?'
+    ).all(userId, userOffset);
+    for (const r of staleSystem) {
+      const next = computeNextRunAt({ ...r, tz_offset_minutes: userOffset });
+      db.prepare(
+        'UPDATE instagram_automations SET tz_offset_minutes = ?, next_run_at = ? WHERE id = ?'
+      ).run(userOffset, next, r.id);
+    }
+  }
 
   // Existing system automations keyed by the single account they cover.
   const existing = db.prepare(
@@ -2182,18 +2228,20 @@ function ensureSystemAutomations(userId) {
       schedule_time: `${hh}:${mm}`,
       schedule_days: null,
       schedule_interval_minutes: null,
+      tz_offset_minutes: userOffset,
     };
     const id = uuidv4();
     db.prepare(`
       INSERT INTO instagram_automations
         (id, user_id, name, schedule_type, schedule_time, schedule_days,
-         schedule_interval_minutes, actions, accounts, enabled, is_system, next_run_at)
-      VALUES (?, ?, ?, 'daily', ?, NULL, NULL, ?, ?, 1, 1, ?)
+         schedule_interval_minutes, actions, accounts, enabled, is_system, tz_offset_minutes, next_run_at)
+      VALUES (?, ?, ?, 'daily', ?, NULL, NULL, ?, ?, 1, 1, ?, ?)
     `).run(
       id, userId, `Daily follower count — @${a}`,
       `${hh}:${mm}`,
       JSON.stringify(['follower_count']),
       JSON.stringify([a]),
+      userOffset,
       computeNextRunAt(auto)
     );
     slot++;
@@ -2219,19 +2267,24 @@ router.post('/automations', authenticateFlexible, (req, res) => {
   let fields;
   try { fields = sanitizeAutomationBody(req.body, false); }
   catch (e) { return res.status(400).json({ error: e.message }); }
+  const tzOffset = fields.tz_offset_minutes || 0;
+  // Remember this offset as the user's default so server-created system
+  // automations (per-account follower scrapes) use the right timezone too.
+  try { db.prepare('UPDATE users SET instagram_tz_offset_minutes = ? WHERE id = ?').run(tzOffset, uid); } catch (_) {}
   const id = uuidv4();
   const next = computeNextRunAt(fields);
   db.prepare(`
     INSERT INTO instagram_automations
       (id, user_id, name, schedule_type, schedule_time, schedule_days,
-       schedule_interval_minutes, actions, accounts, enabled, next_run_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       schedule_interval_minutes, actions, accounts, enabled, tz_offset_minutes, next_run_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, uid, fields.name, fields.schedule_type,
     fields.schedule_time || null, fields.schedule_days || null,
     fields.schedule_interval_minutes || null,
     fields.actions, fields.accounts,
     fields.enabled === undefined ? 1 : fields.enabled,
+    tzOffset,
     next
   );
   res.json(parseAutomationRow(db.prepare('SELECT * FROM instagram_automations WHERE id = ?').get(id)));
@@ -2246,23 +2299,29 @@ router.patch('/automations/:id', authenticateFlexible, (req, res) => {
   const existing = db.prepare('SELECT * FROM instagram_automations WHERE id = ? AND user_id = ?').get(req.params.id, uid);
   if (!existing) return res.status(404).json({ error: 'not found' });
 
+  // Remember the user's timezone offset for future system automations.
+  if (fields.tz_offset_minutes !== undefined) {
+    try { db.prepare('UPDATE users SET instagram_tz_offset_minutes = ? WHERE id = ?').run(fields.tz_offset_minutes, uid); } catch (_) {}
+  }
+
   const cols = [];
   const params = [];
   for (const [k, v] of Object.entries(fields)) {
     cols.push(`${k} = ?`);
     params.push(v);
   }
-  // If anything that affects scheduling changed, recompute next_run_at
-  const scheduleChanged = ['schedule_type', 'schedule_time', 'schedule_days', 'schedule_interval_minutes', 'enabled']
+  // If anything that affects scheduling changed (including the timezone
+  // offset), recompute next_run_at.
+  const scheduleChanged = ['schedule_type', 'schedule_time', 'schedule_days', 'schedule_interval_minutes', 'enabled', 'tz_offset_minutes']
     .some(k => k in fields);
   if (scheduleChanged) {
     const merged = { ...parseAutomationRow(existing), ...fields };
-    // Use the parsed shape's *string* fields for the recompute helper.
     const next = computeNextRunAt({
       schedule_type: merged.schedule_type,
       schedule_time: merged.schedule_time,
       schedule_days: merged.schedule_days,
       schedule_interval_minutes: merged.schedule_interval_minutes,
+      tz_offset_minutes: merged.tz_offset_minutes,
     });
     cols.push('next_run_at = ?');
     params.push(next);

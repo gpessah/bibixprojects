@@ -881,6 +881,10 @@ export default function InstagramPage() {
         schedule_interval_minutes: aForm.schedule_type === 'interval' ? parseInt(aForm.schedule_interval_minutes, 10) : null,
         actions: aForm.actions,
         accounts: aForm.accounts,
+        // Send the browser's UTC offset (e.g. +180 for UTC+3) so the backend
+        // interprets schedule_time as LOCAL time and the job fires when the
+        // user expects — not in the server's timezone.
+        tz_offset_minutes: -new Date().getTimezoneOffset(),
       };
       if (editingAutomation) {
         await api.patch(`/instagram/automations/${editingAutomation.id}${qs}`, body);
@@ -909,10 +913,12 @@ export default function InstagramPage() {
   function describeSchedule(a: Automation): string {
     if (a.schedule_type === 'interval') return `Every ${a.schedule_interval_minutes || '?'} min`;
     const t = a.schedule_time || '09:00';
-    if (a.schedule_type === 'daily') return `Daily ${t}`;
+    // schedule_time is the user's local time (backend interprets it with the
+    // stored tz offset). Tag it so it's unambiguous against the "Next:" value.
+    if (a.schedule_type === 'daily') return `Daily ${t} (your time)`;
     if (a.schedule_type === 'weekly') {
       const days = a.schedule_days ? a.schedule_days.split(',').map(d => DAY_NAMES[parseInt(d, 10)]).filter(Boolean).join(' ') : 'no days';
-      return `${days} ${t}`;
+      return `${days} ${t} (your time)`;
     }
     return a.schedule_type;
   }
