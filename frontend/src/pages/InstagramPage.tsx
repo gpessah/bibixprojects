@@ -15,6 +15,7 @@ interface Automation {
   actions: string[];
   accounts: string[];
   enabled: boolean;
+  is_system?: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
   last_status: string | null;
@@ -811,6 +812,9 @@ export default function InstagramPage() {
 
   // ── Automations (recurring jobs) ─────────────────────────────────────────
   const [automations, setAutomations] = useState<Automation[]>([]);
+  // Cronjobs UI filters: by account and by kind (all / system / user-defined).
+  const [autoFilterAccount, setAutoFilterAccount] = useState('');
+  const [autoFilterKind, setAutoFilterKind] = useState<'all' | 'system' | 'user'>('all');
   const [showAutomationModal, setShowAutomationModal] = useState(false);
   const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
   const [aForm, setAForm] = useState<{
@@ -2711,8 +2715,8 @@ export default function InstagramPage() {
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><RefreshCw size={18} /> Automations</h3>
-                  <p className="text-sm text-gray-500 mt-0.5">Recurring jobs the extension runs automatically. Backend computes the next run time; the extension polls every minute.</p>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><RefreshCw size={18} /> Cronjobs &amp; Automations</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Recurring jobs the extension runs automatically. Built-in per-account tasks (📌) are auto-created when you add an account; you can edit their time or disable them, but remove the account to delete them.</p>
                 </div>
                 <button onClick={openNewAutomation}
                   className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
@@ -2720,11 +2724,40 @@ export default function InstagramPage() {
                 </button>
               </div>
 
-              {automations.length === 0 ? (
+              {/* Filter bar */}
+              {automations.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                  <span className="text-gray-500">Filter:</span>
+                  <div className="flex gap-1">
+                    {(['all','system','user'] as const).map(k => (
+                      <button key={k} onClick={() => setAutoFilterKind(k)}
+                        className={`px-2.5 py-1 rounded-full font-medium ${autoFilterKind === k ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                        {k === 'all' ? 'All' : k === 'system' ? '📌 Built-in' : 'User-defined'}
+                      </button>
+                    ))}
+                  </div>
+                  <select value={autoFilterAccount} onChange={e => setAutoFilterAccount(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1 bg-white">
+                    <option value="">All accounts</option>
+                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {(() => {
+                const filtered = automations.filter(a => {
+                  if (autoFilterKind === 'system' && !a.is_system) return false;
+                  if (autoFilterKind === 'user' && a.is_system) return false;
+                  if (autoFilterAccount && !a.accounts.includes(autoFilterAccount)) return false;
+                  return true;
+                });
+                return automations.length === 0 ? (
                 <p className="text-gray-400 text-sm py-8 text-center">No automations yet. Click <b>+ New automation</b> to set up a recurring job.</p>
+              ) : filtered.length === 0 ? (
+                <p className="text-gray-400 text-sm py-8 text-center">No automations match this filter.</p>
               ) : (
                 <div className="space-y-2">
-                  {automations.map(a => {
+                  {filtered.map(a => {
                     const statusPill =
                       !a.enabled                   ? 'bg-gray-100 text-gray-600' :
                       a.last_status === 'failed'   ? 'bg-red-100 text-red-700'   :
@@ -2744,6 +2777,7 @@ export default function InstagramPage() {
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-1">
+                              {a.is_system && <span title="Built-in per-account task — disable or remove the account to stop it">📌</span>}
                               <span className="font-medium text-gray-900 text-sm">{a.name}</span>
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${statusPill}`}>{statusLabel}</span>
                             </div>
@@ -2771,17 +2805,20 @@ export default function InstagramPage() {
                               className="text-gray-400 hover:text-gray-700 p-1" title="Edit">
                               <Pencil size={14} />
                             </button>
-                            <button onClick={() => deleteAutomation(a.id)}
-                              className="text-gray-400 hover:text-red-500 p-1" title="Delete">
-                              <Trash2 size={14} />
-                            </button>
+                            {!a.is_system && (
+                              <button onClick={() => deleteAutomation(a.id)}
+                                className="text-gray-400 hover:text-red-500 p-1" title="Delete">
+                                <Trash2 size={14} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              )}
+              );
+              })()}
             </div>
           </div>
         )}

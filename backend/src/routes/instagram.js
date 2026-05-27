@@ -195,6 +195,10 @@ try { db.exec('ALTER TABLE users ADD COLUMN instagram_follower_trigger_at DATETI
 // Per-user extension tab visibility (JSON array of allowed section names).
 // NULL or empty array = all tabs visible (backward-compatible default).
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_extension_tabs TEXT'); } catch (_) {}
+// is_system marks automations the app auto-creates per tracked account
+// (e.g. the daily follower-count scrape). These can be edited/disabled but
+// not deleted — removing the IG account is how you get rid of them.
+try { db.exec('ALTER TABLE instagram_automations ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
 
 // helper — which user_id to query
 function targetUser(req) {
@@ -827,6 +831,8 @@ router.post('/accounts/scan', authenticateFlexible, (req, res) => {
   const merged = [...new Set([...existing, ...cleaned])].sort();
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
     .run(JSON.stringify(merged), req.user.id);
+  // Auto-create daily follower-count automations for any newly-added accounts.
+  try { ensureSystemAutomations(req.user.id); } catch (_) {}
   res.json({ ok: true, count: merged.length, accounts: merged, rejected });
 });
 
@@ -847,6 +853,8 @@ router.post('/accounts', authenticateFlexible, (req, res) => {
   list = [...new Set(list)].sort();
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
     .run(JSON.stringify(list), req.user.id);
+  // Auto-create the daily follower-count automation for the new account.
+  try { ensureSystemAutomations(req.user.id); } catch (_) {}
   res.json({ ok: true, accounts: list });
 });
 
@@ -860,6 +868,21 @@ router.delete('/accounts/:username', authenticateFlexible, (req, res) => {
   list = list.filter(a => a.toLowerCase() !== target);
   db.prepare('UPDATE users SET instagram_accounts = ? WHERE id = ?')
     .run(JSON.stringify(list), req.user.id);
+  // Remove the system automation that was auto-created for this account
+  // (one that covers only this single account). Manual automations the user
+  // created that happen to include this account are left untouched.
+  try {
+    const sysAutos = db.prepare(
+      "SELECT id, accounts FROM instagram_automations WHERE user_id = ? AND is_system = 1"
+    ).all(req.user.id);
+    for (const a of sysAutos) {
+      let accs = [];
+      try { accs = JSON.parse(a.accounts || '[]'); } catch (_) {}
+      if (accs.length === 1 && accs[0] === target) {
+        db.prepare('DELETE FROM instagram_automations WHERE id = ?').run(a.id);
+      }
+    }
+  } catch (_) {}
   res.json({ ok: true, accounts: list });
 });
 
@@ -2121,15 +2144,71 @@ function parseAutomationRow(row) {
   let actions = [], accounts = [];
   try { actions = row.actions ? JSON.parse(row.actions) : []; } catch (_) {}
   try { accounts = row.accounts ? JSON.parse(row.accounts) : []; } catch (_) {}
-  return { ...row, actions, accounts, enabled: !!row.enabled };
+  return { ...row, actions, accounts, enabled: !!row.enabled, is_system: !!row.is_system };
 }
 
-// Monday lists all automations for this user
+// Auto-create the built-in "Daily follower count" automation for each tracked
+// IG account that doesn't already have a system automation. Times are
+// staggered 20 min apart starting at 09:00 so multiple accounts don't all
+// hit Instagram simultaneously. Idempotent — safe to call repeatedly.
+function ensureSystemAutomations(userId) {
+  const acctRow = db.prepare('SELECT instagram_accounts FROM users WHERE id = ?').get(userId);
+  let accounts = [];
+  try { accounts = JSON.parse(acctRow?.instagram_accounts || '[]') || []; } catch (_) {}
+  if (!accounts.length) return;
+
+  // Existing system automations keyed by the single account they cover.
+  const existing = db.prepare(
+    "SELECT id, accounts FROM instagram_automations WHERE user_id = ? AND is_system = 1"
+  ).all(userId);
+  const covered = new Set();
+  for (const r of existing) {
+    try {
+      const accs = JSON.parse(r.accounts || '[]');
+      if (accs.length === 1) covered.add(accs[0]);
+    } catch (_) {}
+  }
+
+  let slot = 0;
+  for (const acct of accounts) {
+    const a = String(acct).trim().replace(/^@/, '').toLowerCase();
+    if (!a || covered.has(a)) { slot++; continue; }
+    // Stagger: 09:00, 09:20, 09:40, 10:00 …
+    const baseMin = 9 * 60 + slot * 20;
+    const hh = String(Math.floor(baseMin / 60) % 24).padStart(2, '0');
+    const mm = String(baseMin % 60).padStart(2, '0');
+    const auto = {
+      schedule_type: 'daily',
+      schedule_time: `${hh}:${mm}`,
+      schedule_days: null,
+      schedule_interval_minutes: null,
+    };
+    const id = uuidv4();
+    db.prepare(`
+      INSERT INTO instagram_automations
+        (id, user_id, name, schedule_type, schedule_time, schedule_days,
+         schedule_interval_minutes, actions, accounts, enabled, is_system, next_run_at)
+      VALUES (?, ?, ?, 'daily', ?, NULL, NULL, ?, ?, 1, 1, ?)
+    `).run(
+      id, userId, `Daily follower count — @${a}`,
+      `${hh}:${mm}`,
+      JSON.stringify(['follower_count']),
+      JSON.stringify([a]),
+      computeNextRunAt(auto)
+    );
+    slot++;
+  }
+}
+
+// Monday lists all automations for this user. We lazily backfill system
+// automations here so existing users (who added accounts before this
+// feature existed) get their per-account daily follower-count jobs.
 router.get('/automations', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  try { ensureSystemAutomations(uid); } catch (e) { console.warn('ensureSystemAutomations failed:', e.message); }
   const rows = db.prepare(`
     SELECT * FROM instagram_automations WHERE user_id = ?
-    ORDER BY created_at DESC LIMIT 200
+    ORDER BY is_system ASC, created_at DESC LIMIT 200
   `).all(uid);
   res.json(rows.map(parseAutomationRow));
 });
@@ -2198,6 +2277,14 @@ router.patch('/automations/:id', authenticateFlexible, (req, res) => {
 // Monday deletes an automation
 router.delete('/automations/:id', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  const row = db.prepare('SELECT is_system FROM instagram_automations WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  // System automations are tied to a tracked IG account — you remove them by
+  // removing the account (Accounts tab), not by deleting the automation.
+  // They can still be disabled or have their schedule edited.
+  if (row.is_system) {
+    return res.status(400).json({ error: 'This is a built-in per-account task. Disable it instead, or remove the Instagram account to delete it.' });
+  }
   db.prepare('DELETE FROM instagram_automations WHERE id = ? AND user_id = ?').run(req.params.id, uid);
   res.json({ ok: true });
 });
