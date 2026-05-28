@@ -1317,6 +1317,35 @@ export default function InstagramPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <h3 className="text-lg font-semibold text-gray-900">Dashboard</h3>
                 <div className="flex gap-1.5 ml-auto">
+                  {(() => {
+                    // Quick filters: Today and Yesterday. Compute YYYY-MM-DD
+                    // from the BROWSER's local date (matches what the user
+                    // sees on their clock), then set both from + to to that
+                    // single day so the dashboard query treats it as a
+                    // one-day range.
+                    const ymd = (d: Date) =>
+                      `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                    const todayStr = ymd(new Date());
+                    const yStr = ymd(new Date(Date.now() - 86400000));
+                    const isToday = dashFrom === todayStr && dashTo === todayStr;
+                    const isYesterday = dashFrom === yStr && dashTo === yStr;
+                    return (
+                      <>
+                        <button onClick={() => { setDashFrom(todayStr); setDashTo(todayStr); }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isToday ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                          }`}>
+                          Today
+                        </button>
+                        <button onClick={() => { setDashFrom(yStr); setDashTo(yStr); }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isYesterday ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                          }`}>
+                          Yesterday
+                        </button>
+                      </>
+                    );
+                  })()}
                   {[7, 30, 90].map(d => (
                     <button key={d} onClick={() => { setDays(d); setDashFrom(''); setDashTo(''); }}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
