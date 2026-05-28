@@ -242,6 +242,26 @@ router.post("/actions", authenticateFlexible, (req, res) => {
   var action_date    = b.action_date    || b.date            || null;
 
   if (!type) return res.status(400).json({ error: 'type required' });
+
+  // Enrich from prior history. The notification scanner (post-optimization)
+  // no longer hovers each row to read follower_count + full_name, so those
+  // arrive null. Lookup the most recent row for this same username that
+  // already has the data (typically from likes/follows/manual scans) and
+  // copy it over. No IG hits, instant, and the History view stops showing
+  // "—" for users we've already met.
+  if (username && (full_name == null || follower_count == null)) {
+    var prior = db.prepare(`
+      SELECT full_name, follower_count FROM instagram_actions
+      WHERE user_id = ? AND username = ?
+        AND (full_name IS NOT NULL OR follower_count IS NOT NULL)
+      ORDER BY created_at DESC LIMIT 1
+    `).get(req.user.id, username);
+    if (prior) {
+      if (full_name == null) full_name = prior.full_name || null;
+      if (follower_count == null) follower_count = prior.follower_count || null;
+    }
+  }
+
   // Accept a client-provided id so dual-write to prod+staging uses the
   // SAME id on both, otherwise prod's actions wouldn't link to its own
   // campaign rows. INSERT OR IGNORE makes the second write idempotent.
@@ -252,6 +272,35 @@ router.post("/actions", authenticateFlexible, (req, res) => {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(id, req.user.id, type, username, follower_count, post_url, reply_text, comment_text, campaign_id, my_profile, full_name, post_owner, action_date);
   res.json({ id });
+});
+
+// Backfill full_name + follower_count on existing instagram_actions rows
+// that have them as null, using the most recent row for the SAME username
+// that does have them. One-shot, idempotent, single UPDATE — no IG calls.
+// Useful after the notification scanner stopped hovering: existing rows
+// with "—" get filled in from history.
+router.post('/actions/backfill', authenticateFlexible, (req, res) => {
+  const uid = req.user.id;
+  const r = db.prepare(`
+    UPDATE instagram_actions
+    SET full_name = COALESCE(full_name, (
+          SELECT full_name FROM instagram_actions ia2
+          WHERE ia2.user_id = instagram_actions.user_id
+            AND ia2.username = instagram_actions.username
+            AND ia2.full_name IS NOT NULL
+          ORDER BY ia2.created_at DESC LIMIT 1
+        )),
+        follower_count = COALESCE(follower_count, (
+          SELECT follower_count FROM instagram_actions ia3
+          WHERE ia3.user_id = instagram_actions.user_id
+            AND ia3.username = instagram_actions.username
+            AND ia3.follower_count IS NOT NULL
+          ORDER BY ia3.created_at DESC LIMIT 1
+        ))
+    WHERE user_id = ? AND username IS NOT NULL
+      AND (full_name IS NULL OR follower_count IS NULL)
+  `).run(uid);
+  res.json({ updated: r.changes });
 });
 
 router.post('/actions/bulk', authenticateFlexible, (req, res) => {
