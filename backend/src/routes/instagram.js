@@ -693,6 +693,113 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     rows: attributionRows,
   };
 
+  // ── Campaign performance ───────────────────────────────────────────────
+  // Outbound perspective: one row per executed batch queue item, showing
+  // what we asked for vs what was done, how many of those targets came
+  // back as new followers, and the conversion %. Replaces the user's
+  // intuitive "for this post, what did my campaign do?" view that the
+  // inbound-row attribution table doesn't give them.
+  const profilesFilter = req.query.profiles
+    ? String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean)
+    : [];
+  const dateFrom = req.query.from && req.query.to ? String(req.query.from).slice(0,10) : null;
+  const dateTo = req.query.from && req.query.to ? String(req.query.to).slice(0,10) : null;
+
+  let queueSql = `
+    SELECT q.id, q.campaign_id, q.post_url, q.action_type, q.as_account,
+           q.count_requested, q.count_done, q.status,
+           COALESCE(q.completed_at, q.claimed_at, q.started_at) AS action_date,
+           q.claimed_at
+    FROM instagram_action_queue q
+    WHERE q.user_id = ?
+      AND (q.completed_at IS NOT NULL OR q.count_done > 0)
+  `;
+  const queueParams = [uid];
+  if (dateFrom && dateTo) {
+    queueSql += ` AND date(COALESCE(q.completed_at, q.claimed_at, q.started_at)) BETWEEN ? AND ?`;
+    queueParams.push(dateFrom, dateTo);
+  } else {
+    queueSql += ` AND datetime(COALESCE(q.completed_at, q.claimed_at, q.started_at)) >= datetime('now', '-${days} days')`;
+  }
+  if (profilesFilter.length > 0) {
+    queueSql += ` AND LOWER(q.as_account) IN (${profilesFilter.map(() => '?').join(',')})`;
+    queueParams.push(...profilesFilter);
+  }
+  queueSql += ` ORDER BY action_date DESC LIMIT 100`;
+  const queueItems = db.prepare(queueSql).all(...queueParams);
+
+  // Per queue item, look up distinct targets + which of them became
+  // new_followers afterwards. Done as small per-row queries (~100 max)
+  // so the SQL stays readable.
+  const performanceRows = [];
+  for (const q of queueItems) {
+    const targets = db.prepare(`
+      SELECT DISTINCT username FROM instagram_actions
+      WHERE user_id = ?
+        AND campaign_id IS NOT NULL AND campaign_id = ?
+        AND post_url = ?
+        AND type = ?
+        AND username IS NOT NULL
+    `).all(uid, q.campaign_id, q.post_url, q.action_type).map(r => r.username);
+
+    let followersBack = 0;
+    let avgMinutesToFollowback = null;
+    if (targets.length > 0) {
+      const ph = targets.map(() => '?').join(',');
+      const fbs = db.prepare(`
+        SELECT username, created_at FROM instagram_actions
+        WHERE user_id = ?
+          AND type = 'new_follower'
+          AND username IN (${ph})
+          AND datetime(created_at) > datetime(?)
+      `).all(uid, ...targets, q.claimed_at || q.action_date);
+      followersBack = fbs.length;
+      if (fbs.length > 0) {
+        const baseMs = new Date(q.claimed_at || q.action_date).getTime();
+        let sumMin = 0, n = 0;
+        for (const fb of fbs) {
+          const diff = (new Date(fb.created_at).getTime() - baseMs) / 60000;
+          if (diff > 0) { sumMin += diff; n++; }
+        }
+        if (n > 0) avgMinutesToFollowback = Math.round(sumMin / n);
+      }
+    }
+    const conversionRate = q.count_done > 0
+      ? Math.round((followersBack / q.count_done) * 1000) / 10
+      : null;
+
+    performanceRows.push({
+      queue_id: q.id,
+      campaign_id: q.campaign_id,
+      post_url: q.post_url,
+      action_type: q.action_type,
+      as_account: q.as_account,
+      count_requested: q.count_requested,
+      count_done: q.count_done,
+      status: q.status,
+      action_date: q.action_date,
+      targets: targets.length,
+      followers_back: followersBack,
+      avg_minutes_to_followback: avgMinutesToFollowback,
+      conversion_rate: conversionRate,
+    });
+  }
+
+  const campaignPerformance = {
+    rows: performanceRows,
+    totals: {
+      batches: performanceRows.length,
+      requested: performanceRows.reduce((s, r) => s + (r.count_requested || 0), 0),
+      done: performanceRows.reduce((s, r) => s + (r.count_done || 0), 0),
+      followers_back: performanceRows.reduce((s, r) => s + (r.followers_back || 0), 0),
+      avg_conversion: (() => {
+        const rated = performanceRows.filter(r => r.conversion_rate != null);
+        if (rated.length === 0) return null;
+        return Math.round(rated.reduce((s, r) => s + r.conversion_rate, 0) / rated.length * 10) / 10;
+      })(),
+    },
+  };
+
   res.json({
     total, byType, follows, newFollowers, followBack, daily, topUsers,
     followerGrowth,
@@ -700,6 +807,7 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     inboundCounts,
     funnel,
     attribution,
+    campaignPerformance,
   });
 });
 

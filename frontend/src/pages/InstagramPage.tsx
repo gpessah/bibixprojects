@@ -136,6 +136,30 @@ interface Stats {
   }[];
   inboundCounts?: Record<string, number>;
   funnel?: { action_type: string; paired_with: string; label: string; sent: number; returned: number; percent: number | null }[];
+  campaignPerformance?: {
+    totals: {
+      batches: number;
+      requested: number;
+      done: number;
+      followers_back: number;
+      avg_conversion: number | null;
+    };
+    rows: {
+      queue_id: string;
+      campaign_id: string;
+      post_url: string;
+      action_type: string;
+      as_account: string;
+      count_requested: number;
+      count_done: number;
+      status: string;
+      action_date: string;
+      targets: number;
+      followers_back: number;
+      avg_minutes_to_followback: number | null;
+      conversion_rate: number | null;
+    }[];
+  };
   attribution?: {
     total_new_followers: number;   // misleading name kept for back-compat; now = total inbound rows
     attributed_count: number;
@@ -1828,30 +1852,32 @@ export default function InstagramPage() {
                       </div>
                     )}
 
-                    {/* Per-row attribution table */}
-                    {stats.attribution.rows.length === 0 ? (
-                      <p className="text-gray-400 text-sm py-4 text-center">No inbound engagements in this period.</p>
+                    {/* Per-batch outbound performance table. One row per
+                        executed queue item: what we ran, how it performed,
+                        and how many of those targets became followers. */}
+                    {!stats.campaignPerformance || stats.campaignPerformance.rows.length === 0 ? (
+                      <p className="text-gray-400 text-sm py-4 text-center">No batch activity in this period.</p>
                     ) : (
                       <div className="overflow-x-auto">
+                        <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Per-batch performance</div>
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
-                              <th className="py-2 pr-3 font-medium">Who</th>
-                              <th className="py-2 pr-3 font-medium">Response</th>
-                              <th className="py-2 pr-3 font-medium">Account</th>
-                              <th className="py-2 pr-3 font-medium">When</th>
-                              <th className="py-2 pr-3 font-medium">Triggered by</th>
                               <th className="py-2 pr-3 font-medium">On post</th>
-                              <th className="py-2 pr-3 font-medium text-right">Time to respond</th>
+                              <th className="py-2 pr-3 font-medium">Action</th>
+                              <th className="py-2 pr-3 font-medium">Account</th>
+                              <th className="py-2 pr-3 font-medium">Date</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="Performed / Requested">Actions</th>
+                              <th className="py-2 pr-3 font-medium text-right">Followers back</th>
+                              <th className="py-2 pr-3 font-medium text-right">Avg time to respond</th>
+                              <th className="py-2 pr-3 font-medium text-right">Conversion</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {stats.attribution.rows.slice(0, 100).map((r, i) => {
-                              const shortPost = r.attributed_post
-                                ? r.attributed_post.match(/\/(p|reel)\/([\w-]+)/)?.[2] || r.attributed_post.slice(-12)
-                                : null;
-                              const isOrganic = !r.attributed_type;
-                              const inType = r.inbound_type || 'new_follower';
+                            {stats.campaignPerformance.rows.map((r) => {
+                              const shortPost = r.post_url
+                                ? r.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || r.post_url.slice(-12)
+                                : '—';
                               const fmtTime = (mins: number | null) => {
                                 if (mins == null) return '—';
                                 if (mins < 60) return `${mins}m`;
@@ -1860,56 +1886,73 @@ export default function InstagramPage() {
                                 const h = Math.floor((mins % 1440) / 60);
                                 return `${d}d ${h}h`;
                               };
+                              // Conversion color: green if > 5%, amber 1-5%, gray if 0.
+                              const conv = r.conversion_rate;
+                              const convClass = conv == null
+                                ? 'text-gray-400'
+                                : conv >= 5 ? 'text-green-600 font-bold'
+                                : conv >= 1 ? 'text-amber-600 font-semibold'
+                                : 'text-gray-500';
                               return (
-                                <tr key={`${r.follower}-${r.followed_at}-${i}`} className="border-b border-gray-50 last:border-0">
-                                  <td className="py-2 pr-3">
-                                    <a href={`https://instagram.com/${r.follower}`} target="_blank" rel="noreferrer"
-                                      className="text-blue-600 hover:underline font-medium">@{r.follower}</a>
-                                    {r.full_name && <span className="text-xs text-gray-400 ml-2">({r.full_name})</span>}
-                                  </td>
-                                  <td className="py-2 pr-3">
-                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLOR[inType] || 'bg-blue-100 text-blue-700'}`}>
-                                      {TYPE_LABEL[inType] || inType}
-                                    </span>
-                                    {r.inbound_text && (
-                                      <span className="block text-[10px] text-gray-400 mt-0.5 italic" title={r.inbound_text}>
-                                        "{r.inbound_text.slice(0, 30)}{r.inbound_text.length > 30 ? '…' : ''}"
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="py-2 pr-3 text-gray-700 text-xs">{r.my_profile ? `@${r.my_profile}` : '—'}</td>
-                                  <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(r.followed_at)}</td>
-                                  <td className="py-2 pr-3">
-                                    {isOrganic ? (
-                                      <span className="text-xs text-gray-400 italic">organic — no prior action</span>
-                                    ) : (
-                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLOR[r.attributed_type!] || 'bg-gray-100 text-gray-600'}`}>
-                                        {TYPE_LABEL[r.attributed_type!] || r.attributed_type}
-                                      </span>
-                                    )}
-                                  </td>
+                                <tr key={r.queue_id} className="border-b border-gray-50 last:border-0">
                                   <td className="py-2 pr-3 text-xs">
-                                    {r.attributed_post ? (
-                                      <a href={r.attributed_post} target="_blank" rel="noreferrer"
-                                        className="text-blue-600 hover:underline">
-                                        {shortPost}
-                                      </a>
+                                    {r.post_url ? (
+                                      <a href={r.post_url} target="_blank" rel="noreferrer"
+                                        className="text-blue-600 hover:underline font-mono">{shortPost}</a>
                                     ) : '—'}
-                                    {r.attributed_post_owner && (
-                                      <span className="text-gray-400 ml-1">· @{r.attributed_post_owner}</span>
-                                    )}
                                   </td>
+                                  <td className="py-2 pr-3">
+                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLOR[r.action_type] || 'bg-gray-100 text-gray-600'}`}>
+                                      {TYPE_LABEL[r.action_type] || r.action_type}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 pr-3 text-xs text-gray-700">@{r.as_account}</td>
+                                  <td className="py-2 pr-3 text-xs text-gray-500">{fmt(r.action_date)}</td>
                                   <td className="py-2 pr-3 text-right text-xs">
-                                    {isOrganic ? '—' : <b className="text-gray-900">{fmtTime(r.minutes_to_convert)}</b>}
+                                    <span className={r.count_done < r.count_requested ? 'text-orange-600' : 'text-gray-900'}>
+                                      {r.count_done}
+                                    </span>
+                                    <span className="text-gray-400">/{r.count_requested}</span>
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs font-bold text-gray-900">
+                                    {r.followers_back || '—'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs text-gray-700">
+                                    {fmtTime(r.avg_minutes_to_followback)}
+                                  </td>
+                                  <td className={`py-2 pr-3 text-right text-xs ${convClass}`}>
+                                    {conv == null ? '—' : `${conv.toFixed(1)}%`}
                                   </td>
                                 </tr>
                               );
                             })}
                           </tbody>
+                          {/* Totals row */}
+                          {stats.campaignPerformance.rows.length > 1 && (
+                            <tfoot>
+                              <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                                <td colSpan={4} className="py-2 pr-3 text-xs uppercase text-gray-600">
+                                  {stats.campaignPerformance.totals.batches} batches
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.done}<span className="text-gray-400">/{stats.campaignPerformance.totals.requested}</span>
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.followers_back}
+                                </td>
+                                <td className="py-2 pr-3"></td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.avg_conversion != null
+                                    ? `${stats.campaignPerformance.totals.avg_conversion.toFixed(1)}%`
+                                    : '—'}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          )}
                         </table>
-                        {stats.attribution.rows.length > 100 && (
+                        {stats.campaignPerformance.rows.length >= 100 && (
                           <p className="text-xs text-gray-400 mt-2 text-center">
-                            Showing 100 of {stats.attribution.rows.length} inbound engagements. Narrow the date range to see fewer.
+                            Showing 100 most recent batches. Narrow the date range to see fewer.
                           </p>
                         )}
                       </div>
