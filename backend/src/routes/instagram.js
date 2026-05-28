@@ -273,10 +273,14 @@ router.post('/actions/bulk', authenticateFlexible, (req, res) => {
 
 router.get("/actions", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  const { type, limit = 200, offset = 0 } = req.query;
+  const { type, type_like, limit = 200, offset = 0 } = req.query;
   let q = 'SELECT * FROM instagram_actions WHERE user_id = ?';
   const params = [uid];
   if (type) { q += ' AND type = ?'; params.push(type); }
+  // type_like='received_%' lets the extension fetch all received_* rows
+  // in one call for notification-dedup. SQLite LIKE is case-insensitive
+  // by default for ASCII, which is what we want here.
+  if (type_like) { q += ' AND type LIKE ?'; params.push(String(type_like)); }
   q += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(Number(limit), Number(offset));
   res.json(db.prepare(q).all(...params));
