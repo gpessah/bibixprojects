@@ -587,18 +587,28 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   };
 
   // ── Conversion attribution ──────────────────────────────────────────────
-  // For each `new_follower` event in the period, look back at outbound
-  // actions targeting that same username (matching my_profile when known)
-  // and find the most recent one. That action gets the "credit" for the
-  // conversion, plus we expose time-to-convert in minutes.
-  // The scalar subquery picks a single id; SQLite then joins it once.
+  // For every INBOUND engagement we got (new_follower or received_*),
+  // look back at our outbound actions to the same user and find the most
+  // recent one. That outbound gets credit. Lets the user see: "I liked X's
+  // reel, then X liked my post / commented / followed me."
+  //
+  // Strategy:
+  //   • Outbound types are like, comment, comment_reply, reply, follow.
+  //   • Inbound types are new_follower + everything LIKE 'received_%'.
+  //   • Time filter on the INBOUND's created_at (the event we're crediting).
+  //   • Per row we also expose `inbound_type`, the human-readable inbound
+  //     action, so the frontend can group by it.
   const attributionRows = db.prepare(`
     SELECT
       nf.username       AS follower,
+      nf.type           AS inbound_type,
       nf.my_profile     AS my_profile,
       nf.full_name      AS full_name,
       nf.follower_count AS follower_count,
       nf.created_at     AS followed_at,
+      nf.action_date    AS inbound_action_date,
+      nf.post_url       AS inbound_post_url,
+      nf.reply_text     AS inbound_text,
       a.type            AS attributed_type,
       a.post_url        AS attributed_post,
       a.post_owner      AS attributed_post_owner,
@@ -621,32 +631,46 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       LIMIT 1
     )
     WHERE nf.user_id = ?
-      AND nf.type = 'new_follower'
+      AND (nf.type = 'new_follower' OR nf.type LIKE 'received_%')
       ${(req.query.from && req.query.to)
         ? `AND date(nf.created_at) BETWEEN ? AND ?`
         : `AND datetime(nf.created_at) >= datetime('now', '-${days} days')`}
       ${req.query.profiles ? `AND LOWER(nf.my_profile) IN (${String(req.query.profiles).split(',').map(() => '?').join(',')})` : ''}
     ORDER BY nf.created_at DESC
-    LIMIT 100
+    LIMIT 500
   `).all(
     uid,
     ...(req.query.from && req.query.to ? [String(req.query.from).slice(0,10), String(req.query.to).slice(0,10)] : []),
     ...(req.query.profiles ? String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean) : [])
   );
 
-  // Roll-up: how many of the attribution rows have a prior action vs not,
-  // average minutes-to-convert, and a breakdown by attributed type.
+  // Roll-up.
   const attributed = attributionRows.filter(r => r.attributed_type);
   const organic   = attributionRows.length - attributed.length;
   const avgMinutes = attributed.length > 0
     ? Math.round(attributed.reduce((s, r) => s + (r.minutes_to_convert || 0), 0) / attributed.length)
     : null;
-  const breakdown = {};
+  // Breakdown by OUTBOUND type (which of our actions earned the response).
+  const byAttributedType = {};
   for (const r of attributed) {
-    breakdown[r.attributed_type] = (breakdown[r.attributed_type] || 0) + 1;
+    byAttributedType[r.attributed_type] = (byAttributedType[r.attributed_type] || 0) + 1;
+  }
+  // Breakdown by INBOUND type (what kind of response we got).
+  const byInboundType = {};
+  for (const r of attributionRows) {
+    byInboundType[r.inbound_type] = (byInboundType[r.inbound_type] || 0) + 1;
+  }
+  // Cross-table: outbound × inbound (which outbound action → which inbound).
+  // Lets the user see "of all the likes I gave, how many came back as
+  // follows, comments, etc.?"
+  const conversionMatrix = {};
+  for (const r of attributed) {
+    const key = `${r.attributed_type}→${r.inbound_type}`;
+    conversionMatrix[key] = (conversionMatrix[key] || 0) + 1;
   }
 
   const attribution = {
+    // Kept for back-compat with existing frontend reads
     total_new_followers: attributionRows.length,
     attributed_count: attributed.length,
     organic_count: organic,
@@ -654,10 +678,18 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       ? Math.round((attributed.length / attributionRows.length) * 1000) / 10
       : null,
     avg_minutes_to_convert: avgMinutes,
-    by_attributed_type: Object.entries(breakdown).map(([type, count]) => ({
+    by_attributed_type: Object.entries(byAttributedType).map(([type, count]) => ({
       type, count,
       percent: attributed.length > 0 ? Math.round((count / attributed.length) * 1000) / 10 : 0,
     })).sort((a, b) => b.count - a.count),
+    by_inbound_type: Object.entries(byInboundType).map(([type, count]) => ({
+      type, count,
+      percent: attributionRows.length > 0 ? Math.round((count / attributionRows.length) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count),
+    conversion_matrix: Object.entries(conversionMatrix).map(([key, count]) => {
+      const [outbound, inbound] = key.split('→');
+      return { outbound, inbound, count };
+    }).sort((a, b) => b.count - a.count),
     rows: attributionRows,
   };
 
