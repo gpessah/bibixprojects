@@ -27,7 +27,7 @@ interface Automation {
 const AUTOMATION_ACTION_LABELS: Record<string, string> = {
   follower_count: 'Daily follower count',
   scan_notifications: 'Scan notifications (coming soon)',
-  snapshot_followers_full: 'Full follower snapshot (coming soon)',
+  snapshot_followers_full: 'Full follower snapshot',
 };
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 

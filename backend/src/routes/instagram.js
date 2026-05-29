@@ -1724,15 +1724,35 @@ router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) =>
   // previous Chrome tab crashed or the user closed it, the row would sit in
   // `claimed`/`running` forever and the rest of the batch would stall.
   // 10 minutes is the generous upper bound for a real comment-like batch.
+  // Falls back to created_at if neither claimed_at nor started_at is set,
+  // so rows that got into a weird state from an older bug also get released.
   db.prepare(`
     UPDATE instagram_action_queue
     SET status = 'failed',
         error_message = COALESCE(error_message, 'Abandoned: extension never reported completion (stale claim).'),
         completed_at = CURRENT_TIMESTAMP
     WHERE user_id = ? AND status IN ('claimed', 'running')
-      AND (
-        (claimed_at IS NOT NULL AND datetime(claimed_at) < datetime('now', '-10 minutes'))
-        OR (claimed_at IS NULL AND started_at IS NOT NULL AND datetime(started_at) < datetime('now', '-10 minutes'))
+      AND datetime(COALESCE(claimed_at, started_at, created_at)) < datetime('now', '-10 minutes')
+  `).run(uid);
+
+  // After sweeping items, any parent campaign whose queue is fully terminal
+  // (no pending/claimed/running left) should transition out of 'running'
+  // so the UI stops showing it as live. Without this, a sweep just leaves
+  // dangling 'running' campaigns with all-failed items.
+  db.prepare(`
+    UPDATE instagram_action_campaigns
+    SET status = 'completed',
+        ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP)
+    WHERE user_id = ?
+      AND status IN ('pending', 'running')
+      AND NOT EXISTS (
+        SELECT 1 FROM instagram_action_queue q
+        WHERE q.campaign_id = instagram_action_campaigns.id
+          AND q.status IN ('pending', 'claimed', 'running')
+      )
+      AND EXISTS (
+        SELECT 1 FROM instagram_action_queue q
+        WHERE q.campaign_id = instagram_action_campaigns.id
       )
   `).run(uid);
 
