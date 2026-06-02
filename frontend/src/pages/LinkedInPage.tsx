@@ -1,12 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart2, Clock, Settings as SettingsIcon, Linkedin, ChevronDown, Trash2,
-  MessageSquare, Reply, Lightbulb, Copy, Check, Download,
+  MessageSquare, Reply, Lightbulb, Copy, Check, Download, Users, ExternalLink, Search,
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'settings';
+type Tab = 'dashboard' | 'history' | 'candidates' | 'settings';
+
+interface Candidate {
+  id: number;
+  linkedin_url: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  full_name: string | null;
+  headline: string | null;
+  company: string | null;
+  company_domain: string | null;
+  email: string | null;
+  email_confidence: number | null;
+  position: string | null;
+  saved_to_crm: number;
+  crm_contact_id: string | null;
+  created_at: string;
+}
 
 interface Generation {
   id: string;
@@ -99,8 +116,65 @@ export default function LinkedInPage() {
   const [settings, setSettings] = useState<LinkedInSettings | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [candSearch, setCandSearch] = useState('');
+  const [candLoading, setCandLoading] = useState(false);
 
   const qs = asUser ? `?as_user=${asUser}` : '';
+
+  async function loadCandidates() {
+    setCandLoading(true);
+    try {
+      const r = await api.get('/contacts');
+      setCandidates(r.data.data || []);
+    } finally { setCandLoading(false); }
+  }
+
+  useEffect(() => { if (tab === 'candidates') loadCandidates(); }, [tab]);
+
+  async function deleteCandidate(id: number) {
+    if (!confirm('Delete this candidate?')) return;
+    await api.delete(`/contacts/${id}`);
+    setCandidates(cs => cs.filter(c => c.id !== id));
+  }
+
+  async function pushCandidateToCrm(id: number) {
+    const r = await api.post(`/contacts/${id}/to-crm`);
+    if (r.data.ok) {
+      setCandidates(cs => cs.map(c => c.id === id
+        ? { ...c, saved_to_crm: 1, crm_contact_id: r.data.data.crmContactId }
+        : c));
+    }
+  }
+
+  const filteredCandidates = useMemo(() => {
+    const q = candSearch.toLowerCase().trim();
+    if (!q) return candidates;
+    return candidates.filter(c =>
+      (c.full_name || '').toLowerCase().includes(q)
+      || (c.company || '').toLowerCase().includes(q)
+      || (c.position || '').toLowerCase().includes(q)
+      || (c.email || '').toLowerCase().includes(q)
+    );
+  }, [candidates, candSearch]);
+
+  function exportCandidatesCsv() {
+    const headers = ['Full Name', 'Position', 'Company', 'Email', 'LinkedIn URL', 'Saved At'];
+    const rows = filteredCandidates.map(c => [
+      c.full_name || '', c.position || '', c.company || '', c.email || '',
+      c.linkedin_url || '', c.created_at || '',
+    ]);
+    const csv = [headers, ...rows]
+      .map(r => r.map(v => `"${(v || '').toString().replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `linkedin-candidates-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   useEffect(() => {
     if (isAdmin) api.get('/linkedin/admin/users').then(r => setAdminUsers(r.data));
@@ -162,9 +236,10 @@ export default function LinkedInPage() {
   }
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <BarChart2 size={15} /> },
-    { id: 'history',   label: 'History',   icon: <Clock size={15} /> },
-    { id: 'settings',  label: 'Settings',  icon: <SettingsIcon size={15} /> },
+    { id: 'dashboard',  label: 'Dashboard',  icon: <BarChart2 size={15} /> },
+    { id: 'history',    label: 'History',    icon: <Clock size={15} /> },
+    { id: 'candidates', label: 'Candidates', icon: <Users size={15} /> },
+    { id: 'settings',   label: 'Settings',   icon: <SettingsIcon size={15} /> },
   ];
 
   const dailyAgg = useMemo(() => {
@@ -336,6 +411,96 @@ export default function LinkedInPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* CANDIDATES */}
+        {tab === 'candidates' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap gap-3 items-center">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search size={14} className="absolute left-3 top-3 text-gray-400" />
+                <input
+                  type="search"
+                  value={candSearch}
+                  onChange={e => setCandSearch(e.target.value)}
+                  placeholder="Search name, company, position or email…"
+                  className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              </div>
+              <div className="text-xs text-gray-500">
+                {filteredCandidates.length} of {candidates.length}
+              </div>
+              <button onClick={exportCandidatesCsv}
+                className="flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">
+                <Download size={14} /> Export CSV
+              </button>
+              <button onClick={loadCandidates}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">
+                Refresh
+              </button>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {candLoading && (
+                <div className="p-10 text-center text-gray-400 text-sm">Loading…</div>
+              )}
+              {!candLoading && filteredCandidates.length === 0 && (
+                <div className="p-10 text-center text-gray-400 text-sm">
+                  No candidates yet. Visit a LinkedIn profile and click the 💾 Save Contact button.
+                </div>
+              )}
+              {!candLoading && filteredCandidates.length > 0 && (
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr className="text-left text-gray-500 text-xs uppercase">
+                      <th className="py-2.5 px-4">Name</th>
+                      <th className="py-2.5 px-4">Position</th>
+                      <th className="py-2.5 px-4">Company</th>
+                      <th className="py-2.5 px-4">Email</th>
+                      <th className="py-2.5 px-4">Saved</th>
+                      <th className="py-2.5 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCandidates.map(c => (
+                      <tr key={c.id} className="border-t border-gray-100 hover:bg-gray-50">
+                        <td className="py-2.5 px-4 font-medium text-gray-900">{c.full_name || '—'}</td>
+                        <td className="py-2.5 px-4 text-gray-600">{c.position || '—'}</td>
+                        <td className="py-2.5 px-4 text-gray-600">{c.company || '—'}</td>
+                        <td className="py-2.5 px-4">
+                          {c.email ? (
+                            <span className="text-emerald-700">{c.email}{c.email_confidence ? <span className="text-gray-400 ml-1 text-xs">({c.email_confidence}%)</span> : null}</span>
+                          ) : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-2.5 px-4 text-xs text-gray-500">{c.created_at ? fmt(c.created_at) : '—'}</td>
+                        <td className="py-2.5 px-4">
+                          <div className="flex justify-end gap-2">
+                            {c.linkedin_url && (
+                              <a href={c.linkedin_url} target="_blank" rel="noreferrer"
+                                className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600" title="Open LinkedIn">
+                                <ExternalLink size={14} />
+                              </a>
+                            )}
+                            {c.saved_to_crm ? (
+                              <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">In CRM</span>
+                            ) : (
+                              <button onClick={() => pushCandidateToCrm(c.id)}
+                                className="px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium hover:bg-blue-200">
+                                → CRM
+                              </button>
+                            )}
+                            <button onClick={() => deleteCandidate(c.id)}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500" title="Delete">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         )}
 
