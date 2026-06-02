@@ -741,6 +741,7 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
               <tr>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Number</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Client</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Company</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total</th>
@@ -752,6 +753,7 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
                 <tr key={inv.id} className={`border-b border-gray-100 last:border-b-0 hover:bg-gray-50 ${idx % 2 === 0 ? '' : 'bg-gray-50/30'}`}>
                   <td className="px-4 py-3 font-medium text-gray-900">{inv.invoice_number}</td>
                   <td className="px-4 py-3 text-gray-600">{inv.client_name || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600">{inv.company_name || '—'}</td>
                   <td className="px-4 py-3 text-gray-500">{inv.issue_date}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[inv.status] || 'bg-gray-100 text-gray-600'}`}>
