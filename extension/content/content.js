@@ -1053,47 +1053,35 @@
       }
     }
 
-    // --- Current company ----------------------------------------------------
+    // --- Parse company + position from the headline -----------------------
+    // The headline is the most reliable source. Patterns we handle:
+    //   "Founder at Stripe | Building infra"          → pos="Founder", co="Stripe"
+    //   "Generative AI Lead @ AWS | Public Speaker"   → pos="Generative AI Lead", co="AWS"
+    //   "Fearless Adventures | Investing in …"        → co=seg0, pos=seg1
+    //   "Marketing VP"                                 → pos="Marketing VP"
     let company = '';
-    // Strategy 1 — first <a href="/company/..."> inside <main> with reasonable text.
-    document.querySelectorAll('main a[href*="/company/"]').forEach((a) => {
-      if (company) return;
-      const txt = ((a.innerText || '').trim().split('\n')[0] || '').trim();
-      if (!txt) return;
-      if (txt.length < 2 || txt.length > 80) return;
-      if (txt === fullName) return;
-      if (/^\d/.test(txt)) return; // not "1,234 followers"
-      company = txt;
-    });
-    // Strategy 2 — parse "at Company" / "@ Company" out of the headline.
-    if (!company && headline) {
-      const mm = headline.match(/\b(?:at|@)\s+([^|·•\n,.]+)/i);
-      if (mm) company = mm[1].trim();
-    }
-    // Strategy 3 — first segment of the headline before "|" if it looks
-    // like a company name (no role keywords).
-    if (!company && headline) {
-      const first = headline.split(/\s*\|\s*/)[0].trim();
-      if (first && first.length < 80 && !/\b(?:at|@|founder|ceo|cto|director|manager|engineer|lead|head|chief|partner|developer|specialist|consultant)\b/i.test(first)) {
-        company = first;
-      }
-    }
-
-    // --- Current position ---------------------------------------------------
     let position = '';
     if (headline) {
-      const mm = headline.match(/^([^|]+?)\s+(?:at|@)\s+/i);
-      if (mm) position = mm[1].trim();
-      else {
-        // No "at" — use the second pipe segment if it looks like a role,
-        // otherwise the first segment.
-        const segs = headline.split(/\s*\|\s*/).map(s => s.trim()).filter(Boolean);
-        for (const s of segs) {
-          if (/\b(founder|ceo|cto|director|manager|engineer|lead|head|chief|partner|developer|specialist|consultant|investor|advisor|architect|designer|writer)\b/i.test(s)) {
-            position = s; break;
-          }
-        }
-        if (!position) position = segs[0] || '';
+      const segs = headline.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
+      // Try "X at|@ Y" pattern on each segment first.
+      for (const seg of segs) {
+        const mm = seg.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
+        if (mm) { position = mm[1].trim(); company = mm[2].trim().split(/\s*[·•,]\s*/)[0].trim(); break; }
+      }
+      // No "at" — fall back to seg0=company, seg1=position when there are 2+ segs.
+      if (!position && !company) {
+        if (segs.length >= 2) { company = segs[0]; position = segs[1]; }
+        else if (segs.length === 1) { position = segs[0]; }
+      }
+    }
+    // If we still don't have a company, try a /company/ link near the h1.
+    if (!company) {
+      const h1 = document.querySelector('main h1') || document.querySelector('h1');
+      const scope = (h1 && h1.closest('section')) || document.querySelector('main') || document;
+      const link = scope.querySelector('a[href*="/company/"]');
+      if (link) {
+        const txt = ((link.innerText || '').trim().split('\n')[0] || '').trim();
+        if (txt && txt.length < 80 && !/^\d/.test(txt)) company = txt;
       }
     }
 
@@ -1345,7 +1333,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.4)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.5)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
