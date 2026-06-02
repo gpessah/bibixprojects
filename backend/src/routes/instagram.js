@@ -1034,6 +1034,11 @@ router.post('/accounts/scan', authenticateFlexible, (req, res) => {
     .run(JSON.stringify(merged), req.user.id);
   // Auto-create daily follower-count automations for any newly-added accounts.
   try { ensureSystemAutomations(req.user.id); } catch (_) {}
+  // Append each newly-added account to the multi-account scan row.
+  try {
+    const newOnes = cleaned.filter(a => !existing.includes(a));
+    for (const a of newOnes) syncSystemScanAccounts(req.user.id, { added: a });
+  } catch (_) {}
   res.json({ ok: true, count: merged.length, accounts: merged, rejected });
 });
 
@@ -1056,6 +1061,10 @@ router.post('/accounts', authenticateFlexible, (req, res) => {
     .run(JSON.stringify(list), req.user.id);
   // Auto-create the daily follower-count automation for the new account.
   try { ensureSystemAutomations(req.user.id); } catch (_) {}
+  // Append the new account to the multi-account scan row if it exists.
+  // (No-op if user hasn't had any accounts before — ensureSystemAutomations
+  // will create the row with the right list on next /automations fetch.)
+  try { syncSystemScanAccounts(req.user.id, { added: username }); } catch (_) {}
   res.json({ ok: true, accounts: list });
 });
 
@@ -1084,10 +1093,9 @@ router.delete('/accounts/:username', authenticateFlexible, (req, res) => {
       }
     }
   } catch (_) {}
-  // Re-sync the multi-account system row (scan_notifications) so the
-  // removed account drops out of its `accounts` array. If the user just
-  // deleted their last account, this also deletes the now-pointless row.
-  try { ensureSystemAutomations(req.user.id); } catch (_) {}
+  // Drop the removed account from the multi-account scan row's accounts.
+  // Doesn't touch other fields (time, name, enabled) — preserves user edits.
+  try { syncSystemScanAccounts(req.user.id, { removed: target }); } catch (_) {}
   res.json({ ok: true, accounts: list });
 });
 
@@ -2468,45 +2476,67 @@ function ensureSystemAutomations(userId) {
   }
 
   // ─── Multi-account daily notifications scan ─────────────────────────────────
-  // One system row, scheduled overnight (03:00 local), that sweeps every
-  // tracked account in turn. The extension's runOneAutomation loops over
-  // the accounts array; each iteration auto-switches Chrome and respects
-  // IG's 5-12min anti-flag cooldown internally. Total wall-clock for 6
-  // accounts: ~30-60min, but unattended — runs while the user sleeps.
+  // One system row that sweeps every tracked account in turn. The extension's
+  // runOneAutomation loops over the accounts array; each iteration auto-
+  // switches Chrome and respects IG's 5-12min anti-flag cooldown internally.
   //
-  // Kept in sync: as the user adds/removes accounts, this row's accounts
-  // array is updated to match — so they never need to recreate it.
+  // Important: we ONLY create this row the first time. After creation the
+  // user owns it — they can edit the time, prune the accounts list, change
+  // the name, etc. Those edits persist across page loads. Account add/remove
+  // is handled in syncSystemScanAccounts() (called from /accounts routes),
+  // which appends new accounts and drops removed ones without overwriting
+  // the user's other choices.
   const scanActionsJson = JSON.stringify(['scan_notifications']);
-  const scanAccountsJson = JSON.stringify(cleanAccounts);
   const scanRow = db.prepare(
+    'SELECT id FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND actions = ? LIMIT 1'
+  ).get(userId, scanActionsJson);
+  if (cleanAccounts.length > 0 && !scanRow) {
+    // First-time creation. Default schedule: daily 03:00, all accounts.
+    const auto = {
+      schedule_type: 'daily',
+      schedule_time: '03:00',
+      schedule_days: null,
+      schedule_interval_minutes: null,
+      tz_offset_minutes: userOffset,
+    };
+    db.prepare(`
+      INSERT INTO instagram_automations
+        (id, user_id, name, schedule_type, schedule_time, schedule_days,
+         schedule_interval_minutes, actions, accounts, enabled, is_system, tz_offset_minutes, next_run_at)
+      VALUES (?, ?, ?, 'daily', '03:00', NULL, NULL, ?, ?, 1, 1, ?, ?)
+    `).run(
+      uuidv4(), userId, 'Daily notifications scan',
+      scanActionsJson, JSON.stringify(cleanAccounts), userOffset, computeNextRunAt(auto)
+    );
+  }
+}
+
+// Called from POST/DELETE /accounts endpoints to keep the scan_notifications
+// system row's accounts list synced with the user's tracked accounts —
+// without overwriting any other field they may have edited. Add a newly
+// added account, drop a deleted one. If the row doesn't exist yet (user
+// never had any accounts before), do nothing — ensureSystemAutomations
+// will create it on the next /automations fetch.
+function syncSystemScanAccounts(userId, { added = null, removed = null } = {}) {
+  const scanActionsJson = JSON.stringify(['scan_notifications']);
+  const row = db.prepare(
     'SELECT id, accounts FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND actions = ? LIMIT 1'
   ).get(userId, scanActionsJson);
-  if (cleanAccounts.length > 0) {
-    if (!scanRow) {
-      const auto = {
-        schedule_type: 'daily',
-        schedule_time: '03:00',
-        schedule_days: null,
-        schedule_interval_minutes: null,
-        tz_offset_minutes: userOffset,
-      };
-      db.prepare(`
-        INSERT INTO instagram_automations
-          (id, user_id, name, schedule_type, schedule_time, schedule_days,
-           schedule_interval_minutes, actions, accounts, enabled, is_system, tz_offset_minutes, next_run_at)
-        VALUES (?, ?, ?, 'daily', '03:00', NULL, NULL, ?, ?, 1, 1, ?, ?)
-      `).run(
-        uuidv4(), userId, 'Daily notifications scan (all accounts)',
-        scanActionsJson, scanAccountsJson, userOffset, computeNextRunAt(auto)
-      );
-    } else if (scanRow.accounts !== scanAccountsJson) {
-      // Account list changed — keep this row's roster current.
-      db.prepare('UPDATE instagram_automations SET accounts = ? WHERE id = ?')
-        .run(scanAccountsJson, scanRow.id);
-    }
-  } else if (scanRow) {
-    // User removed all their accounts — drop the now-pointless system row.
-    db.prepare('DELETE FROM instagram_automations WHERE id = ?').run(scanRow.id);
+  if (!row) return;
+  let list = [];
+  try { list = JSON.parse(row.accounts || '[]'); } catch (_) {}
+  const before = JSON.stringify(list);
+  if (added) {
+    const a = String(added).trim().replace(/^@/, '').toLowerCase();
+    if (a && !list.includes(a)) list.push(a);
+  }
+  if (removed) {
+    const r = String(removed).trim().replace(/^@/, '').toLowerCase();
+    list = list.filter(x => x !== r);
+  }
+  const after = JSON.stringify(list);
+  if (after !== before) {
+    db.prepare('UPDATE instagram_automations SET accounts = ? WHERE id = ?').run(after, row.id);
   }
 }
 
