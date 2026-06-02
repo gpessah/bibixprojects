@@ -999,60 +999,191 @@
   function isProfilePage() { return /^\/in\//.test(location.pathname); }
 
   function extractProfileInfo() {
-    const h1 = document.querySelector('main h1, h1');
+    const h1 = document.querySelector('main h1') || document.querySelector('h1');
     const fullName = h1 ? (h1.innerText || '').trim() : '';
     const parts = fullName.split(/\s+/).filter(Boolean);
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
-    // Headline (job title + company line)
-    const headlineEl = document.querySelector(
-      'main .text-body-medium.break-words, '
-      + 'main [data-generated-suggestion-target] + div, '
-      + 'main section .text-body-medium'
-    );
-    const headline = headlineEl ? (headlineEl.innerText || '').trim() : '';
-    // Current company — try the "Current Company" badge next to the photo
+
+    // Headline: the line right under the name ("Generative AI Lead @ AWS | …")
+    let headline = '';
+    if (h1) {
+      let sib = h1.parentElement;
+      // Search a few levels up for the next text node that looks like a tagline
+      for (let i = 0; i < 4 && sib; i++) {
+        const candidates = sib.querySelectorAll(
+          '.text-body-medium.break-words, .text-body-medium, [data-test-id*="hero-headline"]'
+        );
+        for (const c of candidates) {
+          const t = (c.innerText || '').trim();
+          if (t && t !== fullName && t.length > 5 && t.length < 400) { headline = t; break; }
+        }
+        if (headline) break;
+        sib = sib.parentElement;
+      }
+    }
+
+    // Current company — LinkedIn shows it as a button-with-logo near the photo.
+    // The most reliable signal: a button containing an <img> with a company
+    // logo + the company name as text.
     let company = '';
-    const companyEl = document.querySelector(
-      'main [data-test-id="current-company"], '
-      + 'main button[aria-label*="Current company" i], '
-      + 'ul.pv-text-details__right-panel li button, '
-      + 'main section[data-section="currentPositionsDetails"] a'
-    );
-    if (companyEl) company = (companyEl.innerText || '').trim();
-    // Fallback — parse headline "Role at Company"
-    if (!company && /\bat\b|\sב\s/.test(headline)) {
-      const m = headline.match(/\b(?:at|@|ב)\s+([^|·•·\n]+)/i);
+    const buttons = document.querySelectorAll('main button, main a[href*="/company/"]');
+    for (const b of buttons) {
+      if (b.querySelector('img')) {
+        const txt = (b.innerText || '').trim();
+        if (txt && txt.length > 2 && txt.length < 80 && txt !== fullName) {
+          // Heuristic — exclude pronouns / school logos (they tend to be longer descriptions).
+          // Prefer the FIRST such match since it's usually the current company.
+          company = txt;
+          break;
+        }
+      }
+    }
+    // Fallback: parse headline "Role at Company" / "Role @ Company"
+    if (!company && headline) {
+      const m = headline.match(/\b(?:at|@)\s+([^|·•\n,]+)/i);
       if (m) company = m[1].trim();
     }
-    return { firstName, lastName, fullName, headline, company, linkedinUrl: location.href.split('?')[0] };
+
+    // Current position — try the headline minus the company part, OR the first
+    // experience entry. For now, derive from headline: text before "@" / "at".
+    let position = '';
+    if (headline) {
+      const m = headline.match(/^([^|@]+?)(?:\s+(?:at|@)\s+|$)/i);
+      if (m) position = m[1].trim();
+      if (position === headline) {
+        // headline didn't contain "at"/"@" — keep the whole headline as the position
+        position = headline.split(/[|·•]/)[0].trim();
+      }
+    }
+
+    return {
+      firstName, lastName, fullName, headline, company, position,
+      linkedinUrl: location.href.split('?')[0],
+    };
   }
 
   function injectFindContactButton() {
     if (!isProfilePage()) {
-      // If we navigate away from a profile, remove any floating button
-      const existing = document.getElementById('bibix-floating-find');
-      if (existing) existing.remove();
+      // Navigating away — remove any floating buttons we injected.
+      const find = document.getElementById('bibix-floating-find');
+      const save = document.getElementById('bibix-floating-save');
+      if (find) find.remove();
+      if (save) save.remove();
       return;
     }
-    // Floating button — fixed top-right, can't be hidden by LinkedIn's chrome.
-    if (document.getElementById('bibix-floating-find')) return;
-    const btn = el('button', {
-      id: 'bibix-floating-find',
-      className: FIND_BTN_CLASS,
-      type: 'button',
-      title: 'Find this person\'s email via Hunter.io',
-      style: {
-        position: 'fixed',
-        top: '90px',
-        right: '24px',
-        zIndex: '2147483646',
-        padding: '12px 18px',
-        fontSize: '14px',
-      },
-      onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
-    }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Contact']);
-    document.body.appendChild(btn);
+    // Vertical stack of floating action buttons in the top-right.
+    if (!document.getElementById('bibix-floating-save')) {
+      const saveBtn = el('button', {
+        id: 'bibix-floating-save',
+        className: FIND_BTN_CLASS,
+        type: 'button',
+        title: 'Save this profile as a candidate in Monday',
+        style: {
+          position: 'fixed',
+          top: '90px',
+          right: '24px',
+          zIndex: '2147483646',
+          padding: '12px 18px',
+          fontSize: '14px',
+          background: 'linear-gradient(135deg, #4338ca, #6366f1)',
+          boxShadow: '0 2px 6px rgba(67, 56, 202, 0.35)',
+        },
+        onClick: (e) => { e.preventDefault(); e.stopPropagation(); openSaveCandidateDialog(); },
+      }, [el('span', { className: 'bibix-spark' }, '💾'), 'Save Contact']);
+      document.body.appendChild(saveBtn);
+    }
+    if (!document.getElementById('bibix-floating-find')) {
+      const findBtn = el('button', {
+        id: 'bibix-floating-find',
+        className: FIND_BTN_CLASS,
+        type: 'button',
+        title: 'Find this person\'s email via Hunter.io',
+        style: {
+          position: 'fixed',
+          top: '142px',
+          right: '24px',
+          zIndex: '2147483646',
+          padding: '12px 18px',
+          fontSize: '14px',
+        },
+        onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
+      }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Email']);
+      document.body.appendChild(findBtn);
+    }
+  }
+
+  function openSaveCandidateDialog() {
+    closePopover();
+    const info = extractProfileInfo();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '480px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#4338ca,#6366f1);-webkit-background-clip:text;background-clip:text;color:transparent">
+        💾 Save as Candidate
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        Saves this profile to your Monday → LinkedIn → Candidates list.
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Full name</div>
+        <input id="bsc-name" value="${(info.fullName || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current company</div>
+        <input id="bsc-company" value="${(info.company || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current position</div>
+        <input id="bsc-position" value="${(info.position || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:14px;font-size:11px;color:#94a3b8">
+        LinkedIn URL: <span style="color:#475569">${info.linkedinUrl}</span>
+      </div>
+      <div id="bsc-status" style="font-size:12px;min-height:18px;margin-bottom:10px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bsc-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Cancel</button>
+        <button id="bsc-save" style="background:linear-gradient(135deg,#4338ca,#6366f1);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Save Candidate</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const status = pop.querySelector('#bsc-status');
+    pop.querySelector('#bsc-close').addEventListener('click', () => closePopover());
+    pop.addEventListener('click', (e) => { if (e.target === pop) closePopover(); });
+    pop.querySelector('#bsc-save').addEventListener('click', async () => {
+      const fullName = pop.querySelector('#bsc-name').value.trim();
+      const company = pop.querySelector('#bsc-company').value.trim();
+      const position = pop.querySelector('#bsc-position').value.trim();
+      if (!fullName) { status.innerHTML = '<span style="color:#ef4444">Full name required</span>'; return; }
+      status.innerHTML = '<span style="color:#64748b">Saving…</span>';
+      const parts = fullName.split(/\s+/);
+      const res = await send('saveCandidate', {
+        fullName,
+        firstName: parts[0] || '',
+        lastName: parts.slice(1).join(' '),
+        company, position,
+        headline: info.headline,
+        linkedinUrl: info.linkedinUrl,
+      });
+      if (res.ok) {
+        status.innerHTML = `<span style="color:#10b981">✓ ${res.data.updated ? 'Updated' : 'Saved'} candidate.</span>`;
+        setTimeout(() => closePopover(), 1200);
+      } else {
+        status.innerHTML = `<span style="color:#ef4444">${res.error || 'save failed'}</span>`;
+      }
+    });
   }
 
   function openFindContactDialog() {
@@ -1174,7 +1305,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.1)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.2)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;

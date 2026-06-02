@@ -114,6 +114,42 @@ router.post('/find-email', authenticate, async (req, res) => {
   }
 });
 
+// ── Save a candidate (no email lookup needed) ─────────────────────────────────
+router.post('/save-candidate', authenticate, (req, res) => {
+  const { firstName, lastName, fullName, company, position, headline, linkedinUrl } = req.body || {};
+  const name = (fullName || `${firstName || ''} ${lastName || ''}`).trim();
+  if (!name) return res.status(400).json({ error: 'Full name required' });
+  if (!linkedinUrl) return res.status(400).json({ error: 'LinkedIn URL required' });
+
+  // Upsert by (user_id, linkedin_url)
+  const existing = db.prepare(
+    `SELECT id FROM linkedin_contacts WHERE user_id = ? AND linkedin_url = ?`
+  ).get(req.user.id, linkedinUrl);
+
+  if (existing) {
+    db.prepare(`UPDATE linkedin_contacts
+      SET first_name = COALESCE(?, first_name),
+          last_name  = COALESCE(?, last_name),
+          full_name  = COALESCE(?, full_name),
+          company    = COALESCE(?, company),
+          position   = COALESCE(?, position),
+          headline   = COALESCE(?, headline)
+      WHERE id = ?`).run(
+      firstName || null, lastName || null, name,
+      company || null, position || null, headline || null, existing.id);
+    return res.json({ ok: true, data: { id: existing.id, updated: true } });
+  }
+
+  const info = db.prepare(`INSERT INTO linkedin_contacts
+    (user_id, linkedin_url, first_name, last_name, full_name, company, position, headline)
+    VALUES (?,?,?,?,?,?,?,?)`).run(
+    req.user.id, linkedinUrl,
+    firstName || null, lastName || null, name,
+    company || null, position || null, headline || null
+  );
+  res.json({ ok: true, data: { id: info.lastInsertRowid, created: true } });
+});
+
 // ── List saved contacts ───────────────────────────────────────────────────────
 router.get('/', authenticate, (req, res) => {
   const rows = db.prepare(
