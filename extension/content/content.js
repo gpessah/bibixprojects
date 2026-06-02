@@ -1129,9 +1129,54 @@
     // --- Parse company + position ------------------------------------------
     let company = ldCompany;
     let position = ldPosition;
+
+    // PRIMARY: read the Experience section. First entry is the current job.
+    if (!company || !position) {
+      const mainEl = document.querySelector('main') || document.body;
+      const mainText = (mainEl.innerText || '');
+      // Find "Experience" as a section header on its own line.
+      const expMatch = mainText.match(/^Experience\s*$/m);
+      if (expMatch) {
+        const after = mainText.slice(expMatch.index + expMatch[0].length);
+        const expLines = after.split('\n').map((l) => l.trim()).filter(Boolean);
+        // Pattern A — multi-role-at-one-company:
+        //   Company | "2 yrs 5 mos" | Role1 | Full-time | "Mar 2024 - Present · ..."
+        // Pattern B — single-role:
+        //   Role | Company · Full-time | "Mar 2024 - Present · ..."
+        const durationRE = /^\d+\s*(?:yrs?|mos?|years?|months?)\b/i;
+        const dateRE = /^[A-Z][a-z]{2}\s+\d{4}\s*[-–]/i;
+        const employmentRE = /^(?:Full-time|Part-time|Contract|Internship|Freelance|Self-employed|Apprenticeship|Permanent|Seasonal)$/i;
+
+        // Heuristic: lines[0] is either Company (Pattern A) or Role (Pattern B).
+        // Pattern A: lines[1] is a duration → lines[0] = company, find role next.
+        // Pattern B: lines[1] is "Company · Employment-type" → split it.
+        const cand0 = expLines[0];
+        const cand1 = expLines[1] || '';
+        if (cand0 && cand1) {
+          if (durationRE.test(cand1)) {
+            // Pattern A
+            if (!company) company = cand0;
+            for (let i = 2; i < Math.min(expLines.length, 10); i++) {
+              const l = expLines[i];
+              if (durationRE.test(l) || dateRE.test(l) || employmentRE.test(l)) continue;
+              if (/^\d/.test(l)) continue;
+              if (!position) { position = l; }
+              break;
+            }
+          } else {
+            // Pattern B (assume cand0 is role, cand1 contains company)
+            if (!position) position = cand0;
+            // cand1 might be "Wolf Financial · Full-time"
+            const co = cand1.split(/\s*·\s*/)[0].trim();
+            if (co && !employmentRE.test(co) && !company) company = co;
+          }
+        }
+      }
+    }
+
+    // SECONDARY: parse from the headline (covers cases without Experience).
     if ((!company || !position) && headline) {
       const segs = headline.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
-      // Try "X at|@ Y" pattern on each segment first.
       for (const seg of segs) {
         const mm = seg.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
         if (mm) {
@@ -1140,17 +1185,14 @@
           break;
         }
       }
-      // No "at" — fall back to seg0=company, seg1=position when there are 2+ segs.
       if (!position && !company) {
         if (segs.length >= 2) { company = segs[0]; position = segs[1]; }
         else if (segs.length === 1) { position = segs[0]; }
       }
     }
-    // If we still don't have a company, try a /company/ link near the h1.
+    // TERTIARY: any /company/ link inside <main>.
     if (!company) {
-      const h1 = document.querySelector('main h1') || document.querySelector('h1');
-      const scope = (h1 && h1.closest('section')) || document.querySelector('main') || document;
-      const link = scope.querySelector('a[href*="/company/"]');
+      const link = document.querySelector('main a[href*="/company/"]');
       if (link) {
         const txt = ((link.innerText || '').trim().split('\n')[0] || '').trim();
         if (txt && txt.length < 80 && !/^\d/.test(txt)) company = txt;
@@ -1412,7 +1454,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.10)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.11)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
