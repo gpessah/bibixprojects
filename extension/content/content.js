@@ -999,20 +999,49 @@
   function isProfilePage() { return /^\/in\//.test(location.pathname); }
 
   function extractProfileInfo() {
+    // --- JSON-LD first (most reliable, untouched by class renames) ---------
+    let ldName = '', ldHeadline = '', ldCompany = '', ldPosition = '';
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((s) => {
+      try {
+        const data = JSON.parse(s.textContent || s.innerText || 'null');
+        const flat = [];
+        const collect = (n) => {
+          if (!n) return;
+          if (Array.isArray(n)) { n.forEach(collect); return; }
+          if (typeof n !== 'object') return;
+          flat.push(n);
+          if (n['@graph']) collect(n['@graph']);
+        };
+        collect(data);
+        for (const node of flat) {
+          if (node['@type'] === 'Person' || node['@type'] === 'ProfilePage') {
+            const p = node['@type'] === 'ProfilePage' ? (node.mainEntity || node) : node;
+            if (p.name && !ldName) ldName = String(p.name).trim();
+            if (p.jobTitle && !ldPosition) ldPosition = String(p.jobTitle).trim();
+            if (p.description && !ldHeadline) ldHeadline = String(p.description).trim();
+            const wf = p.worksFor;
+            if (wf && !ldCompany) {
+              if (Array.isArray(wf) && wf[0]) ldCompany = (wf[0].name || '').trim();
+              else if (typeof wf === 'object') ldCompany = (wf.name || '').trim();
+              else if (typeof wf === 'string') ldCompany = wf.trim();
+            }
+          }
+        }
+      } catch (_) {}
+    });
+
     // --- Full name ----------------------------------------------------------
-    // Page <title> on LinkedIn profile pages is consistently
-    // "Firstname Lastname - Headline | LinkedIn" (or "...| LinkedIn").
-    // Parse both name AND headline from it — most reliable across A/B tests.
-    let fullName = '';
+    let fullName = ldName;
     let titleHeadline = '';
     const title = (document.title || '').trim();
-    let m = title.match(/^(.+?)\s+[-–]\s+(.+?)\s*\|\s*LinkedIn/i);
-    if (m) { fullName = m[1].trim(); titleHeadline = m[2].trim(); }
     if (!fullName) {
-      m = title.match(/^(.+?)\s*\|\s*LinkedIn/i);
+      let m = title.match(/^(.+?)\s+[-–]\s+(.+?)\s*\|\s*LinkedIn/i);
+      if (m) { fullName = m[1].trim(); titleHeadline = m[2].trim(); }
+    }
+    if (!fullName) {
+      const m = title.match(/^(.+?)\s*\|\s*LinkedIn/i);
       if (m) fullName = m[1].trim();
     }
-    // Fallback: h1 text minus the "· 2nd"-style connection suffix.
     if (!fullName) {
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
       if (h1) {
@@ -1025,17 +1054,15 @@
     const lastName = parts.slice(1).join(' ') || '';
 
     // --- Headline -----------------------------------------------------------
-    // Priority: meta description (most reliable), then page title's
-    // headline part, then DOM-scoped search.
-    let headline = '';
-    const metaDesc = document.querySelector('meta[name="description"]')
-      || document.querySelector('meta[property="og:description"]');
-    if (metaDesc) {
-      const c = (metaDesc.getAttribute('content') || '').trim();
-      // Often looks like "Role at Company - Detail. Detail. | LinkedIn"
-      // Strip the trailing " | LinkedIn" if present.
-      const cleaned = c.replace(/\s*\|\s*LinkedIn\s*$/i, '').trim();
-      if (cleaned && cleaned !== fullName) headline = cleaned;
+    let headline = ldHeadline;
+    if (!headline) {
+      const metaDesc = document.querySelector('meta[name="description"]')
+        || document.querySelector('meta[property="og:description"]');
+      if (metaDesc) {
+        const c = (metaDesc.getAttribute('content') || '').trim();
+        const cleaned = c.replace(/\s*\|\s*LinkedIn\s*$/i, '').trim();
+        if (cleaned && cleaned !== fullName) headline = cleaned;
+      }
     }
     if (!headline && titleHeadline) headline = titleHeadline;
     if (!headline) {
@@ -1063,20 +1090,19 @@
       }
     }
 
-    // --- Parse company + position from the headline -----------------------
-    // The headline is the most reliable source. Patterns we handle:
-    //   "Founder at Stripe | Building infra"          → pos="Founder", co="Stripe"
-    //   "Generative AI Lead @ AWS | Public Speaker"   → pos="Generative AI Lead", co="AWS"
-    //   "Fearless Adventures | Investing in …"        → co=seg0, pos=seg1
-    //   "Marketing VP"                                 → pos="Marketing VP"
-    let company = '';
-    let position = '';
-    if (headline) {
+    // --- Parse company + position ------------------------------------------
+    let company = ldCompany;
+    let position = ldPosition;
+    if ((!company || !position) && headline) {
       const segs = headline.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
       // Try "X at|@ Y" pattern on each segment first.
       for (const seg of segs) {
         const mm = seg.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
-        if (mm) { position = mm[1].trim(); company = mm[2].trim().split(/\s*[·•,]\s*/)[0].trim(); break; }
+        if (mm) {
+          if (!position) position = mm[1].trim();
+          if (!company) company = mm[2].trim().split(/\s*[·•,]\s*/)[0].trim();
+          break;
+        }
       }
       // No "at" — fall back to seg0=company, seg1=position when there are 2+ segs.
       if (!position && !company) {
@@ -1350,7 +1376,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.6)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.7)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
