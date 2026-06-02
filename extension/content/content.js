@@ -999,62 +999,85 @@
   function isProfilePage() { return /^\/in\//.test(location.pathname); }
 
   function extractProfileInfo() {
-    const h1 = document.querySelector('main h1') || document.querySelector('h1');
-    const fullName = h1 ? (h1.innerText || '').trim() : '';
+    // --- Full name ----------------------------------------------------------
+    // Strategy: take the page <title>, which on LinkedIn profiles is always
+    // "Firstname Lastname | LinkedIn" — most reliable across class renames.
+    let fullName = '';
+    const title = (document.title || '').trim();
+    const titleMatch = title.match(/^(.+?)\s*[|\-–]\s*(?:LinkedIn|.*Profile|.*Sales Navigator)/i);
+    if (titleMatch) fullName = titleMatch[1].trim();
+    // Fallback: h1 text minus the "· 2nd"-style connection suffix.
+    if (!fullName) {
+      const h1 = document.querySelector('main h1') || document.querySelector('h1');
+      if (h1) {
+        const raw = ((h1.innerText || h1.textContent || '').trim()).split('\n')[0].trim();
+        fullName = raw.replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\+?\s*$/i, '').trim();
+      }
+    }
     const parts = fullName.split(/\s+/).filter(Boolean);
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
 
-    // Headline: the line right under the name ("Generative AI Lead @ AWS | …")
-    let headline = '';
+    // --- Scope to the profile header section --------------------------------
+    // Find a reasonable bounding element around the name so we don't pick up
+    // "More profiles for you" sidebar content as if it were this profile's data.
+    const h1 = document.querySelector('main h1') || document.querySelector('h1');
+    let headerScope = null;
     if (h1) {
-      let sib = h1.parentElement;
-      // Search a few levels up for the next text node that looks like a tagline
-      for (let i = 0; i < 4 && sib; i++) {
-        const candidates = sib.querySelectorAll(
-          '.text-body-medium.break-words, .text-body-medium, [data-test-id*="hero-headline"]'
-        );
-        for (const c of candidates) {
-          const t = (c.innerText || '').trim();
-          if (t && t !== fullName && t.length > 5 && t.length < 400) { headline = t; break; }
-        }
-        if (headline) break;
-        sib = sib.parentElement;
+      let p = h1.parentElement;
+      for (let i = 0; i < 6 && p; i++) {
+        // First reasonably-sized ancestor (large enough to contain the avatar
+        // + headline + actions, but smaller than the full page).
+        if (p.offsetHeight > 150 && p.offsetHeight < 700) { headerScope = p; break; }
+        p = p.parentElement;
+      }
+      if (!headerScope) headerScope = h1.parentElement || h1;
+    }
+
+    // --- Headline -----------------------------------------------------------
+    let headline = '';
+    if (headerScope) {
+      const candidates = headerScope.querySelectorAll(
+        '.text-body-medium.break-words, .text-body-medium, [data-generated-suggestion-target]'
+      );
+      for (const c of candidates) {
+        const t = (c.innerText || '').trim().split('\n')[0].trim();
+        if (!t || t === fullName) continue;
+        if (t.length < 8 || t.length > 400) continue;
+        if (/^\d+\s*(connections|followers|mutual)/i.test(t)) continue;
+        headline = t;
+        break;
       }
     }
 
-    // Current company — LinkedIn shows it as a button-with-logo near the photo.
-    // The most reliable signal: a button containing an <img> with a company
-    // logo + the company name as text.
+    // --- Current company ----------------------------------------------------
     let company = '';
-    const buttons = document.querySelectorAll('main button, main a[href*="/company/"]');
-    for (const b of buttons) {
-      if (b.querySelector('img')) {
-        const txt = (b.innerText || '').trim();
-        if (txt && txt.length > 2 && txt.length < 80 && txt !== fullName) {
-          // Heuristic — exclude pronouns / school logos (they tend to be longer descriptions).
-          // Prefer the FIRST such match since it's usually the current company.
-          company = txt;
-          break;
-        }
+    if (headerScope) {
+      // Company is usually a <button> or <a href="/company/..."> inside the
+      // header containing the company logo image + name. Pick the FIRST such
+      // element that's inside our scoped header.
+      const candidates = headerScope.querySelectorAll('button, a[href*="/company/"]');
+      for (const c of candidates) {
+        if (!c.querySelector('img')) continue;
+        const txt = ((c.innerText || '').trim().split('\n')[0] || '').trim();
+        if (!txt || txt === fullName) continue;
+        if (txt.length < 2 || txt.length > 80) continue;
+        company = txt;
+        break;
       }
     }
-    // Fallback: parse headline "Role at Company" / "Role @ Company"
+    // Fallback — parse "Role at Company" / "Role @ Company" out of the headline.
     if (!company && headline) {
       const m = headline.match(/\b(?:at|@)\s+([^|·•\n,]+)/i);
       if (m) company = m[1].trim();
     }
 
-    // Current position — try the headline minus the company part, OR the first
-    // experience entry. For now, derive from headline: text before "@" / "at".
+    // --- Current position ---------------------------------------------------
     let position = '';
     if (headline) {
-      const m = headline.match(/^([^|@]+?)(?:\s+(?:at|@)\s+|$)/i);
+      const m = headline.match(/^([^|@]+?)\s+(?:at|@)\s+/i);
       if (m) position = m[1].trim();
-      if (position === headline) {
-        // headline didn't contain "at"/"@" — keep the whole headline as the position
-        position = headline.split(/[|·•]/)[0].trim();
-      }
+      else position = headline.split(/\s*[|·•]\s*/)[0].trim();
     }
 
     return {
@@ -1305,7 +1328,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.2)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.3)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
