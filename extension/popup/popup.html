@@ -31,6 +31,7 @@
     <nav class="tabs">
       <button class="tab" data-tab="comment">Comment</button>
       <button class="tab" data-tab="reply">Reply</button>
+      <button class="tab" data-tab="candidates">Candidates</button>
       <button class="tab" data-tab="account">Account</button>
     </nav>
 
@@ -74,6 +75,17 @@
       <label class="row"><input type="checkbox" id="reply-open" /> Open Ended <span class="info">ⓘ</span></label>
       <label class="row"><input type="checkbox" id="reply-ack" /> On My Own Posts — Acknowledge Only <span class="info">ⓘ</span></label>
       <p class="hint">Your reply settings are also used when generating contributions for Top-Voice badges.</p>
+    </div>
+
+    <!-- CANDIDATES TAB -->
+    <div class="tab-panel" data-panel="candidates" hidden>
+      <div class="candidates-header">
+        <input type="search" id="cand-search" placeholder="Search name / company…" />
+        <button id="cand-refresh" class="secondary small" title="Refresh">↻</button>
+      </div>
+      <div id="cand-list" class="cand-list">
+        <div class="cand-empty">Loading…</div>
+      </div>
     </div>
 
     <!-- ACCOUNT TAB -->
