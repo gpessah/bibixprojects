@@ -1039,17 +1039,27 @@
     }
     if (!headline && titleHeadline) headline = titleHeadline;
     if (!headline) {
+      // Walk up h1's ancestors and parse innerText into lines; the headline
+      // is the first non-trivial line right after the name.
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
-      const scope = h1 && h1.parentElement ? h1.parentElement.parentElement || h1.parentElement : document;
-      const candidates = scope.querySelectorAll(
-        '.text-body-medium.break-words, .text-body-medium, [data-generated-suggestion-target]'
-      );
-      for (const c of candidates) {
-        const t = (c.innerText || '').trim().split('\n')[0].trim();
-        if (!t || t === fullName) continue;
-        if (t.length < 8 || t.length > 400) continue;
-        if (/^\d+\s*(connections|followers|mutual)/i.test(t)) continue;
-        headline = t; break;
+      if (h1) {
+        let p = h1.parentElement;
+        for (let i = 0; i < 5 && p && !headline; i++) {
+          const lines = (p.innerText || '').split(/\n+/).map((l) => l.trim()).filter(Boolean);
+          const nameIdx = lines.findIndex((l) => l.includes(fullName.split(' ')[0]) && l.includes(fullName.split(' ').slice(-1)[0]));
+          if (nameIdx >= 0) {
+            for (let j = nameIdx + 1; j < Math.min(nameIdx + 6, lines.length); j++) {
+              const l = lines[j];
+              if (l.length < 8 || l.length > 400) continue;
+              if (/^[·•]/.test(l) || /^\d/.test(l)) continue;
+              if (/\b(connections?|followers?|mutual|premium|trial|degree)\b/i.test(l)) continue;
+              if (/^Contact info/i.test(l)) continue;
+              if (l === fullName) continue;
+              headline = l; break;
+            }
+          }
+          p = p.parentElement;
+        }
       }
     }
 
@@ -1085,10 +1095,17 @@
       }
     }
 
-    return {
+    const result = {
       firstName, lastName, fullName, headline, company, position,
       linkedinUrl: location.href.split('?')[0],
     };
+    console.log('[Bibix Profile Extract]', {
+      title: document.title,
+      metaDesc: (document.querySelector('meta[name="description"]') || {}).content
+        || (document.querySelector('meta[property="og:description"]') || {}).content,
+      result,
+    });
+    return result;
   }
 
   function injectFindContactButton() {
@@ -1333,7 +1350,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.5)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.6)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
