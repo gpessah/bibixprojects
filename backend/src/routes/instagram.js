@@ -1084,6 +1084,10 @@ router.delete('/accounts/:username', authenticateFlexible, (req, res) => {
       }
     }
   } catch (_) {}
+  // Re-sync the multi-account system row (scan_notifications) so the
+  // removed account drops out of its `accounts` array. If the user just
+  // deleted their last account, this also deletes the now-pointless row.
+  try { ensureSystemAutomations(req.user.id); } catch (_) {}
   res.json({ ok: true, accounts: list });
 });
 
@@ -2429,9 +2433,12 @@ function ensureSystemAutomations(userId) {
   }
 
   let slot = 0;
+  const cleanAccounts = [];
   for (const acct of accounts) {
     const a = String(acct).trim().replace(/^@/, '').toLowerCase();
-    if (!a || covered.has(a)) { slot++; continue; }
+    if (!a) continue;
+    cleanAccounts.push(a);
+    if (covered.has(a)) { slot++; continue; }
     // Stagger: 09:00, 09:20, 09:40, 10:00 …
     const baseMin = 9 * 60 + slot * 20;
     const hh = String(Math.floor(baseMin / 60) % 24).padStart(2, '0');
@@ -2458,6 +2465,48 @@ function ensureSystemAutomations(userId) {
       computeNextRunAt(auto)
     );
     slot++;
+  }
+
+  // ─── Multi-account daily notifications scan ─────────────────────────────────
+  // One system row, scheduled overnight (03:00 local), that sweeps every
+  // tracked account in turn. The extension's runOneAutomation loops over
+  // the accounts array; each iteration auto-switches Chrome and respects
+  // IG's 5-12min anti-flag cooldown internally. Total wall-clock for 6
+  // accounts: ~30-60min, but unattended — runs while the user sleeps.
+  //
+  // Kept in sync: as the user adds/removes accounts, this row's accounts
+  // array is updated to match — so they never need to recreate it.
+  const scanActionsJson = JSON.stringify(['scan_notifications']);
+  const scanAccountsJson = JSON.stringify(cleanAccounts);
+  const scanRow = db.prepare(
+    'SELECT id, accounts FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND actions = ? LIMIT 1'
+  ).get(userId, scanActionsJson);
+  if (cleanAccounts.length > 0) {
+    if (!scanRow) {
+      const auto = {
+        schedule_type: 'daily',
+        schedule_time: '03:00',
+        schedule_days: null,
+        schedule_interval_minutes: null,
+        tz_offset_minutes: userOffset,
+      };
+      db.prepare(`
+        INSERT INTO instagram_automations
+          (id, user_id, name, schedule_type, schedule_time, schedule_days,
+           schedule_interval_minutes, actions, accounts, enabled, is_system, tz_offset_minutes, next_run_at)
+        VALUES (?, ?, ?, 'daily', '03:00', NULL, NULL, ?, ?, 1, 1, ?, ?)
+      `).run(
+        uuidv4(), userId, 'Daily notifications scan (all accounts)',
+        scanActionsJson, scanAccountsJson, userOffset, computeNextRunAt(auto)
+      );
+    } else if (scanRow.accounts !== scanAccountsJson) {
+      // Account list changed — keep this row's roster current.
+      db.prepare('UPDATE instagram_automations SET accounts = ? WHERE id = ?')
+        .run(scanAccountsJson, scanRow.id);
+    }
+  } else if (scanRow) {
+    // User removed all their accounts — drop the now-pointless system row.
+    db.prepare('DELETE FROM instagram_automations WHERE id = ?').run(scanRow.id);
   }
 }
 
