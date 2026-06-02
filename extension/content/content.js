@@ -1000,12 +1000,18 @@
 
   function extractProfileInfo() {
     // --- Full name ----------------------------------------------------------
-    // Strategy: take the page <title>, which on LinkedIn profiles is always
-    // "Firstname Lastname | LinkedIn" — most reliable across class renames.
+    // Page <title> on LinkedIn profile pages is consistently
+    // "Firstname Lastname - Headline | LinkedIn" (or "...| LinkedIn").
+    // Parse both name AND headline from it — most reliable across A/B tests.
     let fullName = '';
+    let titleHeadline = '';
     const title = (document.title || '').trim();
-    const titleMatch = title.match(/^(.+?)\s*[|\-–]\s*(?:LinkedIn|.*Profile|.*Sales Navigator)/i);
-    if (titleMatch) fullName = titleMatch[1].trim();
+    let m = title.match(/^(.+?)\s+[-–]\s+(.+?)\s*\|\s*LinkedIn/i);
+    if (m) { fullName = m[1].trim(); titleHeadline = m[2].trim(); }
+    if (!fullName) {
+      m = title.match(/^(.+?)\s*\|\s*LinkedIn/i);
+      if (m) fullName = m[1].trim();
+    }
     // Fallback: h1 text minus the "· 2nd"-style connection suffix.
     if (!fullName) {
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
@@ -1018,26 +1024,24 @@
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
 
-    // --- Scope to the profile header section --------------------------------
-    // Find a reasonable bounding element around the name so we don't pick up
-    // "More profiles for you" sidebar content as if it were this profile's data.
-    const h1 = document.querySelector('main h1') || document.querySelector('h1');
-    let headerScope = null;
-    if (h1) {
-      let p = h1.parentElement;
-      for (let i = 0; i < 6 && p; i++) {
-        // First reasonably-sized ancestor (large enough to contain the avatar
-        // + headline + actions, but smaller than the full page).
-        if (p.offsetHeight > 150 && p.offsetHeight < 700) { headerScope = p; break; }
-        p = p.parentElement;
-      }
-      if (!headerScope) headerScope = h1.parentElement || h1;
-    }
-
     // --- Headline -----------------------------------------------------------
+    // Priority: meta description (most reliable), then page title's
+    // headline part, then DOM-scoped search.
     let headline = '';
-    if (headerScope) {
-      const candidates = headerScope.querySelectorAll(
+    const metaDesc = document.querySelector('meta[name="description"]')
+      || document.querySelector('meta[property="og:description"]');
+    if (metaDesc) {
+      const c = (metaDesc.getAttribute('content') || '').trim();
+      // Often looks like "Role at Company - Detail. Detail. | LinkedIn"
+      // Strip the trailing " | LinkedIn" if present.
+      const cleaned = c.replace(/\s*\|\s*LinkedIn\s*$/i, '').trim();
+      if (cleaned && cleaned !== fullName) headline = cleaned;
+    }
+    if (!headline && titleHeadline) headline = titleHeadline;
+    if (!headline) {
+      const h1 = document.querySelector('main h1') || document.querySelector('h1');
+      const scope = h1 && h1.parentElement ? h1.parentElement.parentElement || h1.parentElement : document;
+      const candidates = scope.querySelectorAll(
         '.text-body-medium.break-words, .text-body-medium, [data-generated-suggestion-target]'
       );
       for (const c of candidates) {
@@ -1045,39 +1049,52 @@
         if (!t || t === fullName) continue;
         if (t.length < 8 || t.length > 400) continue;
         if (/^\d+\s*(connections|followers|mutual)/i.test(t)) continue;
-        headline = t;
-        break;
+        headline = t; break;
       }
     }
 
     // --- Current company ----------------------------------------------------
     let company = '';
-    if (headerScope) {
-      // Company is usually a <button> or <a href="/company/..."> inside the
-      // header containing the company logo image + name. Pick the FIRST such
-      // element that's inside our scoped header.
-      const candidates = headerScope.querySelectorAll('button, a[href*="/company/"]');
-      for (const c of candidates) {
-        if (!c.querySelector('img')) continue;
-        const txt = ((c.innerText || '').trim().split('\n')[0] || '').trim();
-        if (!txt || txt === fullName) continue;
-        if (txt.length < 2 || txt.length > 80) continue;
-        company = txt;
-        break;
-      }
-    }
-    // Fallback — parse "Role at Company" / "Role @ Company" out of the headline.
+    // Strategy 1 — first <a href="/company/..."> inside <main> with reasonable text.
+    document.querySelectorAll('main a[href*="/company/"]').forEach((a) => {
+      if (company) return;
+      const txt = ((a.innerText || '').trim().split('\n')[0] || '').trim();
+      if (!txt) return;
+      if (txt.length < 2 || txt.length > 80) return;
+      if (txt === fullName) return;
+      if (/^\d/.test(txt)) return; // not "1,234 followers"
+      company = txt;
+    });
+    // Strategy 2 — parse "at Company" / "@ Company" out of the headline.
     if (!company && headline) {
-      const m = headline.match(/\b(?:at|@)\s+([^|·•\n,]+)/i);
-      if (m) company = m[1].trim();
+      const mm = headline.match(/\b(?:at|@)\s+([^|·•\n,.]+)/i);
+      if (mm) company = mm[1].trim();
+    }
+    // Strategy 3 — first segment of the headline before "|" if it looks
+    // like a company name (no role keywords).
+    if (!company && headline) {
+      const first = headline.split(/\s*\|\s*/)[0].trim();
+      if (first && first.length < 80 && !/\b(?:at|@|founder|ceo|cto|director|manager|engineer|lead|head|chief|partner|developer|specialist|consultant)\b/i.test(first)) {
+        company = first;
+      }
     }
 
     // --- Current position ---------------------------------------------------
     let position = '';
     if (headline) {
-      const m = headline.match(/^([^|@]+?)\s+(?:at|@)\s+/i);
-      if (m) position = m[1].trim();
-      else position = headline.split(/\s*[|·•]\s*/)[0].trim();
+      const mm = headline.match(/^([^|]+?)\s+(?:at|@)\s+/i);
+      if (mm) position = mm[1].trim();
+      else {
+        // No "at" — use the second pipe segment if it looks like a role,
+        // otherwise the first segment.
+        const segs = headline.split(/\s*\|\s*/).map(s => s.trim()).filter(Boolean);
+        for (const s of segs) {
+          if (/\b(founder|ceo|cto|director|manager|engineer|lead|head|chief|partner|developer|specialist|consultant|investor|advisor|architect|designer|writer)\b/i.test(s)) {
+            position = s; break;
+          }
+        }
+        if (!position) position = segs[0] || '';
+      }
     }
 
     return {
@@ -1328,7 +1345,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.3)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.4)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
