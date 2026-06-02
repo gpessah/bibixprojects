@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   FileText, Building2, Users, Plus, Pencil, Trash2,
-  Download, X, ChevronDown, Save, Eye
+  Download, X, ChevronDown, Save, Eye, Copy
 } from 'lucide-react';
 import api from '../api/client';
 import toast from 'react-hot-toast';
@@ -640,6 +640,15 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
     } catch { toast.error('Failed to load invoice'); }
   };
 
+  const handleCopy = async (id: string) => {
+    try {
+      const { data } = await api.post(`/invoices/${id}/duplicate`);
+      setInvoices(prev => [data, ...prev]);
+      setModal(data); // open the copy for editing right away
+      toast.success('Invoice copied');
+    } catch { toast.error('Failed to copy invoice'); }
+  };
+
   const handlePreview = async (inv: Invoice) => {
     try {
       // Load full invoice detail (with items + company/client detail)
@@ -761,6 +770,10 @@ function InvoicesTab({ companies, clients }: { companies: MyCompany[]; clients: 
                       <button onClick={() => handleEdit(inv.id)}
                         className="p-1.5 text-gray-400 hover:text-monday-blue hover:bg-blue-50 rounded-lg" title="Edit">
                         <Pencil size={14} />
+                      </button>
+                      <button onClick={() => handleCopy(inv.id)}
+                        className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg" title="Copy / Duplicate">
+                        <Copy size={14} />
                       </button>
                       <button onClick={() => handleDownload(inv)}
                         className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg" title="Print / Save PDF">

@@ -86,6 +86,11 @@ function calcTotals(items, taxRate, discount) {
   return { subtotal, tax_amount, total };
 }
 
+// ── Helper: is this user a super_admin? (can edit any record) ─────────────────
+function isSuperAdmin(userId) {
+  return db.prepare('SELECT role FROM users WHERE id = ?').get(userId)?.role === 'super_admin';
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // MY COMPANIES
 // ════════════════════════════════════════════════════════════════════════════
@@ -114,7 +119,10 @@ router.post('/my-companies', authenticate, (req, res) => {
 });
 
 router.put('/my-companies/:id', authenticate, (req, res) => {
-  const company = db.prepare('SELECT * FROM invoice_my_companies WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
+  // super_admin can edit any company; everyone else only their own
+  const company = isSuperAdmin(req.user.id)
+    ? db.prepare('SELECT * FROM invoice_my_companies WHERE id = ?').get(req.params.id)
+    : db.prepare('SELECT * FROM invoice_my_companies WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
   if (!company) return res.status(404).json({ error: 'Not found' });
   const { name, address, city, country, phone, email, vat_number, bank_name, bank_account, bank_swift, logo_url } = req.body;
   db.prepare(`UPDATE invoice_my_companies SET
@@ -130,7 +138,9 @@ router.put('/my-companies/:id', authenticate, (req, res) => {
 });
 
 router.delete('/my-companies/:id', authenticate, (req, res) => {
-  const company = db.prepare('SELECT id FROM invoice_my_companies WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
+  const company = isSuperAdmin(req.user.id)
+    ? db.prepare('SELECT id FROM invoice_my_companies WHERE id = ?').get(req.params.id)
+    : db.prepare('SELECT id FROM invoice_my_companies WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
   if (!company) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM invoice_my_companies WHERE id = ?').run(req.params.id);
   res.json({ success: true });
@@ -162,7 +172,10 @@ router.post('/clients', authenticate, (req, res) => {
 });
 
 router.put('/clients/:id', authenticate, (req, res) => {
-  const client = db.prepare('SELECT * FROM invoice_clients WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
+  // super_admin can edit any client; everyone else only their own
+  const client = isSuperAdmin(req.user.id)
+    ? db.prepare('SELECT * FROM invoice_clients WHERE id = ?').get(req.params.id)
+    : db.prepare('SELECT * FROM invoice_clients WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
   if (!client) return res.status(404).json({ error: 'Not found' });
   const { name, address, city, country, phone, email, vat_number, contact_person } = req.body;
   db.prepare(`UPDATE invoice_clients SET
@@ -176,7 +189,9 @@ router.put('/clients/:id', authenticate, (req, res) => {
 });
 
 router.delete('/clients/:id', authenticate, (req, res) => {
-  const client = db.prepare('SELECT id FROM invoice_clients WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
+  const client = isSuperAdmin(req.user.id)
+    ? db.prepare('SELECT id FROM invoice_clients WHERE id = ?').get(req.params.id)
+    : db.prepare('SELECT id FROM invoice_clients WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
   if (!client) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM invoice_clients WHERE id = ?').run(req.params.id);
   res.json({ success: true });
@@ -243,6 +258,48 @@ router.post('/', authenticate, (req, res) => {
   items.forEach((it, idx) => {
     const amt = (it.quantity || 1) * (it.unit_price || 0);
     insertItem.run(uuidv4(), id, it.description, it.quantity || 1, it.unit_price || 0, amt, idx);
+  });
+
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+  const savedItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position').all(id);
+  res.status(201).json({ ...invoice, items: savedItems });
+});
+
+// Duplicate (copy) an existing invoice — creates a new draft with the same
+// company/client/items and a unique invoice number, then returns it for editing.
+router.post('/:id/duplicate', authenticate, (req, res) => {
+  const src = isSuperAdmin(req.user.id)
+    ? db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id)
+    : db.prepare('SELECT * FROM invoices WHERE id = ? AND created_by = ?').get(req.params.id, req.user.id);
+  if (!src) return res.status(404).json({ error: 'Not found' });
+
+  const srcItems = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position').all(req.params.id);
+
+  // Build a unique invoice number: "<orig>-COPY", then -COPY2, -COPY3, … if taken
+  const base = `${src.invoice_number}-COPY`;
+  let invoiceNumber = base;
+  let n = 1;
+  while (db.prepare('SELECT 1 FROM invoices WHERE invoice_number = ? AND created_by = ?').get(invoiceNumber, req.user.id)) {
+    n += 1;
+    invoiceNumber = `${base}${n}`;
+  }
+
+  const id = uuidv4();
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(`INSERT INTO invoices
+    (id, invoice_number, my_company_id, client_id, issue_date, due_date, status, currency, notes,
+     tax_rate, discount, subtotal, tax_amount, total, template_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, invoiceNumber, src.my_company_id, src.client_id, today, src.due_date || null,
+         'draft', src.currency, src.notes || null,
+         src.tax_rate, src.discount, src.subtotal, src.tax_amount, src.total,
+         src.template_id || 1, req.user.id);
+
+  const insertItem = db.prepare(`INSERT INTO invoice_items
+    (id, invoice_id, description, quantity, unit_price, amount, position)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  srcItems.forEach((it, idx) => {
+    insertItem.run(uuidv4(), id, it.description, it.quantity, it.unit_price, it.amount, idx);
   });
 
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
