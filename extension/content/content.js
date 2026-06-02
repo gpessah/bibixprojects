@@ -1066,9 +1066,38 @@
     }
     if (!headline && titleHeadline) headline = titleHeadline;
     if (!headline) {
-      // Geometric headline extraction. Find an element positioned just
-      // below the h1, overlapping it horizontally, whose first text line
-      // looks like a headline. Works regardless of class names or locale.
+      // Strategy A: split <main>'s innerText into lines and find the
+      // headline by position relative to the name. Works on any layout
+      // because LinkedIn renders all profile text inside <main>.
+      const mainEl = document.querySelector('main') || document.body;
+      const lines = (mainEl.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      let nameIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === fullName) { nameIdx = i; break; }
+      }
+      // Looser match if exact didn't hit
+      if (nameIdx < 0 && fullName) {
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith(fullName) && lines[i].length < fullName.length + 25) { nameIdx = i; break; }
+        }
+      }
+      if (nameIdx >= 0) {
+        for (let j = nameIdx + 1; j < Math.min(nameIdx + 8, lines.length); j++) {
+          const l = lines[j];
+          if (l.length < 6 || l.length > 400) continue;
+          if (l === fullName) continue;
+          if (/^[·•]/.test(l)) continue;
+          if (/^\d/.test(l)) continue;
+          if (/^(?:connections?|followers?|mutual|premium|trial|verified|message|connect|follow|contact info|view|see|more options|view\snavigator)\b/i.test(l)) continue;
+          if (/\b(connections?|followers?|mutual|degree)\b/i.test(l)) continue;
+          headline = l;
+          break;
+        }
+      }
+    }
+
+    if (!headline) {
+      // Strategy B: geometric — element positioned right below the h1.
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
       if (h1) {
         const h1Rect = h1.getBoundingClientRect();
@@ -1383,7 +1412,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.9)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.10)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
