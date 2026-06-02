@@ -1,9 +1,91 @@
-import { useEffect, useState, useMemo } from 'react';
-import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X } from 'lucide-react';
+import { useEffect, useState, useMemo, Fragment } from 'react';
+import { BarChart2, Clock, Zap, Users, Instagram, ChevronDown, Download, Calendar, UserPlus, Trash2, Plus, Contact, Pencil, X, Search, RefreshCw, ArrowLeft, ExternalLink, Copy } from 'lucide-react';
 import api from '../api/client';
 import { useAuthStore } from '../store/authStore';
 
-type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts';
+type Tab = 'dashboard' | 'history' | 'campaigns' | 'schedule' | 'followers' | 'accounts' | 'research' | 'automations' | 'health';
+
+interface Automation {
+  id: string;
+  name: string;
+  schedule_type: 'daily' | 'weekly' | 'interval';
+  schedule_time: string | null;
+  schedule_days: string | null;        // "1,3,5"
+  schedule_interval_minutes: number | null;
+  actions: string[];
+  accounts: string[];
+  enabled: boolean;
+  is_system?: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const AUTOMATION_ACTION_LABELS: Record<string, string> = {
+  follower_count: 'Daily follower count',
+  scan_notifications: 'Scan notifications',
+  snapshot_followers_full: 'Full follower snapshot',
+};
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+interface HealthBlock {
+  status: 'ok' | 'late' | 'failing' | 'unknown';
+}
+interface HealthResponse {
+  generated_at: string;
+  follower_counts: HealthBlock & { last_capture_at: string | null; profiles_tracked: number };
+  scheduled_posts: HealthBlock & { by_status: Record<string, number>; overdue: number };
+  action_batches: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
+  scrape_jobs: HealthBlock & { by_status: Record<string, number>; stalled_running: number };
+  extension_activity: HealthBlock & { last_action_at: string | null; actions_last_24h: number };
+  permissions: HealthBlock & { role: string; tabs_allowed: number; total_tabs: number };
+  accounts: HealthBlock & { count: number };
+  automations?: HealthBlock & {
+    total: number;
+    enabled: number;
+    last_run_at: string | null;
+    last_status: string | null;
+  };
+}
+
+interface ScrapeJob {
+  id: string; target_username: string; post_count: number;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  error_message: string | null; posts_scraped: number;
+  created_at: string; started_at: string | null; completed_at: string | null;
+}
+interface ScrapedPost {
+  id: string; target_username: string; shortcode: string; post_url: string;
+  post_type: 'post' | 'reel'; likes: number | null; views: number | null;
+  comments: number | null; caption: string | null; last_scraped_at: string;
+}
+interface ScrapedSummary {
+  target_username: string; post_count: number; last_scraped_at: string;
+}
+interface ActionCampaign {
+  id: string; name: string | null;
+  status: 'draft' | 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  total_requested: number; total_completed: number; concurrency: number;
+  consecutive_failures: number; start_at: string | null;
+  started_at: string | null; ended_at: string | null;
+  error_message: string | null; created_at: string;
+}
+interface ActionCampaignSummary extends ActionCampaign {
+  items_count: number;
+  as_account: string | null;
+}
+interface ActionItem {
+  id: string; campaign_id: string; user_id: string; as_account: string;
+  post_url: string; action_type: 'like' | 'reply';
+  count_requested: number; count_done: number;
+  reply_source: string | null; reply_texts: string | null;
+  status: 'pending' | 'claimed' | 'running' | 'completed' | 'partial' | 'no_targets' | 'failed' | 'cancelled';
+  claimed_at: string | null; started_at: string | null; completed_at: string | null;
+  error_message: string | null;
+}
 
 interface ScheduledPost {
   id: string; my_profile: string | null; post_type: string;
@@ -44,7 +126,85 @@ interface Stats {
   byType: { type: string; n: number }[];
   daily: { day: string; type: string; n: number }[];
   topUsers: { username: string; n: number }[];
+  followerGrowth?: {
+    current: number; previous: number; delta: number; percent: number | null;
+  };
+  perAccountGrowth?: {
+    profile: string; current: number | null; previous: number | null;
+    delta: number | null; percent: number | null;
+    series: { day: string; count: number }[];
+  }[];
+  inboundCounts?: Record<string, number>;
+  funnel?: { action_type: string; paired_with: string; label: string; sent: number; returned: number; percent: number | null }[];
+  campaignPerformance?: {
+    totals: {
+      batches: number;
+      requested: number;
+      done: number;
+      followers_back: number;
+      avg_conversion: number | null;
+    };
+    rows: {
+      queue_id: string;
+      campaign_id: string;
+      post_url: string;
+      action_type: string;
+      as_account: string;
+      count_requested: number;
+      count_done: number;
+      status: string;
+      action_date: string;
+      targets: number;
+      followers_back: number;
+      avg_minutes_to_followback: number | null;
+      conversion_rate: number | null;
+    }[];
+  };
+  attribution?: {
+    total_new_followers: number;   // misleading name kept for back-compat; now = total inbound rows
+    attributed_count: number;
+    organic_count: number;
+    attribution_rate: number | null;
+    avg_minutes_to_convert: number | null;
+    by_attributed_type: { type: string; count: number; percent: number }[];
+    by_inbound_type?: { type: string; count: number; percent: number }[];
+    conversion_matrix?: { outbound: string; inbound: string; count: number }[];
+    rows: {
+      follower: string;
+      inbound_type?: string;
+      my_profile: string | null;
+      full_name: string | null;
+      follower_count: number | null;
+      followed_at: string;
+      inbound_action_date?: string | null;
+      inbound_post_url?: string | null;
+      inbound_text?: string | null;
+      attributed_type: string | null;
+      attributed_post: string | null;
+      attributed_post_owner: string | null;
+      attributed_campaign: string | null;
+      attributed_at: string | null;
+      minutes_to_convert: number | null;
+    }[];
+  };
 }
+
+const INBOUND_CARDS: { key: string; label: string; color: string; bg: string; emoji: string }[] = [
+  { key: 'got_comment',      label: 'Got Comment',     color: 'text-blue-600',   bg: 'bg-blue-50',   emoji: '💬' },
+  { key: 'got_like_post',    label: 'Got Like · Post', color: 'text-pink-600',   bg: 'bg-pink-50',   emoji: '❤️' },
+  { key: 'got_like_reel',    label: 'Got Like · Reel', color: 'text-rose-600',   bg: 'bg-rose-50',   emoji: '🎬' },
+  { key: 'got_like_comment', label: 'Got Like · Comment', color: 'text-purple-600', bg: 'bg-purple-50', emoji: '💗' },
+  { key: 'got_reply',        label: 'Got Reply',       color: 'text-cyan-600',   bg: 'bg-cyan-50',   emoji: '↩️' },
+  { key: 'got_mention',      label: 'Got Mention',     color: 'text-orange-600', bg: 'bg-orange-50', emoji: '@' },
+];
+
+const ACTION_TYPE_OPTIONS: { key: string; label: string }[] = [
+  { key: 'like',          label: 'Like comment' },
+  { key: 'comment_reply', label: 'Reply' },
+  { key: 'comment',       label: 'Comment' },
+  { key: 'follow',        label: 'Follow' },
+  { key: 'unfollow',      label: 'Unfollow' },
+];
 
 interface AdminUser {
   id: string; name: string; email: string; total_actions: number;
@@ -145,6 +305,31 @@ export default function InstagramPage() {
   const [tab, setTab]               = useState<Tab>('dashboard');
   const [days, setDays]             = useState(30);
   const [asUser, setAsUser]         = useState('');
+  // Clock-drift display: server time vs user local time. Refreshed once a
+  // minute (and once on mount). Helps users understand "when will my
+  // automation actually fire" since scheduling uses server time.
+  const [serverTimeMs, setServerTimeMs] = useState<number | null>(null);
+  const [serverTimeFetchedAt, setServerTimeFetchedAt] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const fetchServerTime = async () => {
+      try {
+        const r = await api.get('/instagram/server-time');
+        const t = new Date(r.data?.server_time).getTime();
+        if (Number.isFinite(t)) {
+          setServerTimeMs(t);
+          setServerTimeFetchedAt(Date.now());
+        }
+      } catch (_) { /* drift display hidden on failure */ }
+    };
+    fetchServerTime();
+    const id = setInterval(fetchServerTime, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30 * 1000);
+    return () => clearInterval(id);
+  }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [stats, setStats]           = useState<Stats | null>(null);
   const [actions, setActions]       = useState<Action[]>([]);
@@ -172,11 +357,30 @@ export default function InstagramPage() {
     if (isAdmin) api.get('/instagram/admin/users').then((r: { data: AdminUser[] }) => setAdminUsers(r.data));
   }, [isAdmin]);
 
+  // ── Dashboard filters ────────────────────────────────────────────────────
+  const [dashFrom, setDashFrom] = useState<string>('');   // 'YYYY-MM-DD' overrides days
+  const [dashTo,   setDashTo]   = useState<string>('');
+  const [dashProfiles, setDashProfiles] = useState<string[]>([]);
+  const [dashActionTypes, setDashActionTypes] = useState<string[]>([]);
+  const [dashBatchId, setDashBatchId] = useState<string>('');
+  // Bump this to force a re-fetch of stats + actions. Wired to the
+  // refresh buttons on the Dashboard and History pages so users can pull
+  // the latest data without switching tabs or reloading the page.
+  const [refreshTick, setRefreshTick] = useState(0);
+
   useEffect(() => {
     setLoading(true);
-    const q = asUser ? `?days=${days}&as_user=${asUser}` : `?days=${days}`;
-    api.get(`/instagram/stats${q}`).then((r: { data: Stats }) => setStats(r.data)).finally(() => setLoading(false));
-  }, [days, asUser]);
+    const params = new URLSearchParams();
+    if (dashFrom && dashTo) { params.set('from', dashFrom); params.set('to', dashTo); }
+    else { params.set('days', String(days)); }
+    if (dashProfiles.length > 0) params.set('profiles', dashProfiles.join(','));
+    if (dashActionTypes.length > 0) params.set('action_types', dashActionTypes.join(','));
+    if (dashBatchId) params.set('batch_id', dashBatchId);
+    if (asUser) params.set('as_user', asUser);
+    api.get(`/instagram/stats?${params.toString()}`)
+      .then((r: { data: Stats }) => setStats(r.data))
+      .finally(() => setLoading(false));
+  }, [days, asUser, dashFrom, dashTo, dashProfiles, dashActionTypes, dashBatchId, refreshTick]);
 
   useEffect(() => {
     // Load all actions for client-side filtering (matches chrome extension behaviour)
@@ -185,7 +389,7 @@ export default function InstagramPage() {
       setActions(r.data);
       setPage(1);
     });
-  }, [asUser]);
+  }, [asUser, refreshTick]);
 
   useEffect(() => {
     api.get(`/instagram/campaigns${qs}`).then((r: { data: Campaign[] }) => setCampaigns(r.data));
@@ -243,6 +447,13 @@ export default function InstagramPage() {
   const [scheduled, setScheduled]         = useState<ScheduledPost[]>([]);
   const [newPostFile, setNewPostFile]     = useState<File | null>(null);
   const [newPostCaption, setNewPostCaption] = useState('');
+  // AI caption generator
+  const [showAIPanel, setShowAIPanel] = useState(false);
+  const [aiTopic, setAiTopic] = useState('');
+  const [aiTone, setAiTone] = useState<'friendly'|'professional'|'funny'|'inspirational'>('friendly');
+  const [aiHashtags, setAiHashtags] = useState(true);
+  const [aiComments, setAiComments] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
   const [newPostType, setNewPostType]     = useState<'post' | 'story' | 'reel'>('post');
   const [newPostWhen, setNewPostWhen]     = useState('');
   const [newPostProfile, setNewPostProfile] = useState('');
@@ -279,23 +490,192 @@ export default function InstagramPage() {
     await loadScheduled();
   }
 
+  // Encode a small image to base64 so Groq's vision model can see it. Skip
+  // for video (Groq doesn't accept video) and for images >4MB to keep the
+  // payload reasonable.
+  function arrayBufferToBase64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    const CHUNK = 0x8000;
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+    }
+    return btoa(bin);
+  }
+
+  async function generateAICaption() {
+    if (!aiTopic.trim() && !aiComments.trim() && !newPostFile) {
+      alert('Add a topic, some notes, or upload a file first.'); return;
+    }
+    setAiBusy(true);
+    try {
+      let imageB64: string | null = null;
+      let mimeType: string | null = null;
+      if (newPostFile && newPostFile.type.startsWith('image/') && newPostFile.size <= 4 * 1024 * 1024) {
+        const buf = await newPostFile.arrayBuffer();
+        imageB64 = arrayBufferToBase64(buf);
+        mimeType = newPostFile.type;
+      }
+      const res = await api.post(`/instagram/ai-caption${qs}`, {
+        topic: aiTopic,
+        tone: aiTone,
+        include_hashtags: aiHashtags,
+        comments: aiComments,
+        image_b64: imageB64,
+        mime_type: mimeType,
+      });
+      if (res.data?.caption) setNewPostCaption(res.data.caption);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+        || (e instanceof Error ? e.message : String(e));
+      alert('Failed to generate caption: ' + msg);
+    } finally { setAiBusy(false); }
+  }
+
   // ── Follower snapshots / changes ─────────────────────────────────────────
   const [changes, setChanges]               = useState<FollowerChanges | null>(null);
   const [snapshots, setSnapshots]           = useState<Snapshot[]>([]);
   const [followerDays, setFollowerDays]     = useState(7);
   const [followerProfile, setFollowerProfile] = useState('');
 
+  // ── Daily follower-count history ─────────────────────────────────────────
+  interface FollowerCountPoint { bucket: string; follower_count: number; delta: number | null }
+  interface FollowerCountSeries { my_profile: string; points: FollowerCountPoint[] }
+  const [followerCountSeries, setFollowerCountSeries] = useState<FollowerCountSeries[]>([]);
+  const [followerCountAgg, setFollowerCountAgg] = useState<'day'|'month'>('day');
+  const [followerCountProfile, setFollowerCountProfile] = useState('');
+  const [followerRefreshBusy, setFollowerRefreshBusy] = useState(false);
+  const [followerRefreshNote, setFollowerRefreshNote] = useState<string | null>(null);
+
+  async function triggerFollowerCountNow() {
+    setFollowerRefreshBusy(true);
+    setFollowerRefreshNote(null);
+    try {
+      await api.post(`/instagram/follower-counts/trigger${qs}`);
+      setFollowerRefreshNote('Triggered — counts will appear within ~2 minutes on the device with Automation enabled.');
+      // Poll for fresh data a few times after the trigger
+      const reload = async () => {
+        const profile = followerCountProfile ? `&my_profile=${encodeURIComponent(followerCountProfile)}` : '';
+        const sep = qs ? `${qs}&` : '?';
+        try {
+          const r = await api.get(`/instagram/follower-counts${sep}aggregate=${followerCountAgg}${profile}`);
+          setFollowerCountSeries(Array.isArray(r.data) ? r.data as FollowerCountSeries[] : []);
+        } catch (_) {}
+      };
+      setTimeout(reload, 60000);
+      setTimeout(reload, 120000);
+      setTimeout(reload, 180000);
+    } catch (e: unknown) {
+      setFollowerRefreshNote('Failed to trigger: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setFollowerRefreshBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== 'followers') return;
+    const profile = followerCountProfile ? `&my_profile=${encodeURIComponent(followerCountProfile)}` : '';
+    const sep = qs ? `${qs}&` : '?';
+    api.get(`/instagram/follower-counts${sep}aggregate=${followerCountAgg}${profile}`)
+      .then((r: { data: unknown }) => setFollowerCountSeries(Array.isArray(r.data) ? r.data as FollowerCountSeries[] : []))
+      .catch(() => setFollowerCountSeries([]));
+  }, [tab, asUser, followerCountAgg, followerCountProfile]);
+
   // ── Multi-account: list of detected Instagram accounts ──────────────────
   const [igAccounts, setIgAccounts] = useState<string[]>([]);
   const [newAccount, setNewAccount] = useState('');
+
+  // ── AI providers: gate the "AI" reply option in batches/automations on
+  //    whether the user has at least one provider key configured.
+  const [hasAiKey, setHasAiKey] = useState(false);
+  interface AiCatalogEntry { id: string; display: string; default_model: string; docs_url: string; free_tier: boolean }
+  interface AiUserProvider { provider: string; model: string | null; base_url: string | null; is_default: boolean; api_key_masked: string }
+  const [aiCatalog, setAiCatalog] = useState<AiCatalogEntry[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiUserProvider[]>([]);
+  const [aiAddProvider, setAiAddProvider] = useState<string>('groq');
+  const [aiAddKey, setAiAddKey] = useState('');
+  const [aiAddModel, setAiAddModel] = useState('');
+  const [aiTestStatus, setAiTestStatus] = useState<{kind:'ok'|'err'; msg:string} | null>(null);
+  const [aiKeyBusy, setAiKeyBusy] = useState(false);
+  const loadAiHasKey = () =>
+    api.get('/ai/has-key')
+      .then((r: { data: { has_key: boolean } }) => setHasAiKey(!!r.data?.has_key))
+      .catch(() => setHasAiKey(false));
+  const loadAiCatalog = () =>
+    api.get('/ai/catalog')
+      .then((r: { data: AiCatalogEntry[] }) => setAiCatalog(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setAiCatalog([]));
+  const loadAiProviders = () =>
+    api.get('/ai/providers')
+      .then((r: { data: AiUserProvider[] }) => setAiProviders(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setAiProviders([]));
+  useEffect(() => { loadAiHasKey(); loadAiCatalog(); loadAiProviders(); }, []);
+  async function addAiProvider() {
+    if (!aiAddKey || aiAddKey.trim().length < 8) {
+      alert('Paste a real API key (at least 8 chars).'); return;
+    }
+    setAiKeyBusy(true); setAiTestStatus(null);
+    try {
+      // Test first so the user finds out immediately if the key is wrong,
+      // before we persist it (which we'll do on success).
+      const testRes = await api.post('/ai/test', {
+        provider: aiAddProvider,
+        api_key: aiAddKey.trim(),
+        model: aiAddModel || undefined,
+      });
+      if (!testRes.data?.ok) {
+        setAiTestStatus({ kind: 'err', msg: testRes.data?.error || 'Key did not validate.' });
+        return;
+      }
+      await api.post('/ai/providers', {
+        provider: aiAddProvider,
+        api_key: aiAddKey.trim(),
+        model: aiAddModel || undefined,
+      });
+      setAiAddKey(''); setAiAddModel('');
+      setAiTestStatus({ kind: 'ok', msg: `Saved. Test reply: "${(testRes.data?.sample || '').slice(0, 60)}"` });
+      await loadAiProviders(); await loadAiHasKey();
+    } catch (e: unknown) {
+      setAiTestStatus({ kind: 'err', msg: e instanceof Error ? e.message : String(e) });
+    } finally { setAiKeyBusy(false); }
+  }
+  async function removeAiProvider(provider: string) {
+    if (!confirm(`Remove your ${provider} API key? Batches using this provider will start failing until you add a new key.`)) return;
+    try {
+      await api.delete(`/ai/providers/${provider}`);
+      await loadAiProviders(); await loadAiHasKey();
+    } catch (e: unknown) { alert((e instanceof Error ? e.message : String(e))); }
+  }
+  async function setDefaultAiProvider(provider: string) {
+    try {
+      await api.post(`/ai/providers/${provider}/default`);
+      await loadAiProviders();
+    } catch (e: unknown) { alert((e instanceof Error ? e.message : String(e))); }
+  }
   const loadAccounts = () =>
     api.get(`/instagram/accounts${qs}`)
       .then((r: { data: unknown }) => setIgAccounts(Array.isArray(r.data) ? r.data as string[] : []))
       .catch(() => setIgAccounts([]));
   useEffect(() => { loadAccounts(); }, [asUser]);
+  // Mirror of the backend reserved-words check so we can show a friendly
+  // error before the round-trip.
+  const RESERVED_IG_USERNAMES = new Set([
+    'close', 'cancel', 'save', 'back', 'next', 'done', 'more', 'menu',
+    'home', 'search', 'explore', 'profile', 'messages', 'notifications',
+    'create', 'settings', 'about', 'help', 'logout', 'login', 'signup',
+    'instagram', 'meta', 'facebook', 'reels', 'feed', 'inbox',
+  ]);
   async function addAccount() {
-    const u = newAccount.trim().replace(/^@/, '');
+    const u = newAccount.trim().replace(/^@/, '').toLowerCase();
     if (!u) return;
+    if (!/^[a-z0-9._]{1,30}$/.test(u)) {
+      alert(`"${u}" is not a valid Instagram username (lowercase letters, numbers, dot, underscore only).`);
+      return;
+    }
+    if (RESERVED_IG_USERNAMES.has(u)) {
+      alert(`"${u}" looks like a UI label, not an Instagram username. Please double-check.`);
+      return;
+    }
     try {
       await api.post('/instagram/accounts', { username: u });
       setNewAccount('');
@@ -353,6 +733,525 @@ export default function InstagramPage() {
     } finally { setSavingEdit(false); }
   }
 
+  // ── Profile research (scrape jobs + results) ─────────────────────────────
+  const [scrapeJobs,    setScrapeJobs]    = useState<ScrapeJob[]>([]);
+  const [scrapedSummary, setScrapedSummary] = useState<ScrapedSummary[]>([]);
+  const [scrapeTarget,  setScrapeTarget]  = useState('');
+  const [scrapeCount,   setScrapeCount]   = useState('25');
+  const [scrapeBusy,    setScrapeBusy]    = useState(false);
+  const [viewingUser,   setViewingUser]   = useState<string | null>(null);
+  const [viewingPosts,  setViewingPosts]  = useState<ScrapedPost[]>([]);
+
+  const loadResearch = async () => {
+    try {
+      const [jobsRes, summaryRes] = await Promise.all([
+        api.get(`/instagram/scrape-jobs${qs}`),
+        api.get(`/instagram/scraped-posts${qs}`),
+      ]);
+      setScrapeJobs(Array.isArray(jobsRes.data) ? jobsRes.data as ScrapeJob[] : []);
+      setScrapedSummary(Array.isArray(summaryRes.data) ? summaryRes.data as ScrapedSummary[] : []);
+    } catch (_) { /* keep prior state */ }
+  };
+
+  useEffect(() => { if (tab === 'research') loadResearch(); }, [tab, asUser]);
+
+  // Auto-refresh research view while a job is pending or running so the user
+  // sees status updates without manually reloading.
+  useEffect(() => {
+    if (tab !== 'research') return;
+    const hasActive = scrapeJobs.some(j => j.status === 'pending' || j.status === 'running');
+    if (!hasActive) return;
+    const id = setInterval(loadResearch, 5000);
+    return () => clearInterval(id);
+  }, [tab, scrapeJobs, asUser]);
+
+  // Accept the username in any common form: `elizabethvasilenko`,
+  // `@elizabethvasilenko`, `https://www.instagram.com/elizabethvasilenko/`,
+  // `instagram.com/elizabethvasilenko`. Return the bare lowercase username
+  // or empty string if nothing recognizable.
+  function extractIgUsername(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    // Try URL pattern first
+    const urlMatch = trimmed.match(/instagram\.com\/([^/?#@\s]+)/i);
+    if (urlMatch) return urlMatch[1].toLowerCase();
+    // Plain or @-prefixed
+    return trimmed.replace(/^@/, '').toLowerCase();
+  }
+  async function createScrapeJob() {
+    const target = extractIgUsername(scrapeTarget);
+    if (!target || !/^[a-z0-9._]{1,30}$/.test(target)) {
+      alert(`"${scrapeTarget}" doesn't look like a valid Instagram username or URL.`);
+      return;
+    }
+    const count = Math.max(1, Math.min(200, parseInt(scrapeCount, 10) || 25));
+    setScrapeBusy(true);
+    try {
+      await api.post(`/instagram/scrape-jobs${qs}`, { target_username: target, post_count: count });
+      setScrapeTarget('');
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to queue scrape: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setScrapeBusy(false); }
+  }
+
+  async function deleteScrapeJob(id: string) {
+    if (!confirm('Delete this scrape job?')) return;
+    try {
+      await api.delete(`/instagram/scrape-jobs/${id}${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function clearScrapeJobs(onlyFailed: boolean) {
+    const label = onlyFailed ? 'failed scrape jobs' : 'all scrape jobs';
+    if (!confirm(`Delete ${label}? This does not delete the scraped post data.`)) return;
+    try {
+      const suffix = onlyFailed ? '?status=failed' : '';
+      await api.delete(`/instagram/scrape-jobs${suffix}${qs ? (suffix ? '&' : '?') + qs.slice(1) : ''}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to clear: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function deleteScrapedProfile(username: string) {
+    if (!confirm(`Delete all scraped posts for @${username}?`)) return;
+    try {
+      await api.delete(`/instagram/scraped-profiles/${encodeURIComponent(username)}${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+  async function clearAllScrapedProfiles() {
+    if (!confirm('Delete ALL scraped post data for every profile? This cannot be undone.')) return;
+    try {
+      await api.delete(`/instagram/scraped-profiles${qs}`);
+      await loadResearch();
+    } catch (e: unknown) {
+      alert('Failed to clear: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function openScrapedUser(username: string) {
+    setViewingUser(username);
+    setViewingPosts([]);
+    setSelectedPosts(new Set());
+    try {
+      const res = await api.get(`/instagram/scraped-posts${qs ? qs + '&' : '?'}target_username=${encodeURIComponent(username)}`);
+      setViewingPosts(Array.isArray(res.data) ? res.data as ScrapedPost[] : []);
+    } catch (_) { setViewingPosts([]); }
+  }
+
+  // ── Automations (recurring jobs) ─────────────────────────────────────────
+  const [automations, setAutomations] = useState<Automation[]>([]);
+  // Cronjobs UI filters: by account and by kind (all / system / user-defined).
+  const [autoFilterAccount, setAutoFilterAccount] = useState('');
+  const [autoFilterKind, setAutoFilterKind] = useState<'all' | 'system' | 'user'>('all');
+  const [showAutomationModal, setShowAutomationModal] = useState(false);
+  const [editingAutomation, setEditingAutomation] = useState<Automation | null>(null);
+  const [aForm, setAForm] = useState<{
+    name: string; schedule_type: 'daily'|'weekly'|'interval';
+    schedule_time: string; schedule_days: number[];
+    schedule_interval_minutes: string;
+    actions: string[]; accounts: string[];
+  }>({
+    name: '', schedule_type: 'daily', schedule_time: '09:00',
+    schedule_days: [1, 2, 3, 4, 5], schedule_interval_minutes: '60',
+    actions: ['follower_count'], accounts: [],
+  });
+  const [aSaving, setASaving] = useState(false);
+
+  const loadAutomations = async () => {
+    try {
+      const r = await api.get(`/instagram/automations${qs}`);
+      setAutomations(Array.isArray(r.data) ? r.data as Automation[] : []);
+    } catch (_) { setAutomations([]); }
+  };
+  useEffect(() => {
+    if (tab === 'automations') loadAutomations();
+  }, [tab, asUser]);
+  // Auto-refresh while any automation just ran or is due soon
+  useEffect(() => {
+    if (tab !== 'automations') return;
+    const id = setInterval(loadAutomations, 30000);
+    return () => clearInterval(id);
+  }, [tab, asUser]);
+
+  function openNewAutomation() {
+    setEditingAutomation(null);
+    setAForm({
+      name: '', schedule_type: 'daily', schedule_time: '09:00',
+      schedule_days: [1, 2, 3, 4, 5], schedule_interval_minutes: '60',
+      actions: ['follower_count'], accounts: igAccounts.slice(0, 5),
+    });
+    setShowAutomationModal(true);
+  }
+  function openEditAutomation(a: Automation) {
+    setEditingAutomation(a);
+    setAForm({
+      name: a.name,
+      schedule_type: a.schedule_type,
+      schedule_time: a.schedule_time || '09:00',
+      schedule_days: a.schedule_days ? a.schedule_days.split(',').map(d => parseInt(d, 10)) : [1,2,3,4,5],
+      schedule_interval_minutes: String(a.schedule_interval_minutes || 60),
+      actions: a.actions || ['follower_count'],
+      accounts: a.accounts || [],
+    });
+    setShowAutomationModal(true);
+  }
+  async function submitAutomation() {
+    if (!aForm.name.trim()) { alert('Give the automation a name.'); return; }
+    if (aForm.actions.length === 0) { alert('Pick at least one action.'); return; }
+    if (aForm.accounts.length === 0) { alert('Pick at least one Instagram account.'); return; }
+    setASaving(true);
+    try {
+      const body = {
+        name: aForm.name.trim(),
+        schedule_type: aForm.schedule_type,
+        schedule_time: aForm.schedule_type === 'interval' ? null : aForm.schedule_time,
+        schedule_days: aForm.schedule_type === 'weekly' ? aForm.schedule_days : null,
+        schedule_interval_minutes: aForm.schedule_type === 'interval' ? parseInt(aForm.schedule_interval_minutes, 10) : null,
+        actions: aForm.actions,
+        accounts: aForm.accounts,
+        // Send the browser's UTC offset (e.g. +180 for UTC+3) so the backend
+        // interprets schedule_time as LOCAL time and the job fires when the
+        // user expects — not in the server's timezone.
+        tz_offset_minutes: -new Date().getTimezoneOffset(),
+      };
+      if (editingAutomation) {
+        await api.patch(`/instagram/automations/${editingAutomation.id}${qs}`, body);
+      } else {
+        await api.post(`/instagram/automations${qs}`, body);
+      }
+      setShowAutomationModal(false);
+      await loadAutomations();
+    } catch (e: unknown) {
+      alert('Failed to save: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setASaving(false); }
+  }
+  async function toggleAutomation(a: Automation) {
+    await api.patch(`/instagram/automations/${a.id}${qs}`, { enabled: !a.enabled });
+    await loadAutomations();
+  }
+  async function runAutomationNow(id: string) {
+    await api.post(`/instagram/automations/${id}/run-now${qs}`);
+    await loadAutomations();
+  }
+  async function deleteAutomation(id: string) {
+    if (!confirm('Delete this automation permanently?')) return;
+    await api.delete(`/instagram/automations/${id}${qs}`);
+    await loadAutomations();
+  }
+  function describeSchedule(a: Automation): string {
+    if (a.schedule_type === 'interval') return `Every ${a.schedule_interval_minutes || '?'} min`;
+    const t = a.schedule_time || '09:00';
+    // schedule_time is the user's local time (backend interprets it with the
+    // stored tz offset). Tag it so it's unambiguous against the "Next:" value.
+    if (a.schedule_type === 'daily') return `Daily ${t} (your time)`;
+    if (a.schedule_type === 'weekly') {
+      const days = a.schedule_days ? a.schedule_days.split(',').map(d => DAY_NAMES[parseInt(d, 10)]).filter(Boolean).join(' ') : 'no days';
+      return `${days} ${t} (your time)`;
+    }
+    return a.schedule_type;
+  }
+
+  // ── System health (admin-only QA dashboard) ──────────────────────────────
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const loadHealth = async () => {
+    setHealthBusy(true);
+    try {
+      const r = await api.get('/instagram/admin/health');
+      setHealth(r.data as HealthResponse);
+    } catch (_) { setHealth(null); }
+    finally { setHealthBusy(false); }
+  };
+  useEffect(() => {
+    if (tab === 'health') loadHealth();
+  }, [tab]);
+
+  // ── Action campaigns (drafts that you build up, then Send) ───────────────
+  // Flow: create empty draft → add up to 6 items (from Research or by URL)
+  // → click Send → extension picks it up. Items can be edited (count) or
+  // removed while still 'pending'; new items can be appended even after Send
+  // (up to the 6-cap), as long as the campaign isn't completed/cancelled.
+  const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
+  const [actionCampaigns, setActionCampaigns] = useState<ActionCampaignSummary[]>([]);
+  const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+  const [expandedItems, setExpandedItems] = useState<ActionItem[]>([]);
+
+  // Create-campaign modal
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createAccount, setCreateAccount] = useState('');
+  const [createFreeText, setCreateFreeText] = useState('');
+  const [createConcurrency, setCreateConcurrency] = useState('6');
+  const [createStartAt, setCreateStartAt] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+
+  // Add-to-campaign modal (triggered from Research)
+  const [showAddToCampaign, setShowAddToCampaign] = useState(false);
+  const [addToCampaignId, setAddToCampaignId] = useState('');
+  const [addToActionType, setAddToActionType] = useState<'like' | 'reply'>('like');
+  const [addToCount, setAddToCount] = useState('3');
+  const [addToReplySource, setAddToReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [addToReplyText, setAddToReplyText] = useState('');
+  const [addToBusy, setAddToBusy] = useState(false);
+
+  // Add-by-URL form inside campaign detail
+  const [byUrlInput, setByUrlInput] = useState('');
+  const [byUrlActionType, setByUrlActionType] = useState<'like' | 'reply'>('like');
+  const [byUrlCount, setByUrlCount] = useState('3');
+  const [byUrlReplySource, setByUrlReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [byUrlReplyText, setByUrlReplyText] = useState('');
+  const [byUrlBusy, setByUrlBusy] = useState(false);
+
+  const loadActionCampaigns = async () => {
+    try {
+      const res = await api.get(`/instagram/action-campaigns${qs}`);
+      setActionCampaigns(Array.isArray(res.data) ? res.data as ActionCampaignSummary[] : []);
+    } catch (_) { /* keep state */ }
+  };
+  const loadExpandedItems = async (id: string) => {
+    try {
+      const res = await api.get(`/instagram/action-campaigns/${id}${qs}`);
+      setExpandedItems(Array.isArray(res.data?.items) ? res.data.items as ActionItem[] : []);
+    } catch (_) { setExpandedItems([]); }
+  };
+
+  useEffect(() => {
+    if (tab === 'campaigns' || tab === 'dashboard') loadActionCampaigns();
+  }, [tab, asUser]);
+
+  useEffect(() => {
+    if (tab !== 'campaigns') return;
+    const active = actionCampaigns.some(c => c.status === 'pending' || c.status === 'running');
+    if (!active && !expandedCampaign) return;
+    const id = setInterval(() => {
+      loadActionCampaigns();
+      if (expandedCampaign) loadExpandedItems(expandedCampaign);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [tab, actionCampaigns, expandedCampaign, asUser]);
+
+  function togglePostSelection(postId: string) {
+    setSelectedPosts(prev => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId); else next.add(postId);
+      return next;
+    });
+  }
+
+  async function createCampaign() {
+    if (!createAccount) { alert('Pick an Instagram account for the batch.'); return; }
+    const conc = Math.max(1, Math.min(6, parseInt(createConcurrency, 10) || 6));
+    setCreateBusy(true);
+    try {
+      const res = await api.post(`/instagram/action-campaigns${qs}`, {
+        as_account: createAccount,
+        concurrency: conc,
+        free_text: createFreeText || null,
+        start_at: createStartAt ? new Date(createStartAt).toISOString() : null,
+      });
+      setShowCreateModal(false);
+      setCreateFreeText('');
+      setCreateStartAt('');
+      await loadActionCampaigns();
+      // Open it for immediate item-adding
+      const newId = res.data?.id;
+      if (newId) { setExpandedCampaign(newId); loadExpandedItems(newId); }
+    } catch (e: unknown) {
+      alert('Failed to create batch: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setCreateBusy(false); }
+  }
+
+  function openAddToCampaign() {
+    // Default to the most-recent draft if any, else first non-completed campaign
+    const eligible = actionCampaigns.filter(c =>
+      c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6
+    );
+    setAddToCampaignId(eligible[0]?.id || '');
+    setShowAddToCampaign(true);
+  }
+
+  async function submitAddToCampaign() {
+    if (!addToCampaignId) { alert('Pick a batch first (or create a new one).'); return; }
+    const count = Math.max(1, parseInt(addToCount, 10) || 1);
+    const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
+    if (selected.length === 0) { alert('No posts selected.'); return; }
+    const camp = actionCampaigns.find(c => c.id === addToCampaignId);
+    const remaining = camp ? 6 - (camp.items_count ?? 0) : 6;
+    if (selected.length > remaining) {
+      alert(`That batch has room for only ${remaining} more post(s). You selected ${selected.length}. Remove some or create a new batch.`);
+      return;
+    }
+    const customReplies = addToReplySource === 'custom'
+      ? addToReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
+    if (addToActionType === 'reply' && addToReplySource === 'custom' && customReplies.length === 0) {
+      alert('Custom reply source picked but no reply text provided.'); return;
+    }
+    setAddToBusy(true);
+    try {
+      // Add items sequentially to keep the 6-cap consistent. (Parallel would
+      // race on the server-side count check.)
+      for (const p of selected) {
+        await api.post(`/instagram/action-campaigns/${addToCampaignId}/items${qs}`, {
+          post_url: p.post_url,
+          action_type: addToActionType,
+          count,
+          reply_source: addToActionType === 'reply' ? addToReplySource : undefined,
+          reply_texts: addToActionType === 'reply' && addToReplySource === 'custom' ? customReplies : undefined,
+        });
+      }
+      setShowAddToCampaign(false);
+      setSelectedPosts(new Set());
+      setAddToReplyText('');
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to add to batch: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setAddToBusy(false); }
+  }
+
+  async function addByUrl(campaignId: string) {
+    const url = byUrlInput.trim();
+    if (!url) { alert('Paste an Instagram post URL.'); return; }
+    const count = Math.max(1, parseInt(byUrlCount, 10) || 1);
+    const customReplies = byUrlReplySource === 'custom'
+      ? byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
+    if (byUrlActionType === 'reply' && byUrlReplySource === 'custom' && customReplies.length === 0) {
+      alert('Custom reply source picked but no reply text provided.'); return;
+    }
+    setByUrlBusy(true);
+    try {
+      await api.post(`/instagram/action-campaigns/${campaignId}/items${qs}`, {
+        post_url: url,
+        action_type: byUrlActionType,
+        count,
+        reply_source: byUrlActionType === 'reply' ? byUrlReplySource : undefined,
+        reply_texts: byUrlActionType === 'reply' && byUrlReplySource === 'custom' ? customReplies : undefined,
+      });
+      setByUrlInput('');
+      setByUrlReplyText('');
+      await loadActionCampaigns();
+      await loadExpandedItems(campaignId);
+    } catch (e: unknown) {
+      alert('Failed to add: ' + (e instanceof Error ? e.message : String(e)));
+    } finally { setByUrlBusy(false); }
+  }
+
+  async function patchItemCount(campaignId: string, itemId: string, count: number) {
+    try {
+      await api.patch(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`, {
+        count_requested: Math.max(1, count),
+      });
+      await loadExpandedItems(campaignId);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to update count: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  // Inline editor for the reply config of a pending batch item.
+  const [editingReplyItemId, setEditingReplyItemId] = useState<string | null>(null);
+  const [editReplySource, setEditReplySource] = useState<'default' | 'custom' | 'ai'>('default');
+  const [editReplyText, setEditReplyText] = useState('');
+  function startEditReply(item: ActionItem) {
+    setEditingReplyItemId(item.id);
+    setEditReplySource((item.reply_source as 'default'|'custom'|'ai') || 'default');
+    let texts: string[] = [];
+    if (item.reply_texts) { try { texts = JSON.parse(item.reply_texts) || []; } catch (_) {} }
+    setEditReplyText(texts.join('\n'));
+  }
+  function cancelEditReply() {
+    setEditingReplyItemId(null);
+    setEditReplyText('');
+  }
+  async function saveEditReply(campaignId: string, itemId: string) {
+    const replies = editReplySource === 'custom'
+      ? editReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+      : null;
+    if (editReplySource === 'custom' && (!replies || replies.length === 0)) {
+      alert('Type at least one reply (one per line) — or pick another source.'); return;
+    }
+    try {
+      await api.patch(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`, {
+        reply_source: editReplySource,
+        reply_texts: replies,
+      });
+      setEditingReplyItemId(null);
+      await loadExpandedItems(campaignId);
+    } catch (e: unknown) {
+      alert('Failed to save reply: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function removeItem(campaignId: string, itemId: string) {
+    if (!confirm('Remove this post from the batch?')) return;
+    try {
+      await api.delete(`/instagram/action-campaigns/${campaignId}/items/${itemId}${qs}`);
+      await loadExpandedItems(campaignId);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to remove: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function sendCampaign(id: string) {
+    try {
+      await api.post(`/instagram/action-campaigns/${id}/send${qs}`);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to send: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function patchCampaignStartAt(id: string, datetimeLocal: string) {
+    try {
+      await api.patch(`/instagram/action-campaigns/${id}${qs}`, {
+        start_at: datetimeLocal ? new Date(datetimeLocal).toISOString() : null,
+      });
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to update start time: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function deleteCampaign(id: string) {
+    if (!confirm('Delete this batch and all its items permanently?')) return;
+    try {
+      await api.delete(`/instagram/action-campaigns/${id}${qs}`);
+      if (expandedCampaign === id) { setExpandedCampaign(null); setExpandedItems([]); }
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      alert('Failed to delete: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function cancelActionCampaign(id: string) {
+    if (!confirm('Cancel this batch? Pending actions will be skipped; in-flight ones finish.')) return;
+    await api.post(`/instagram/action-campaigns/${id}/cancel${qs}`);
+    await loadActionCampaigns();
+  }
+  async function resumeActionCampaign(id: string) {
+    await api.post(`/instagram/action-campaigns/${id}/resume${qs}`);
+    await loadActionCampaigns();
+  }
+  async function duplicateCampaign(id: string) {
+    try {
+      const res = await api.post(`/instagram/action-campaigns/${id}/duplicate${qs}`);
+      await loadActionCampaigns();
+      // Open the new draft so the user can review/edit before sending.
+      const newId = res.data?.id;
+      if (newId) {
+        setExpandedCampaign(newId);
+        loadExpandedItems(newId);
+      }
+    } catch (e: unknown) {
+      alert('Failed to duplicate: ' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   useEffect(() => {
     if (tab !== 'followers') return;
     const p   = followerProfile ? `&my_profile=${encodeURIComponent(followerProfile)}` : '';
@@ -373,10 +1272,13 @@ export default function InstagramPage() {
   const TABS = [
     { id: 'dashboard' as Tab, label: 'Dashboard', icon: <BarChart2 size={15} /> },
     { id: 'history'   as Tab, label: 'History',   icon: <Clock size={15} /> },
-    { id: 'campaigns' as Tab, label: 'Campaigns', icon: <Zap size={15} /> },
+    { id: 'campaigns' as Tab, label: 'Batches',   icon: <Zap size={15} /> },
     { id: 'schedule'  as Tab, label: 'Schedule',  icon: <Calendar size={15} /> },
     { id: 'followers' as Tab, label: 'Followers', icon: <UserPlus size={15} /> },
     { id: 'accounts'  as Tab, label: 'Accounts',  icon: <Contact size={15} /> },
+    { id: 'research'  as Tab, label: 'Research',  icon: <Search size={15} /> },
+    { id: 'automations' as Tab, label: 'Automations', icon: <RefreshCw size={15} /> },
+    { id: 'health'    as Tab, label: 'Health',    icon: <Zap size={15} /> },
   ];
 
   return (
@@ -392,6 +1294,27 @@ export default function InstagramPage() {
             <div>
               <h1 className="text-xl font-bold text-gray-900">Instagram Analytics</h1>
               <p className="text-sm text-gray-500">Track your automation history and performance</p>
+              {serverTimeMs && serverTimeFetchedAt && (() => {
+                // Server "now" approximated by (fetched server time) + (elapsed since fetch).
+                const serverNow = serverTimeMs + (nowMs - serverTimeFetchedAt);
+                const driftMs = nowMs - serverNow;
+                const driftAbsMin = Math.round(Math.abs(driftMs) / 60000);
+                const fmtT = (d: Date) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                const fmtTUtc = (d: Date) => `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+                const tzOffsetMin = -new Date().getTimezoneOffset();
+                const tzLabel = (tzOffsetMin === 0 ? 'UTC' : `UTC${tzOffsetMin > 0 ? '+' : ''}${tzOffsetMin / 60}`);
+                const driftLabel = driftAbsMin === 0
+                  ? '✓ in sync'
+                  : `Δ ${driftMs > 0 ? '+' : '−'}${driftAbsMin}m`;
+                return (
+                  <p className="text-[11px] text-gray-400 mt-1 font-mono">
+                    Server {fmtTUtc(new Date(serverNow))} UTC · You {fmtT(new Date(nowMs))} {tzLabel} ·{' '}
+                    <span className={driftAbsMin === 0 ? 'text-green-600' : driftAbsMin >= 5 ? 'text-orange-600' : 'text-gray-400'}>
+                      {driftLabel}
+                    </span>
+                  </p>
+                );
+              })()}
             </div>
           </div>
           {isAdmin && adminUsers.length > 0 && (
@@ -422,14 +1345,123 @@ export default function InstagramPage() {
 
         {/* ══════════════════════════════ DASHBOARD ══════════════════════════════ */}
         {tab === 'dashboard' && (
-          <div>
-            <div className="flex gap-2 mb-6">
-              {[7, 30, 90].map(d => (
-                <button key={d} onClick={() => setDays(d)}
-                  className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
-                  {d} days
-                </button>
-              ))}
+          <div className="space-y-4">
+            {/* ── Filter bar (dates · profiles · action types · batch) ── */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-lg font-semibold text-gray-900">Dashboard</h3>
+                <div className="flex gap-1.5 ml-auto">
+                  {(() => {
+                    // Quick filters: Today and Yesterday. Compute YYYY-MM-DD
+                    // from the BROWSER's local date (matches what the user
+                    // sees on their clock), then set both from + to to that
+                    // single day so the dashboard query treats it as a
+                    // one-day range.
+                    const ymd = (d: Date) =>
+                      `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                    const todayStr = ymd(new Date());
+                    const yStr = ymd(new Date(Date.now() - 86400000));
+                    const isToday = dashFrom === todayStr && dashTo === todayStr;
+                    const isYesterday = dashFrom === yStr && dashTo === yStr;
+                    return (
+                      <>
+                        <button onClick={() => { setDashFrom(todayStr); setDashTo(todayStr); }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isToday ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                          }`}>
+                          Today
+                        </button>
+                        <button onClick={() => { setDashFrom(yStr); setDashTo(yStr); }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isYesterday ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                          }`}>
+                          Yesterday
+                        </button>
+                      </>
+                    );
+                  })()}
+                  {[7, 30, 90].map(d => (
+                    <button key={d} onClick={() => { setDays(d); setDashFrom(''); setDashTo(''); }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        !dashFrom && days === d ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'
+                      }`}>
+                      {d} days
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-1 border border-gray-200 rounded-lg px-2 text-xs">
+                    <input type="date" value={dashFrom} onChange={e => setDashFrom(e.target.value)}
+                      className="border-0 outline-none text-xs py-1 bg-transparent" />
+                    <span className="text-gray-400">→</span>
+                    <input type="date" value={dashTo} onChange={e => setDashTo(e.target.value)}
+                      className="border-0 outline-none text-xs py-1 bg-transparent" />
+                  </div>
+                  {(dashFrom || dashTo || dashProfiles.length || dashActionTypes.length || dashBatchId) ? (
+                    <button onClick={() => { setDashFrom(''); setDashTo(''); setDashProfiles([]); setDashActionTypes([]); setDashBatchId(''); }}
+                      className="text-xs text-gray-500 hover:text-gray-700 px-2">
+                      Clear filters
+                    </button>
+                  ) : null}
+                  <button onClick={() => setRefreshTick(t => t + 1)}
+                    title="Refresh data"
+                    disabled={loading}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-gray-200 text-gray-600 hover:border-blue-300 disabled:opacity-50">
+                    <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+                    {loading ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Profiles */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Profiles</label>
+                  <div className="border border-gray-200 rounded-lg p-2 max-h-24 overflow-y-auto text-xs">
+                    {igAccounts.length === 0 ? (
+                      <span className="text-gray-400">No accounts configured</span>
+                    ) : igAccounts.map(u => {
+                      const checked = dashProfiles.includes(u);
+                      return (
+                        <label key={u} className="flex items-center gap-1.5 px-1 py-0.5 hover:bg-gray-50 rounded cursor-pointer">
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setDashProfiles(p => checked ? p.filter(x => x !== u) : [...p, u])} />
+                          @{u}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Action types */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Action types</label>
+                  <div className="border border-gray-200 rounded-lg p-2 max-h-24 overflow-y-auto text-xs">
+                    {ACTION_TYPE_OPTIONS.map(at => {
+                      const checked = dashActionTypes.includes(at.key);
+                      return (
+                        <label key={at.key} className="flex items-center gap-1.5 px-1 py-0.5 hover:bg-gray-50 rounded cursor-pointer">
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setDashActionTypes(p => checked ? p.filter(x => x !== at.key) : [...p, at.key])} />
+                          {at.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Batch */}
+                <div>
+                  <label className="block text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Action Batch</label>
+                  <select value={dashBatchId} onChange={e => setDashBatchId(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white">
+                    <option value="">All batches</option>
+                    {actionCampaigns.map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name || c.id.slice(0, 8)} ({c.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
 
             {loading ? (
@@ -438,24 +1470,150 @@ export default function InstagramPage() {
               </div>
             ) : stats && (
               <>
-                <div className="grid grid-cols-4 gap-4 mb-6">
-                  {[
-                    { label: 'Total Actions',  value: stats.total,                    color: 'text-blue-600',   bg: 'bg-blue-50' },
-                    { label: 'Follows Sent',   value: stats.follows,                  color: 'text-green-600',  bg: 'bg-green-50' },
-                    { label: 'New Followers',  value: stats.newFollowers,             color: 'text-purple-600', bg: 'bg-purple-50' },
-                    { label: 'Follow-back %',  value: `${stats.followBack}%`,         color: 'text-orange-600', bg: 'bg-orange-50' },
-                  ].map(c => (
-                    <div key={c.label} className={`${c.bg} rounded-xl p-5`}>
-                      <div className={`text-3xl font-bold ${c.color}`}>{c.value}</div>
-                      <div className="text-sm text-gray-600 mt-1">{c.label}</div>
+                {/* ── Hero row: New Followers + Daily follower growth chart ── */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Hero card */}
+                  <div className="bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400 rounded-xl p-6 text-white shadow-md">
+                    <div className="text-xs uppercase tracking-wider text-white/80 mb-1">New Followers</div>
+                    <div className="text-5xl font-bold">
+                      {stats.followerGrowth?.delta != null
+                        ? (stats.followerGrowth.delta >= 0 ? '+' : '') + stats.followerGrowth.delta.toLocaleString()
+                        : '—'}
                     </div>
-                  ))}
+                    {stats.followerGrowth?.percent != null && (
+                      <div className="mt-2 inline-flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded-full text-sm">
+                        {stats.followerGrowth.percent >= 0 ? '↑' : '↓'} {Math.abs(stats.followerGrowth.percent).toFixed(1)}%
+                      </div>
+                    )}
+                    <div className="text-xs text-white/70 mt-3">
+                      {(stats.followerGrowth?.previous ?? 0).toLocaleString()} → {(stats.followerGrowth?.current ?? 0).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-white/60 mt-1">Last {days} days</div>
+                  </div>
+
+                  {/* Daily follower growth chart spanning 2 columns */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-5 lg:col-span-2">
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Daily follower count — all profiles combined</h4>
+                    {(() => {
+                      const acc = stats.perAccountGrowth || [];
+                      if (acc.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">No follower data yet. Set up an Automation or use Refresh now on Followers tab.</p>;
+                      // Combine per-day totals across accounts
+                      const dayTotals: Record<string, number> = {};
+                      for (const a of acc) {
+                        for (const pt of a.series) {
+                          dayTotals[pt.day] = (dayTotals[pt.day] || 0) + pt.count;
+                        }
+                      }
+                      const sortedDays = Object.keys(dayTotals).sort();
+                      if (sortedDays.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">Not enough data yet — need at least 1 follower-count snapshot.</p>;
+                      const values = sortedDays.map(d => dayTotals[d]);
+                      const min = Math.min(...values);
+                      const max = Math.max(...values);
+                      const range = Math.max(1, max - min);
+                      // Build SVG polyline
+                      const w = 600, h = 100;
+                      const points = sortedDays.map((d, i) => {
+                        const x = sortedDays.length > 1 ? (i / (sortedDays.length - 1)) * w : w / 2;
+                        const y = h - ((dayTotals[d] - min) / range) * (h - 10) - 5;
+                        return `${x.toFixed(1)},${y.toFixed(1)}`;
+                      }).join(' ');
+                      return (
+                        <>
+                          <svg viewBox={`0 0 ${w} ${h + 20}`} className="w-full h-28">
+                            <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="2" />
+                            {sortedDays.map((d, i) => {
+                              const x = sortedDays.length > 1 ? (i / (sortedDays.length - 1)) * w : w / 2;
+                              const y = h - ((dayTotals[d] - min) / range) * (h - 10) - 5;
+                              return <circle key={d} cx={x} cy={y} r="2.5" fill="#3b82f6" />;
+                            })}
+                          </svg>
+                          <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                            <span>{sortedDays[0]}</span>
+                            <span>{sortedDays[sortedDays.length - 1]}</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-gray-500 mt-2">
+                            <span>Lowest: <b className="text-gray-700">{min.toLocaleString()}</b></span>
+                            <span>Highest: <b className="text-gray-700">{max.toLocaleString()}</b></span>
+                            <span>Latest: <b className="text-gray-700">{values[values.length - 1].toLocaleString()}</b></span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                {/* ── Quick Stats row — Actions you sent ── */}
+                <div>
+                  <h4 className="font-semibold text-gray-900 text-sm mb-2">Actions sent — last {days} days</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    {[
+                      { key: 'like',           label: 'Likes',       color: 'text-pink-600',    bg: 'bg-pink-50' },
+                      { key: 'comment_reply',  label: 'Replies',     color: 'text-blue-600',    bg: 'bg-blue-50' },
+                      { key: 'follow',         label: 'Follows',     color: 'text-green-600',   bg: 'bg-green-50' },
+                      { key: 'unfollow',       label: 'Unfollows',   color: 'text-orange-600',  bg: 'bg-orange-50' },
+                      { key: 'comment',        label: 'Comments',    color: 'text-purple-600',  bg: 'bg-purple-50' },
+                    ].map(c => {
+                      const n = (stats.byType || []).find(r => r.type === c.key)?.n || 0;
+                      return (
+                        <div key={c.key} className="bg-white border border-gray-200 rounded-xl p-3">
+                          <div className={`text-[10px] uppercase font-medium ${c.color}`}>{c.label}</div>
+                          <div className="text-2xl font-bold text-gray-900 mt-0.5">{n.toLocaleString()}</div>
+                        </div>
+                      );
+                    })}
+                    <div className="bg-gray-900 text-white rounded-xl p-3">
+                      <div className="text-[10px] uppercase font-medium text-gray-300">Total</div>
+                      <div className="text-2xl font-bold mt-0.5">{stats.total.toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Per-account follower growth ── */}
+                {(stats.perAccountGrowth || []).length > 0 && (
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
-                    <h3 className="font-semibold text-gray-900 mb-4">Actions by Type</h3>
-                    <div className="space-y-3">
+                    <h4 className="font-semibold text-gray-900 text-sm mb-3">Per-account follower growth</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {(stats.perAccountGrowth || []).map(a => {
+                        const series = a.series;
+                        const values = series.map(s => s.count);
+                        const min = values.length ? Math.min(...values) : 0;
+                        const max = values.length ? Math.max(...values) : 0;
+                        const range = Math.max(1, max - min);
+                        const w = 140, h = 36;
+                        const points = values.length > 0 ? series.map((s, i) => {
+                          const x = series.length > 1 ? (i / (series.length - 1)) * w : w / 2;
+                          const y = h - ((s.count - min) / range) * (h - 4) - 2;
+                          return `${x.toFixed(1)},${y.toFixed(1)}`;
+                        }).join(' ') : '';
+                        const deltaUp = (a.delta ?? 0) >= 0;
+                        return (
+                          <div key={a.profile} className="border border-gray-100 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-1">
+                              <a href={`https://instagram.com/${a.profile}`} target="_blank" rel="noreferrer"
+                                className="text-sm font-medium text-blue-600 hover:underline">@{a.profile}</a>
+                              {a.delta != null && a.delta !== 0 && (
+                                <span className={`text-xs font-medium ${deltaUp ? 'text-green-600' : 'text-red-600'}`}>
+                                  {deltaUp ? '↑' : '↓'} {Math.abs(a.delta).toLocaleString()}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xl font-bold text-gray-900">{a.current?.toLocaleString() ?? '—'}</div>
+                            {points && (
+                              <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-9 mt-1">
+                                <polyline points={points} fill="none" stroke={deltaUp ? '#10b981' : '#ef4444'} strokeWidth="1.5" />
+                              </svg>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="bg-white rounded-xl border border-gray-200 p-5">
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Action mix</h4>
+                    <div className="space-y-2">
                       {(stats.byType || []).map(r => (
                         <div key={r.type} className="flex items-center gap-3">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${TYPE_COLOR[r.type] || 'bg-gray-100 text-gray-600'}`}>
@@ -473,7 +1631,7 @@ export default function InstagramPage() {
                   </div>
 
                   <div className="bg-white rounded-xl border border-gray-200 p-5">
-                    <h3 className="font-semibold text-gray-900 mb-4">Top Users Engaged</h3>
+                    <h4 className="font-semibold text-gray-900 mb-3 text-sm">Top users engaged</h4>
                     <div className="space-y-2">
                       {(stats.topUsers || []).map((u, i) => (
                         <div key={u.username} className="flex items-center gap-3">
@@ -489,6 +1647,318 @@ export default function InstagramPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* ── Activity Over Time (existing chart, polished a touch) ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h4 className="font-semibold text-gray-900 mb-3 text-sm">Activity over time</h4>
+                  {(() => {
+                    const daily = stats.daily || [];
+                    if (daily.length === 0) return <p className="text-gray-400 text-sm py-6 text-center">No data yet</p>;
+                    const OUTBOUND = new Set(['like', 'comment', 'reply', 'comment_reply', 'follow', 'unfollow']);
+                    const INBOUND  = new Set(['new_follower', 'new_like', 'new_comment']);
+                    const dmap: Record<string, { outbound: number; inbound: number }> = {};
+                    for (const row of daily) {
+                      if (!dmap[row.day]) dmap[row.day] = { outbound: 0, inbound: 0 };
+                      if (OUTBOUND.has(row.type)) dmap[row.day].outbound += row.n;
+                      else if (INBOUND.has(row.type)) dmap[row.day].inbound += row.n;
+                    }
+                    const sortedDays = Object.keys(dmap).sort();
+                    const maxVal = Math.max(1, ...sortedDays.map(d => Math.max(dmap[d].outbound, dmap[d].inbound)));
+                    return (
+                      <>
+                        <div className="flex items-end gap-1 h-32 overflow-x-auto pb-2">
+                          {sortedDays.map(d => {
+                            const v = dmap[d];
+                            return (
+                              <div key={d} className="flex flex-col items-center min-w-[40px]">
+                                <div className="flex items-end gap-0.5 h-28">
+                                  <div className="w-3 bg-blue-500 rounded-t" style={{ height: `${(v.outbound / maxVal) * 100}%` }} title={`${v.outbound} outbound`} />
+                                  <div className="w-3 bg-green-500 rounded-t" style={{ height: `${(v.inbound / maxVal) * 100}%` }} title={`${v.inbound} inbound`} />
+                                </div>
+                                <span className="text-[10px] text-gray-400 mt-1 -rotate-45 origin-top-left whitespace-nowrap">{d.slice(5)}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-4 text-xs text-gray-600 mt-3">
+                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-500 rounded-sm" /> Outbound</span>
+                          <span className="flex items-center gap-1"><span className="w-3 h-3 bg-green-500 rounded-sm" /> Inbound (new followers)</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                {/* ── Returns Received (6 inbound types) ── */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-semibold text-gray-900 text-sm">Returns Received</h4>
+                    <span className="text-[10px] text-gray-400">
+                      {Object.values(stats.inboundCounts || {}).every(n => n === 0)
+                        ? 'No inbound events yet — set up a "Scan notifications" automation to start tracking.'
+                        : ''}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {INBOUND_CARDS.map(c => {
+                      const n = stats.inboundCounts?.[c.key] || 0;
+                      return (
+                        <div key={c.key} className={`${c.bg} border border-gray-200 rounded-xl p-3`}>
+                          <div className="text-xs flex items-center justify-between mb-1">
+                            <span className={`uppercase font-medium ${c.color}`}>{c.label}</span>
+                            <span className="text-base">{c.emoji}</span>
+                          </div>
+                          <div className="text-2xl font-bold text-gray-900">{n.toLocaleString()}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Funnel · Actions sent → Returns ── */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5">
+                  <h4 className="font-semibold text-gray-900 mb-3 text-sm">Funnel · Actions sent → Returns received</h4>
+                  {(stats.funnel || []).length === 0 ? (
+                    <p className="text-gray-400 text-sm">No funnel data yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {(stats.funnel || []).map(row => {
+                        const max = Math.max(1, ...(stats.funnel || []).map(r => r.sent));
+                        const sentPct = (row.sent / max) * 100;
+                        const returnedPct = (row.returned / max) * 100;
+                        return (
+                          <div key={row.action_type + row.paired_with}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs text-gray-700 font-medium">{row.label}</span>
+                              <span className="text-xs text-gray-500">
+                                <b className="text-gray-900">{row.returned.toLocaleString()}</b> back from <b className="text-gray-900">{row.sent.toLocaleString()}</b> sent
+                                {row.percent != null && <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  row.percent >= 30 ? 'bg-green-100 text-green-700' :
+                                  row.percent >= 10 ? 'bg-yellow-100 text-yellow-700' :
+                                                      'bg-gray-100 text-gray-600'
+                                }`}>{row.percent.toFixed(1)}%</span>}
+                              </span>
+                            </div>
+                            <div className="relative h-5 bg-gray-100 rounded">
+                              <div className="absolute inset-y-0 left-0 bg-orange-200 rounded" style={{ width: `${sentPct}%` }} />
+                              <div className="absolute inset-y-0 left-0 bg-orange-500 rounded" style={{ width: `${returnedPct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-3 italic">
+                    Pairs without inbound data show 0/0 until the notification scanner records the matching event types.
+                  </p>
+                </div>
+
+                {/* ══ Engagement Attribution — the centerpiece of the dashboard ══
+                    For EVERY inbound engagement we got (new_follower, received_*),
+                    show the outbound action of ours that most likely caused it.
+                    Helps the user see ROI: "I liked X's reel → X liked my post". */}
+                {stats.attribution && (
+                  <div className="bg-white rounded-xl border-2 border-blue-200 p-5">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="font-semibold text-gray-900 text-sm">🎯 Engagement Attribution — what's working</h4>
+                        <p className="text-xs text-gray-500 mt-0.5">For every action <b>received</b> (likes, comments, replies, follows), the most recent outbound action of ours targeting that same person — and how long they took to respond.</p>
+                      </div>
+                    </div>
+
+                    {/* Rollup row */}
+                    {(() => {
+                      const a = stats.attribution!;
+                      const fmtMins = (m: number | null) => {
+                        if (m == null) return '—';
+                        if (m < 60) return `${m}m`;
+                        if (m < 24 * 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+                        const d = Math.floor(m / 1440);
+                        const h = Math.floor((m % 1440) / 60);
+                        return `${d}d ${h}h`;
+                      };
+                      return (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="bg-blue-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-blue-700">Inbound engagements</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{a.total_new_followers.toLocaleString()}</div>
+                          </div>
+                          <div className="bg-green-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-green-700">Caused by an action of ours</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">
+                              {a.attributed_count} <span className="text-sm text-gray-500">({a.attribution_rate?.toFixed(1) ?? '0.0'}%)</span>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-gray-600">Organic (unsolicited)</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{a.organic_count}</div>
+                          </div>
+                          <div className="bg-orange-50 rounded-lg p-3">
+                            <div className="text-[10px] uppercase font-medium text-orange-700">Avg time to respond</div>
+                            <div className="text-xl font-bold text-gray-900 mt-0.5">{fmtMins(a.avg_minutes_to_convert)}</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Two side-by-side breakdowns */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                      {/* Inbound breakdown — what kind of response we got */}
+                      {stats.attribution.by_inbound_type && stats.attribution.by_inbound_type.length > 0 && (
+                        <div>
+                          <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Response received</div>
+                          <div className="flex flex-wrap gap-2">
+                            {stats.attribution.by_inbound_type.map(b => (
+                              <div key={b.type} className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-1.5 text-xs">
+                                <span className="font-medium text-blue-700">{TYPE_LABEL[b.type] || b.type}</span>
+                                <span className="ml-2 text-gray-900 font-bold">{b.count}</span>
+                                <span className="ml-1 text-gray-500">({b.percent.toFixed(1)}%)</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Outbound breakdown — which of our actions earned responses */}
+                      {stats.attribution.by_attributed_type.length > 0 && (
+                        <div>
+                          <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Outbound that earned the response</div>
+                          <div className="flex flex-wrap gap-2">
+                            {stats.attribution.by_attributed_type.map(b => (
+                              <div key={b.type} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs">
+                                <span className={`font-medium ${TYPE_COLOR[b.type]?.split(' ')[1] || 'text-gray-700'}`}>{TYPE_LABEL[b.type] || b.type}</span>
+                                <span className="ml-2 text-gray-900 font-bold">{b.count}</span>
+                                <span className="ml-1 text-gray-500">({b.percent.toFixed(1)}%)</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Conversion matrix: outbound → inbound. Shows e.g. "Like → received_like_post: 8" */}
+                    {stats.attribution.conversion_matrix && stats.attribution.conversion_matrix.length > 0 && (
+                      <div className="mb-4">
+                        <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Conversion flow (top pairs)</div>
+                        <div className="flex flex-wrap gap-2">
+                          {stats.attribution.conversion_matrix.slice(0, 10).map((m, i) => (
+                            <div key={i} className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs">
+                              <span className={`px-1.5 py-0.5 rounded ${TYPE_COLOR[m.outbound] || 'bg-gray-100 text-gray-600'}`}>{TYPE_LABEL[m.outbound] || m.outbound}</span>
+                              <span className="text-gray-400">→</span>
+                              <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">{TYPE_LABEL[m.inbound] || m.inbound}</span>
+                              <span className="ml-1 font-bold text-gray-900">{m.count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-batch outbound performance table. One row per
+                        executed queue item: what we ran, how it performed,
+                        and how many of those targets became followers. */}
+                    {!stats.campaignPerformance || stats.campaignPerformance.rows.length === 0 ? (
+                      <p className="text-gray-400 text-sm py-4 text-center">No batch activity in this period.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <div className="text-[10px] uppercase font-medium text-gray-500 tracking-wider mb-1">Per-batch performance</div>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                              <th className="py-2 pr-3 font-medium">On post</th>
+                              <th className="py-2 pr-3 font-medium">Action</th>
+                              <th className="py-2 pr-3 font-medium">Account</th>
+                              <th className="py-2 pr-3 font-medium">Date</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="Performed / Requested">Actions</th>
+                              <th className="py-2 pr-3 font-medium text-right">Followers back</th>
+                              <th className="py-2 pr-3 font-medium text-right">Avg time to respond</th>
+                              <th className="py-2 pr-3 font-medium text-right">Conversion</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stats.campaignPerformance.rows.map((r) => {
+                              const shortPost = r.post_url
+                                ? r.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || r.post_url.slice(-12)
+                                : '—';
+                              const fmtTime = (mins: number | null) => {
+                                if (mins == null) return '—';
+                                if (mins < 60) return `${mins}m`;
+                                if (mins < 24 * 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+                                const d = Math.floor(mins / 1440);
+                                const h = Math.floor((mins % 1440) / 60);
+                                return `${d}d ${h}h`;
+                              };
+                              // Conversion color: green if > 5%, amber 1-5%, gray if 0.
+                              const conv = r.conversion_rate;
+                              const convClass = conv == null
+                                ? 'text-gray-400'
+                                : conv >= 5 ? 'text-green-600 font-bold'
+                                : conv >= 1 ? 'text-amber-600 font-semibold'
+                                : 'text-gray-500';
+                              return (
+                                <tr key={r.queue_id} className="border-b border-gray-50 last:border-0">
+                                  <td className="py-2 pr-3 text-xs">
+                                    {r.post_url ? (
+                                      <a href={r.post_url} target="_blank" rel="noreferrer"
+                                        className="text-blue-600 hover:underline font-mono">{shortPost}</a>
+                                    ) : '—'}
+                                  </td>
+                                  <td className="py-2 pr-3">
+                                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${TYPE_COLOR[r.action_type] || 'bg-gray-100 text-gray-600'}`}>
+                                      {TYPE_LABEL[r.action_type] || r.action_type}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 pr-3 text-xs text-gray-700">@{r.as_account}</td>
+                                  <td className="py-2 pr-3 text-xs text-gray-500">{fmt(r.action_date)}</td>
+                                  <td className="py-2 pr-3 text-right text-xs">
+                                    <span className={r.count_done < r.count_requested ? 'text-orange-600' : 'text-gray-900'}>
+                                      {r.count_done}
+                                    </span>
+                                    <span className="text-gray-400">/{r.count_requested}</span>
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs font-bold text-gray-900">
+                                    {r.followers_back || '—'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs text-gray-700">
+                                    {fmtTime(r.avg_minutes_to_followback)}
+                                  </td>
+                                  <td className={`py-2 pr-3 text-right text-xs ${convClass}`}>
+                                    {conv == null ? '—' : `${conv.toFixed(1)}%`}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                          {/* Totals row */}
+                          {stats.campaignPerformance.rows.length > 1 && (
+                            <tfoot>
+                              <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                                <td colSpan={4} className="py-2 pr-3 text-xs uppercase text-gray-600">
+                                  {stats.campaignPerformance.totals.batches} batches
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.done}<span className="text-gray-400">/{stats.campaignPerformance.totals.requested}</span>
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.followers_back}
+                                </td>
+                                <td className="py-2 pr-3"></td>
+                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                  {stats.campaignPerformance.totals.avg_conversion != null
+                                    ? `${stats.campaignPerformance.totals.avg_conversion.toFixed(1)}%`
+                                    : '—'}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                        {stats.campaignPerformance.rows.length >= 100 && (
+                          <p className="text-xs text-gray-400 mt-2 text-center">
+                            Showing 100 most recent batches. Narrow the date range to see fewer.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -596,6 +2066,11 @@ export default function InstagramPage() {
                 <button onClick={resetFilters}
                   className="px-4 py-2 text-sm bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors">
                   ✕ Reset Filters
+                </button>
+                <button onClick={() => setRefreshTick(t => t + 1)}
+                  title="Refresh data from server"
+                  className="px-4 py-2 text-sm bg-white border border-gray-200 text-gray-600 rounded-lg hover:border-blue-300 transition-colors flex items-center gap-1.5">
+                  <RefreshCw size={14} /> Refresh
                 </button>
               </div>
             </div>
@@ -764,7 +2239,60 @@ export default function InstagramPage() {
                   )}
                 </label>
                 <label className="text-sm col-span-2">
-                  <span className="text-gray-600">Caption</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Caption</span>
+                    <button type="button" onClick={() => setShowAIPanel(s => !s)}
+                      className="text-xs px-2 py-1 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 font-medium">
+                      ✨ {showAIPanel ? 'Hide AI' : 'Generate with AI'}
+                    </button>
+                  </div>
+                  {showAIPanel && (
+                    <div className="mt-2 mb-2 p-3 border border-purple-100 rounded-lg bg-purple-50/40">
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Topic / what's the post about</label>
+                          <textarea rows={2} value={aiTopic} onChange={e => setAiTopic(e.target.value)}
+                            placeholder="e.g. our new spring collection launch"
+                            className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-500 mb-1">Notes / additional context</label>
+                          <textarea rows={2} value={aiComments} onChange={e => setAiComments(e.target.value)}
+                            placeholder="e.g. mention free shipping, ask a question"
+                            className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white" />
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 mb-2">
+                        <div className="flex items-center gap-1">
+                          <label className="text-xs text-gray-500">Tone:</label>
+                          <select value={aiTone} onChange={e => setAiTone(e.target.value as 'friendly'|'professional'|'funny'|'inspirational')}
+                            className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+                            <option value="friendly">Friendly</option>
+                            <option value="professional">Professional</option>
+                            <option value="funny">Funny</option>
+                            <option value="inspirational">Inspirational</option>
+                          </select>
+                        </div>
+                        <label className="flex items-center gap-1 text-xs text-gray-700">
+                          <input type="checkbox" checked={aiHashtags} onChange={e => setAiHashtags(e.target.checked)} />
+                          Include hashtags
+                        </label>
+                        <button type="button" onClick={generateAICaption} disabled={aiBusy}
+                          className="ml-auto px-3 py-1 bg-purple-600 text-white rounded text-xs font-medium hover:bg-purple-700 disabled:opacity-50">
+                          {aiBusy ? 'Generating…' : '✨ Generate'}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-gray-500">
+                        {newPostFile && newPostFile.type.startsWith('image/') && newPostFile.size <= 4 * 1024 * 1024
+                          ? '🖼 Vision model — caption will be based on the image you uploaded.'
+                          : newPostFile && newPostFile.type.startsWith('video/')
+                          ? '🎥 Video file — AI uses your topic/notes only (Groq can\'t analyze video frames).'
+                          : newPostFile
+                          ? 'File too large for vision (over 4MB) — AI uses your topic/notes only.'
+                          : 'No file uploaded — AI uses your topic/notes only.'}
+                      </p>
+                    </div>
+                  )}
                   <textarea rows={3} value={newPostCaption} onChange={e => setNewPostCaption(e.target.value)}
                     className="block w-full mt-1 border border-gray-200 rounded-lg px-2 py-2 text-sm" />
                 </label>
@@ -898,6 +2426,87 @@ export default function InstagramPage() {
                 </div>
               </div>
             )}
+
+            {/* ── Daily follower count history (auto-scraped by the extension) ── */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div>
+                  <h3 className="font-semibold text-gray-900">Daily follower history</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Latest snapshot per day shown — manual "Refresh now" captures extra intraday points without cluttering the chart.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={triggerFollowerCountNow} disabled={followerRefreshBusy}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1">
+                    <RefreshCw size={12} /> {followerRefreshBusy ? 'Triggering…' : 'Refresh now'}
+                  </button>
+                  <select value={followerCountProfile} onChange={e => setFollowerCountProfile(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm">
+                    <option value="">All profiles</option>
+                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                  </select>
+                  <div className="flex gap-1">
+                    <button onClick={() => setFollowerCountAgg('day')}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium ${followerCountAgg === 'day' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                      Daily
+                    </button>
+                    <button onClick={() => setFollowerCountAgg('month')}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium ${followerCountAgg === 'month' ? 'bg-blue-600 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                      Monthly
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {followerRefreshNote && (
+                <div className="mb-3 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                  {followerRefreshNote}
+                </div>
+              )}
+              <p className="text-xs text-gray-500 mb-3">
+                The extension opens each of your profiles in a background tab once a day and records the follower count from Instagram's public profile page. Make sure <b>Automation</b> is enabled in the extension popup.
+              </p>
+              {followerCountSeries.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No follower counts recorded yet. The extension scrapes once every 24h — first counts appear after the first run.</p>
+              ) : (
+                <div className="space-y-4">
+                  {followerCountSeries.map(series => (
+                    <div key={series.my_profile} className="border border-gray-100 rounded-lg overflow-hidden">
+                      <div className="bg-gray-50 px-3 py-2 border-b border-gray-100 flex items-center justify-between">
+                        <a href={`https://instagram.com/${series.my_profile}`} target="_blank" rel="noreferrer"
+                          className="text-sm font-medium text-blue-600 hover:underline">@{series.my_profile}</a>
+                        <span className="text-sm text-gray-600">
+                          Latest: <b className="text-gray-900">{(series.points[0]?.follower_count ?? 0).toLocaleString()}</b> followers
+                        </span>
+                      </div>
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-gray-500 bg-white">
+                            <th className="py-1.5 px-3 font-medium">{followerCountAgg === 'month' ? 'Month' : 'Date'}</th>
+                            <th className="py-1.5 px-3 font-medium text-right">Followers</th>
+                            <th className="py-1.5 px-3 font-medium text-right">Δ from previous</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {series.points.map(pt => (
+                            <tr key={pt.bucket} className="border-t border-gray-100">
+                              <td className="py-1.5 px-3 text-gray-600 text-xs">{pt.bucket}</td>
+                              <td className="py-1.5 px-3 text-right">{pt.follower_count.toLocaleString()}</td>
+                              <td className={`py-1.5 px-3 text-right text-xs ${
+                                pt.delta == null ? 'text-gray-400'
+                                : pt.delta > 0 ? 'text-green-600'
+                                : pt.delta < 0 ? 'text-red-600'
+                                : 'text-gray-500'
+                              }`}>
+                                {pt.delta == null ? '—' : pt.delta > 0 ? `+${pt.delta.toLocaleString()}` : pt.delta.toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -919,7 +2528,15 @@ export default function InstagramPage() {
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Your accounts <span className="text-gray-400 font-normal">({igAccounts.length})</span></h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Your accounts <span className="text-gray-400 font-normal">({igAccounts.length})</span></h3>
+                <button onClick={loadAccounts} className="text-gray-400 hover:text-gray-600" title="Refresh from server">
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">
+                Accounts are validated when scanned — UI labels like "Close" or "Cancel" are rejected. If you see something that shouldn't be here, use the trash icon to remove it.
+              </p>
               {igAccounts.length === 0 ? (
                 <p className="text-gray-400 text-sm py-6 text-center">No accounts yet. Add one above or scan from the extension.</p>
               ) : (
@@ -933,12 +2550,1137 @@ export default function InstagramPage() {
                 </div>
               )}
             </div>
+
+            {/* ─── AI providers ─── */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2">
+                <Zap size={18} /> AI providers
+                {aiProviders.length > 0 && (
+                  <span className="text-xs text-gray-400 font-normal">({aiProviders.length} configured)</span>
+                )}
+              </h3>
+              <p className="text-sm text-gray-500 mb-3">
+                Add an API key from any supported provider so the system can generate AI replies for your batches. Free tiers available on Groq, Gemini, and Z.AI.
+              </p>
+              <div className="flex flex-wrap gap-2 items-end mb-2">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Provider</label>
+                  <select value={aiAddProvider} onChange={e => setAiAddProvider(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    {aiCatalog.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.display}{p.free_tier ? ' (has free tier)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-[2] min-w-[200px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">API key</label>
+                  <input type="password" placeholder="sk-... / gsk_... / pplx-..." value={aiAddKey}
+                    onChange={e => setAiAddKey(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+                </div>
+                <div className="w-44">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    Model <span className="text-gray-400">(optional)</span>
+                  </label>
+                  <input type="text" placeholder={aiCatalog.find(p => p.id === aiAddProvider)?.default_model || ''}
+                    value={aiAddModel} onChange={e => setAiAddModel(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono" />
+                </div>
+                <button onClick={addAiProvider} disabled={aiKeyBusy || !aiAddKey}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {aiKeyBusy ? 'Testing…' : 'Test + Save'}
+                </button>
+              </div>
+              {(() => {
+                const cur = aiCatalog.find(p => p.id === aiAddProvider);
+                return cur ? (
+                  <p className="text-xs text-gray-400 mb-2">
+                    Default model: <code className="bg-gray-100 px-1 rounded">{cur.default_model}</code>
+                    {' · '}
+                    <a href={cur.docs_url} target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">Get a key</a>
+                  </p>
+                ) : null;
+              })()}
+              {aiTestStatus && (
+                <p className={`text-xs mt-1 ${aiTestStatus.kind === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
+                  {aiTestStatus.kind === 'ok' ? '✓ ' : '✗ '}{aiTestStatus.msg}
+                </p>
+              )}
+
+              {aiProviders.length > 0 && (
+                <div className="mt-4 divide-y divide-gray-100">
+                  {aiProviders.map(p => {
+                    const cat = aiCatalog.find(c => c.id === p.provider);
+                    return (
+                      <div key={p.provider} className="flex items-center justify-between py-2.5">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">{cat?.display || p.provider}</span>
+                            {p.is_default && (
+                              <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">default</span>
+                            )}
+                          </div>
+                          <div className="text-xs text-gray-400 font-mono">
+                            {p.api_key_masked} · model: {p.model || cat?.default_model || '—'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!p.is_default && (
+                            <button onClick={() => setDefaultAiProvider(p.provider)}
+                              className="text-xs px-2 py-1 text-blue-600 hover:bg-blue-50 rounded">
+                              Set default
+                            </button>
+                          )}
+                          <button onClick={() => removeAiProvider(p.provider)}
+                            className="text-gray-400 hover:text-red-500" title="Remove">
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ RESEARCH ══════════════════════════════ */}
+        {tab === 'research' && !viewingUser && (
+          <div className="space-y-4 max-w-4xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <h3 className="font-semibold text-gray-900 mb-1 flex items-center gap-2"><Search size={18} /> Scrape a profile</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                Enter any public Instagram username — the extension will open the profile, scrape the first N posts (likes / views and comments), and save the data here.
+                The extension must be installed on at least one device with <b>Automation</b> enabled.
+              </p>
+              <div className="flex flex-wrap gap-2 items-end">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Username</label>
+                  <input type="text" placeholder="elizabethvasilenko" value={scrapeTarget}
+                    onChange={e => setScrapeTarget(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createScrapeJob(); }}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div className="w-28">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Posts</label>
+                  <input type="number" min={1} max={200} value={scrapeCount}
+                    onChange={e => setScrapeCount(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <button onClick={createScrapeJob} disabled={scrapeBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {scrapeBusy ? 'Queuing…' : 'Queue scrape'}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Scrape jobs <span className="text-gray-400 font-normal">({scrapeJobs.length})</span></h3>
+                <div className="flex items-center gap-2">
+                  {scrapeJobs.some(j => j.status === 'failed') && (
+                    <button onClick={() => clearScrapeJobs(true)}
+                      className="px-2 py-1 text-xs text-orange-600 hover:bg-orange-50 rounded border border-orange-200">
+                      Clear failed
+                    </button>
+                  )}
+                  {scrapeJobs.length > 0 && (
+                    <button onClick={() => clearScrapeJobs(false)}
+                      className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200">
+                      Clear all
+                    </button>
+                  )}
+                  <button onClick={loadResearch} className="text-gray-400 hover:text-gray-600" title="Refresh">
+                    <RefreshCw size={16} />
+                  </button>
+                </div>
+              </div>
+              {scrapeJobs.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No scrape jobs yet. Queue one above.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium">Username</th>
+                        <th className="py-2 pr-3 font-medium">Requested</th>
+                        <th className="py-2 pr-3 font-medium">Status</th>
+                        <th className="py-2 pr-3 font-medium">Scraped</th>
+                        <th className="py-2 pr-3 font-medium">Created</th>
+                        <th className="py-2 pr-3 font-medium w-8"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scrapeJobs.map(j => (
+                        <tr key={j.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2 pr-3 font-medium text-blue-600">@{j.target_username}</td>
+                          <td className="py-2 pr-3 text-gray-600">{j.post_count}</td>
+                          <td className="py-2 pr-3">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              j.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              j.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                              j.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                                         'bg-gray-100 text-gray-600'
+                            }`}>{j.status}</span>
+                            {j.status === 'failed' && j.error_message && (
+                              <span className="block text-xs text-red-600 mt-0.5">{j.error_message}</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 text-gray-600">{j.posts_scraped || 0}</td>
+                          <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(j.created_at)}</td>
+                          <td className="py-2 pr-3 text-right">
+                            <button onClick={() => deleteScrapeJob(j.id)}
+                              className="text-gray-300 hover:text-red-500" title="Delete this scrape job">
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Scraped profiles <span className="text-gray-400 font-normal">({scrapedSummary.length})</span></h3>
+                {scrapedSummary.length > 0 && (
+                  <button onClick={clearAllScrapedProfiles}
+                    className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded border border-red-200">
+                    Clear all
+                  </button>
+                )}
+              </div>
+              {scrapedSummary.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No data yet. Queue a scrape job above.</p>
+              ) : (
+                <div className="divide-y divide-gray-100">
+                  {scrapedSummary.map(s => (
+                    <div key={s.target_username} className="flex items-center justify-between py-2.5 hover:bg-gray-50 px-2 rounded group">
+                      <button onClick={() => openScrapedUser(s.target_username)}
+                        className="flex-1 flex items-center justify-between text-left">
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-medium text-blue-600">@{s.target_username}</span>
+                          <span className="text-xs text-gray-400">{s.post_count} posts</span>
+                        </div>
+                        <span className="text-xs text-gray-500 mr-3">Last scraped {fmt(s.last_scraped_at)}</span>
+                      </button>
+                      <button onClick={() => deleteScrapedProfile(s.target_username)}
+                        className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition" title={`Delete scraped data for @${s.target_username}`}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'research' && viewingUser && (
+          <div className="space-y-4 max-w-5xl">
+            <div className="flex items-center justify-between">
+              <button onClick={() => { setViewingUser(null); setViewingPosts([]); }}
+                className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
+                <ArrowLeft size={16} /> Back to research
+              </button>
+              <a href={`https://instagram.com/${viewingUser}`} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1 text-sm text-blue-600 hover:underline">
+                @{viewingUser} <ExternalLink size={12} />
+              </a>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Posts <span className="text-gray-400 font-normal">({viewingPosts.length})</span></h3>
+                {selectedPosts.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">{selectedPosts.size} selected</span>
+                    <button onClick={() => setSelectedPosts(new Set())}
+                      className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
+                    <button onClick={openAddToCampaign}
+                      className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
+                      Add to batch
+                    </button>
+                  </div>
+                )}
+              </div>
+              {viewingPosts.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No posts found.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th className="py-2 pr-3 font-medium w-8">
+                          <input type="checkbox"
+                            checked={selectedPosts.size === viewingPosts.length && viewingPosts.length > 0}
+                            onChange={(e) => setSelectedPosts(e.target.checked ? new Set(viewingPosts.map(p => p.id)) : new Set())}
+                          />
+                        </th>
+                        <th className="py-2 pr-3 font-medium">Post</th>
+                        <th className="py-2 pr-3 font-medium">Type</th>
+                        <th className="py-2 pr-3 font-medium text-right">Likes</th>
+                        <th className="py-2 pr-3 font-medium text-right">Views</th>
+                        <th className="py-2 pr-3 font-medium text-right">Comments</th>
+                        <th className="py-2 pr-3 font-medium">Last scraped</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewingPosts.map(p => (
+                        <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2 pr-3">
+                            <input type="checkbox"
+                              checked={selectedPosts.has(p.id)}
+                              onChange={() => togglePostSelection(p.id)}
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <a href={p.post_url} target="_blank" rel="noreferrer"
+                              className="text-blue-600 hover:underline flex items-center gap-1">
+                              {p.shortcode} <ExternalLink size={12} />
+                            </a>
+                          </td>
+                          <td className="py-2 pr-3 text-gray-600 capitalize">{p.post_type}</td>
+                          <td className="py-2 pr-3 text-right">{p.likes != null ? p.likes.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-right">{p.views != null ? p.views.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-right">{p.comments != null ? p.comments.toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 text-gray-500 text-xs">{fmt(p.last_scraped_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ AUTOMATIONS ══════════════════════════════ */}
+        {tab === 'automations' && (
+          <div className="space-y-4 max-w-6xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><RefreshCw size={18} /> Cronjobs &amp; Automations</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Recurring jobs the extension runs automatically. Built-in per-account tasks (📌) are auto-created when you add an account; you can edit their time or disable them, but remove the account to delete them.</p>
+                </div>
+                <button onClick={openNewAutomation}
+                  className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
+                  <Plus size={14} /> New automation
+                </button>
+              </div>
+
+              {/* Filter bar */}
+              {automations.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
+                  <span className="text-gray-500">Filter:</span>
+                  <div className="flex gap-1">
+                    {(['all','system','user'] as const).map(k => (
+                      <button key={k} onClick={() => setAutoFilterKind(k)}
+                        className={`px-2.5 py-1 rounded-full font-medium ${autoFilterKind === k ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                        {k === 'all' ? 'All' : k === 'system' ? '📌 Built-in' : 'User-defined'}
+                      </button>
+                    ))}
+                  </div>
+                  <select value={autoFilterAccount} onChange={e => setAutoFilterAccount(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1 bg-white">
+                    <option value="">All accounts</option>
+                    {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {(() => {
+                const filtered = automations.filter(a => {
+                  if (autoFilterKind === 'system' && !a.is_system) return false;
+                  if (autoFilterKind === 'user' && a.is_system) return false;
+                  if (autoFilterAccount && !a.accounts.includes(autoFilterAccount)) return false;
+                  return true;
+                });
+                return automations.length === 0 ? (
+                <p className="text-gray-400 text-sm py-8 text-center">No automations yet. Click <b>+ New automation</b> to set up a recurring job.</p>
+              ) : filtered.length === 0 ? (
+                <p className="text-gray-400 text-sm py-8 text-center">No automations match this filter.</p>
+              ) : (
+                <div className="space-y-2">
+                  {filtered.map(a => {
+                    const statusPill =
+                      !a.enabled                   ? 'bg-gray-100 text-gray-600' :
+                      a.last_status === 'failed'   ? 'bg-red-100 text-red-700'   :
+                      (a.next_run_at && new Date(a.next_run_at).getTime() < Date.now() - 5 * 60 * 1000)
+                                                   ? 'bg-yellow-100 text-yellow-700' :
+                      a.last_status === 'ok'       ? 'bg-green-100 text-green-700'  :
+                                                     'bg-blue-100 text-blue-700';
+                    const statusLabel =
+                      !a.enabled                   ? 'Disabled' :
+                      a.last_status === 'failed'   ? 'Failed' :
+                      (a.next_run_at && new Date(a.next_run_at).getTime() < Date.now() - 5 * 60 * 1000)
+                                                   ? 'Late' :
+                      a.last_status === 'ok'       ? 'Working' :
+                                                     'Scheduled';
+                    return (
+                      <div key={a.id} className="border border-gray-100 rounded-lg p-3 hover:border-blue-200 transition-colors">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              {a.is_system && <span title="Built-in per-account task — disable or remove the account to stop it">📌</span>}
+                              <span className="font-medium text-gray-900 text-sm">{a.name}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${statusPill}`}>{statusLabel}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                              <span>📅 {describeSchedule(a)}</span>
+                              <span>👤 {a.accounts.length} account{a.accounts.length === 1 ? '' : 's'}</span>
+                              <span>⚙️ {a.actions.map(act => AUTOMATION_ACTION_LABELS[act] || act).join(', ')}</span>
+                              {a.next_run_at && <span>Next: {fmt(a.next_run_at)}</span>}
+                              {a.last_run_at && <span>Last: {fmt(a.last_run_at)}</span>}
+                            </div>
+                            {a.last_error && a.last_status === 'failed' && (
+                              <p className="text-xs text-red-600 mt-1.5">⚠ {a.last_error}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button onClick={() => runAutomationNow(a.id)}
+                              className="text-xs px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded font-medium">
+                              Run now
+                            </button>
+                            <button onClick={() => toggleAutomation(a)}
+                              className={`text-xs px-2 py-1 rounded font-medium ${a.enabled ? 'bg-gray-100 hover:bg-gray-200 text-gray-700' : 'bg-green-100 hover:bg-green-200 text-green-700'}`}>
+                              {a.enabled ? 'Disable' : 'Enable'}
+                            </button>
+                            <button onClick={() => openEditAutomation(a)}
+                              className="text-gray-400 hover:text-gray-700 p-1" title="Edit">
+                              <Pencil size={14} />
+                            </button>
+                            {!a.is_system && (
+                              <button onClick={() => deleteAutomation(a.id)}
+                                className="text-gray-400 hover:text-red-500 p-1" title="Delete">
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* ══ Automation create/edit modal ══ */}
+        {showAutomationModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowAutomationModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">{editingAutomation ? 'Edit automation' : 'New automation'}</h3>
+                <button onClick={() => setShowAutomationModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Name</label>
+                <input type="text" value={aForm.name} onChange={e => setAForm({ ...aForm, name: e.target.value })}
+                  placeholder="e.g. Daily follower scan"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Schedule</label>
+                <div className="flex gap-2 mb-2">
+                  {(['daily','weekly','interval'] as const).map(t => (
+                    <button key={t} onClick={() => setAForm({ ...aForm, schedule_type: t })}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                        aForm.schedule_type === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}>
+                      {t === 'daily' ? 'Daily' : t === 'weekly' ? 'Weekly' : 'Interval'}
+                    </button>
+                  ))}
+                </div>
+                {aForm.schedule_type === 'daily' && (
+                  <input type="time" value={aForm.schedule_time}
+                    onChange={e => setAForm({ ...aForm, schedule_time: e.target.value })}
+                    className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                )}
+                {aForm.schedule_type === 'weekly' && (
+                  <>
+                    <div className="flex gap-1 mb-2">
+                      {DAY_NAMES.map((d, i) => (
+                        <button key={i} onClick={() => {
+                          const has = aForm.schedule_days.includes(i);
+                          const next = has ? aForm.schedule_days.filter(x => x !== i) : [...aForm.schedule_days, i].sort();
+                          setAForm({ ...aForm, schedule_days: next });
+                        }}
+                          className={`w-10 h-8 rounded text-xs font-medium ${
+                            aForm.schedule_days.includes(i) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}>
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <input type="time" value={aForm.schedule_time}
+                      onChange={e => setAForm({ ...aForm, schedule_time: e.target.value })}
+                      className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                  </>
+                )}
+                {aForm.schedule_type === 'interval' && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600">Every</span>
+                    <input type="number" min={1} max={1440} value={aForm.schedule_interval_minutes}
+                      onChange={e => setAForm({ ...aForm, schedule_interval_minutes: e.target.value })}
+                      className="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                    <span className="text-sm text-gray-600">minutes</span>
+                  </div>
+                )}
+                {/* Time-conversion preview: confirms the job is set in YOUR
+                    time and shows the UTC equivalent for transparency. */}
+                {aForm.schedule_type !== 'interval' && aForm.schedule_time && (() => {
+                  const [hh, mm] = aForm.schedule_time.split(':').map((n: string) => parseInt(n, 10));
+                  if (!Number.isFinite(hh)) return null;
+                  const offsetMin = -new Date().getTimezoneOffset();
+                  let utcMin = (hh * 60 + (mm || 0)) - offsetMin;
+                  utcMin = ((utcMin % 1440) + 1440) % 1440;
+                  const utcHH = String(Math.floor(utcMin / 60)).padStart(2, '0');
+                  const utcMM = String(utcMin % 60).padStart(2, '0');
+                  const tzLbl = offsetMin === 0 ? 'UTC' : `UTC${offsetMin > 0 ? '+' : ''}${offsetMin / 60}`;
+                  return (
+                    <p className="text-xs text-gray-500 mt-2">
+                      ⏰ Runs at <b>{aForm.schedule_time}</b> your time ({tzLbl})
+                      {' · '}<span className="text-gray-400">{utcHH}:{utcMM} UTC on the server</span>
+                    </p>
+                  );
+                })()}
+              </div>
+
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Actions to run</label>
+                <div className="space-y-1">
+                  {Object.entries(AUTOMATION_ACTION_LABELS).map(([key, label]) => {
+                    const checked = aForm.actions.includes(key);
+                    const isSoon = label.includes('coming soon');
+                    return (
+                      <label key={key} className={`flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-lg text-sm ${isSoon ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-50'}`}>
+                        <input type="checkbox" checked={checked} disabled={isSoon}
+                          onChange={() => {
+                            if (isSoon) return;
+                            setAForm({
+                              ...aForm,
+                              actions: checked ? aForm.actions.filter(a => a !== key) : [...aForm.actions, key],
+                            });
+                          }} />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Instagram accounts ({aForm.accounts.length} selected)</label>
+                <div className="border border-gray-200 rounded-lg p-2 max-h-40 overflow-y-auto">
+                  {igAccounts.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-2 text-center">No Instagram accounts configured. Add them in the Accounts tab first.</p>
+                  ) : igAccounts.map(u => {
+                    const checked = aForm.accounts.includes(u);
+                    return (
+                      <label key={u} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 rounded cursor-pointer text-sm">
+                        <input type="checkbox" checked={checked}
+                          onChange={() => setAForm({
+                            ...aForm,
+                            accounts: checked ? aForm.accounts.filter(a => a !== u) : [...aForm.accounts, u],
+                          })} />
+                        @{u}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowAutomationModal(false)}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={submitAutomation} disabled={aSaving}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {aSaving ? 'Saving…' : (editingAutomation ? 'Save changes' : 'Create automation')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════ HEALTH ══════════════════════════════ */}
+        {tab === 'health' && (
+          <div className="space-y-4 max-w-6xl">
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Zap size={18} /> System Health</h3>
+                  <p className="text-sm text-gray-500 mt-0.5">Quick view of every Instagram feature. Click a card for the underlying page.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {health?.generated_at && (
+                    <span className="text-xs text-gray-400">Updated {fmt(health.generated_at)}</span>
+                  )}
+                  <button onClick={loadHealth} disabled={healthBusy}
+                    className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs font-medium disabled:opacity-50 flex items-center gap-1">
+                    <RefreshCw size={12} /> {healthBusy ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+
+              {!health ? (
+                <p className="text-gray-400 text-sm py-6 text-center">Loading health data…</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {(() => {
+                    const pillFor = (s: string) =>
+                      s === 'ok'      ? 'bg-green-100 text-green-700' :
+                      s === 'late'    ? 'bg-yellow-100 text-yellow-700' :
+                      s === 'failing' ? 'bg-red-100 text-red-700' :
+                                        'bg-gray-100 text-gray-500';
+                    const dotFor = (s: string) =>
+                      s === 'ok'      ? 'bg-green-500' :
+                      s === 'late'    ? 'bg-yellow-500' :
+                      s === 'failing' ? 'bg-red-500' :
+                                        'bg-gray-400';
+                    const Card = ({ title, status, primary, secondary, onClick, jumpTab }: {
+                      title: string; status: string; primary: string; secondary?: string;
+                      onClick?: () => void; jumpTab?: Tab;
+                    }) => (
+                      <div onClick={onClick || (jumpTab ? () => setTab(jumpTab) : undefined)}
+                        className={`bg-white border border-gray-200 rounded-xl p-4 ${onClick || jumpTab ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm' : ''} transition-all`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${dotFor(status)}`} />
+                            {title}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${pillFor(status)}`}>
+                            {status}
+                          </span>
+                        </div>
+                        <div className="text-xl font-bold text-gray-900">{primary}</div>
+                        {secondary && <div className="text-xs text-gray-500 mt-1">{secondary}</div>}
+                      </div>
+                    );
+                    const fc = health.follower_counts;
+                    const sp = health.scheduled_posts;
+                    const ab = health.action_batches;
+                    const sj = health.scrape_jobs;
+                    const ea = health.extension_activity;
+                    const pp = health.permissions;
+                    const ac = health.accounts;
+                    const sumStatuses = (obj: Record<string, number>) => Object.entries(obj).map(([k, v]) => `${k}:${v}`).join(' · ') || 'none';
+                    return (
+                      <>
+                        <Card
+                          title="Daily follower counts"
+                          status={fc.status}
+                          primary={`${fc.profiles_tracked} profile${fc.profiles_tracked === 1 ? '' : 's'}`}
+                          secondary={fc.last_capture_at ? `Last captured ${fmt(fc.last_capture_at)}` : 'No data yet'}
+                          jumpTab="followers"
+                        />
+                        <Card
+                          title="Scheduled posts"
+                          status={sp.status}
+                          primary={sp.overdue > 0 ? `${sp.overdue} overdue` : `${(sp.by_status.scheduled || 0)} pending`}
+                          secondary={sumStatuses(sp.by_status)}
+                          jumpTab="schedule"
+                        />
+                        <Card
+                          title="Action Batches"
+                          status={ab.status}
+                          primary={`${(ab.by_status.running || 0)} running · ${(ab.by_status.pending || 0)} pending`}
+                          secondary={ab.stalled_running > 0 ? `⚠️ ${ab.stalled_running} stuck >1h` : sumStatuses(ab.by_status)}
+                          jumpTab="campaigns"
+                        />
+                        <Card
+                          title="Scrape jobs"
+                          status={sj.status}
+                          primary={`${(sj.by_status.completed || 0)} completed`}
+                          secondary={sj.stalled_running > 0 ? `⚠️ ${sj.stalled_running} stuck` : sumStatuses(sj.by_status)}
+                          jumpTab="research"
+                        />
+                        <Card
+                          title="Extension activity"
+                          status={ea.status}
+                          primary={`${ea.actions_last_24h} actions / 24h`}
+                          secondary={ea.last_action_at ? `Last action ${fmt(ea.last_action_at)}` : 'No activity recorded'}
+                          jumpTab="history"
+                        />
+                        <Card
+                          title="Instagram accounts"
+                          status={ac.status}
+                          primary={`${ac.count} configured`}
+                          secondary={ac.count > 0 ? 'Synced from the extension' : 'Scan accounts in the popup'}
+                          jumpTab="accounts"
+                        />
+                        <Card
+                          title="Your permissions"
+                          status={pp.status}
+                          primary={`${pp.tabs_allowed} of ${pp.total_tabs} tabs`}
+                          secondary={`Role: ${pp.role}`}
+                        />
+                        {health.automations && (
+                          <Card
+                            title="Automations"
+                            status={health.automations.status}
+                            primary={`${health.automations.enabled} active · ${health.automations.total} total`}
+                            secondary={
+                              health.automations.last_run_at
+                                ? `Last fired ${fmt(health.automations.last_run_at)}${health.automations.last_status ? ` (${health.automations.last_status})` : ''}`
+                                : (health.automations.total === 0
+                                    ? 'No automations yet'
+                                    : 'Never fired')
+                            }
+                            jumpTab="automations"
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══ Create campaign modal ══ */}
+        {showCreateModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowCreateModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">New batch</h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                The batch starts as a draft. Add up to 6 posts (from Research or by URL), then click <b>Send</b> to start it.
+              </p>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Instagram account</label>
+                <select value={createAccount} onChange={e => setCreateAccount(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <option value="">— pick one —</option>
+                  {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                </select>
+              </div>
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 mb-1">Free text (appended to the auto-generated name)</label>
+                <input type="text" value={createFreeText} onChange={e => setCreateFreeText(e.target.value)}
+                  placeholder="e.g. fashion influencers"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                <p className="text-xs text-gray-400 mt-1">
+                  Name will be: <code className="bg-gray-100 px-1 rounded">@{createAccount || 'account'} {new Date().toLocaleDateString()} {new Date().toLocaleTimeString().slice(0,5)}{createFreeText ? ` — ${createFreeText}` : ''}</code>
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Concurrency (1–6)</label>
+                  <input type="number" min={1} max={6} value={createConcurrency}
+                    onChange={e => setCreateConcurrency(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Start at <span className="text-gray-400">(empty = ASAP after Send)</span></label>
+                  <input type="datetime-local" value={createStartAt}
+                    onChange={e => setCreateStartAt(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setShowCreateModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={createCampaign} disabled={createBusy}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {createBusy ? 'Creating…' : 'Create draft'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══ Add-to-campaign modal (from Research) ══ */}
+        {showAddToCampaign && (
+          <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4" onClick={() => setShowAddToCampaign(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Add to batch</h3>
+                <button onClick={() => setShowAddToCampaign(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">
+                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a batch. Each batch holds up to 6 posts total.
+              </p>
+              {actionCampaigns.filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6).length === 0 ? (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
+                  No batches available. <button className="underline" onClick={() => { setShowAddToCampaign(false); setShowCreateModal(true); }}>Create one first</button>.
+                </p>
+              ) : (
+                <>
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Batch</label>
+                    <select value={addToCampaignId} onChange={e => setAddToCampaignId(e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                      <option value="">— pick a batch —</option>
+                      {actionCampaigns
+                        .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6)
+                        .map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} — {c.status} ({c.items_count ?? 0}/6, room for {6 - (c.items_count ?? 0)})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Action type</label>
+                      <select value={addToActionType} onChange={e => setAddToActionType(e.target.value as 'like'|'reply')}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                        <option value="like">Like comments</option>
+                        <option value="reply">Reply to comments</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Count per post</label>
+                      <input type="number" min={1} max={100} value={addToCount}
+                        onChange={e => setAddToCount(e.target.value)}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                    </div>
+                  </div>
+                  {addToActionType === 'reply' && (
+                    <>
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Reply text source</label>
+                        <select value={addToReplySource} onChange={e => setAddToReplySource(e.target.value as 'default'|'custom'|'ai')}
+                          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                          <option value="default">Built-in defaults</option>
+                          <option value="custom">Custom text</option>
+                          {hasAiKey && <option value="ai">AI (your default provider)</option>}
+                        </select>
+                        {!hasAiKey && (
+                          <p className="text-xs text-gray-400 mt-1">Want AI-generated replies? Add a provider key in <button type="button" onClick={() => setTab('accounts')} className="underline text-blue-500">Accounts → AI providers</button>.</p>
+                        )}
+                      </div>
+                      {addToReplySource === 'custom' && (
+                        <div className="mb-3">
+                          <textarea value={addToReplyText} onChange={e => setAddToReplyText(e.target.value)}
+                            placeholder="Amazing! 🔥&#10;Love this 😍"
+                            rows={3}
+                            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+              <div className="flex gap-2 justify-end mt-2">
+                <button onClick={() => setShowAddToCampaign(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">Cancel</button>
+                <button onClick={submitAddToCampaign} disabled={addToBusy || !addToCampaignId}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {addToBusy ? 'Adding…' : 'Add to batch'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
         {/* ══════════════════════════════ CAMPAIGNS ══════════════════════════════ */}
         {tab === 'campaigns' && (
           <div className="space-y-3">
+
+            {/* Action campaigns header + create button */}
+            <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold text-gray-900">Action Batches <span className="text-gray-400 font-normal">({actionCampaigns.length})</span></h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={loadActionCampaigns} className="text-gray-400 hover:text-gray-600" title="Refresh">
+                    <RefreshCw size={16} />
+                  </button>
+                  <button onClick={() => { setCreateAccount(igAccounts[0] || ''); setShowCreateModal(true); }}
+                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1">
+                    <Plus size={14} /> New batch
+                  </button>
+                </div>
+              </div>
+              {actionCampaigns.length === 0 ? (
+                <p className="text-gray-400 text-sm py-6 text-center">No batches yet. Click <b>+ New batch</b> to create your first one.</p>
+              ) : (
+                <div className="space-y-2">
+                  {actionCampaigns.map(c => {
+                    const elapsedMs = c.started_at && c.ended_at
+                      ? new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()
+                      : c.started_at ? Date.now() - new Date(c.started_at).getTime() : 0;
+                    const minutes = Math.max(0, Math.round(elapsedMs / 60000));
+                    const pct = c.total_requested > 0 ? Math.round((c.total_completed / c.total_requested) * 100) : 0;
+                    const isExpanded = expandedCampaign === c.id;
+                    return (
+                      <div key={c.id} className="border border-gray-100 rounded-lg">
+                        <div className="p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <button onClick={() => {
+                              if (isExpanded) { setExpandedCampaign(null); }
+                              else { setExpandedCampaign(c.id); loadExpandedItems(c.id); }
+                            }} className="flex items-center gap-2 text-left flex-1">
+                              <ChevronDown size={14} className={`text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                              <span className="font-medium text-gray-900 text-sm">{c.name || `Batch ${c.id.slice(0, 8)}`}</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                c.status === 'draft'     ? 'bg-amber-100 text-amber-700'  :
+                                c.status === 'completed' ? 'bg-green-100 text-green-700'  :
+                                c.status === 'running'   ? 'bg-blue-100 text-blue-700'    :
+                                c.status === 'paused'    ? 'bg-yellow-100 text-yellow-700':
+                                c.status === 'cancelled' ? 'bg-gray-100 text-gray-600'    :
+                                c.status === 'failed'    ? 'bg-red-100 text-red-700'      :
+                                                           'bg-gray-100 text-gray-600'
+                              }`}>{c.status}</span>
+                              <span className="text-xs text-gray-500">{c.items_count ?? 0}/6 posts</span>
+                            </button>
+                            <div className="flex items-center gap-2">
+                              {c.status === 'draft' && (
+                                <button onClick={() => sendCampaign(c.id)}
+                                  className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Send</button>
+                              )}
+                              {(c.status === 'running' || c.status === 'pending') && (
+                                <button onClick={() => cancelActionCampaign(c.id)}
+                                  className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                              )}
+                              {(c.status === 'paused' || c.status === 'failed') && (
+                                <button onClick={() => resumeActionCampaign(c.id)}
+                                  className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
+                              )}
+                              <button onClick={() => duplicateCampaign(c.id)} title="Duplicate into new draft"
+                                className="text-gray-400 hover:text-blue-600"><Copy size={14} /></button>
+                              <button onClick={() => deleteCampaign(c.id)} title="Delete"
+                                className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                            </div>
+                          </div>
+                          {c.status !== 'draft' && (
+                            <>
+                              <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2 pl-6">
+                                <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
+                                {c.as_account && <span>@{c.as_account}</span>}
+                                <span>Concurrency: {c.concurrency}</span>
+                                {c.start_at && !c.started_at && <span className="text-amber-600">Scheduled: {fmt(c.start_at)}</span>}
+                                {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
+                                {c.ended_at && <span>Ended: {fmt(c.ended_at)}</span>}
+                                {c.started_at && <span>Elapsed: {minutes} min</span>}
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden ml-6" style={{width: 'calc(100% - 1.5rem)'}}>
+                                <div className={`h-full ${c.status === 'paused' || c.status === 'failed' ? 'bg-red-400' : c.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${pct}%` }} />
+                              </div>
+                            </>
+                          )}
+                          {c.error_message && <p className="text-xs text-red-600 mt-2 pl-6">{c.error_message}</p>}
+                        </div>
+
+                        {/* Expanded detail view */}
+                        {isExpanded && (
+                          <div className="border-t border-gray-100 p-3 bg-gray-50">
+                            {/* Scheduled start time — editable while draft or pending */}
+                            {(c.status === 'draft' || c.status === 'pending') && (
+                              <div className="flex items-center gap-2 mb-3 text-xs">
+                                <label className="text-gray-600 whitespace-nowrap">Scheduled start:</label>
+                                <input type="datetime-local"
+                                  defaultValue={c.start_at ? new Date(c.start_at).toISOString().slice(0, 16) : ''}
+                                  onBlur={(e) => {
+                                    const next = e.target.value;
+                                    const curr = c.start_at ? new Date(c.start_at).toISOString().slice(0, 16) : '';
+                                    if (next !== curr) patchCampaignStartAt(c.id, next);
+                                  }}
+                                  className="border border-gray-200 rounded px-2 py-1 text-xs bg-white" />
+                                <span className="text-gray-400">(leave empty for ASAP after Send)</span>
+                              </div>
+                            )}
+                            {expandedItems.length === 0 ? (
+                              <p className="text-xs text-gray-500 py-2">No posts yet. Add one below.</p>
+                            ) : (
+                              <table className="w-full text-sm mb-3">
+                                <thead>
+                                  <tr className="text-left text-xs text-gray-500">
+                                    <th className="py-1 pr-2 font-medium">Post</th>
+                                    <th className="py-1 pr-2 font-medium">Action</th>
+                                    <th className="py-1 pr-2 font-medium w-20">Count</th>
+                                    <th className="py-1 pr-2 font-medium">Status</th>
+                                    <th className="py-1 pr-2 font-medium w-8"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {expandedItems.map(it => {
+                                    // Pretty summary of the current reply config (shown on Reply rows).
+                                    let replySummary = '';
+                                    if (it.action_type === 'reply') {
+                                      if (it.reply_source === 'custom') {
+                                        let arr: string[] = [];
+                                        if (it.reply_texts) { try { arr = JSON.parse(it.reply_texts) || []; } catch (_) {} }
+                                        replySummary = arr.length > 0
+                                          ? `custom (${arr.length} variant${arr.length === 1 ? '' : 's'})`
+                                          : 'custom (empty!)';
+                                      } else if (it.reply_source === 'ai') {
+                                        replySummary = 'AI (default provider)';
+                                      } else {
+                                        replySummary = 'default replies';
+                                      }
+                                    }
+                                    const isEditingReply = editingReplyItemId === it.id;
+                                    return (
+                                      <Fragment key={it.id}>
+                                        <tr className="border-t border-gray-200">
+                                          <td className="py-1.5 pr-2">
+                                            <a href={it.post_url} target="_blank" rel="noreferrer"
+                                              className="text-blue-600 hover:underline text-xs flex items-center gap-1">
+                                              {it.post_url.match(/\/(p|reel)\/([\w-]+)/)?.[2] || it.post_url.slice(-15)}
+                                              <ExternalLink size={10} />
+                                            </a>
+                                          </td>
+                                          <td className="py-1.5 pr-2 text-gray-600 capitalize text-xs">
+                                            {it.action_type}
+                                            {it.action_type === 'reply' && (
+                                              <span className={`block text-[10px] font-normal ${it.reply_source === 'custom' && (!it.reply_texts || it.reply_texts === '[]') ? 'text-orange-600' : 'text-gray-400'}`}>
+                                                {replySummary}
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            {it.status === 'pending' ? (
+                                              <input type="number" min={1} max={100} defaultValue={it.count_requested}
+                                                onBlur={e => {
+                                                  const v = parseInt(e.target.value, 10);
+                                                  if (v !== it.count_requested && v >= 1) patchItemCount(c.id, it.id, v);
+                                                }}
+                                                className="w-16 border border-gray-200 rounded px-1 py-0.5 text-xs bg-white" />
+                                            ) : (
+                                              <span className="text-xs text-gray-600">{it.count_done}/{it.count_requested}</span>
+                                            )}
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                                              it.status === 'completed' ? 'bg-green-100 text-green-700' :
+                                              it.status === 'partial'   ? 'bg-orange-100 text-orange-700' :
+                                              it.status === 'no_targets'? 'bg-yellow-100 text-yellow-700' :
+                                              it.status === 'running'   ? 'bg-blue-100 text-blue-700'   :
+                                              it.status === 'claimed'   ? 'bg-blue-50 text-blue-600'    :
+                                              it.status === 'failed'    ? 'bg-red-100 text-red-700'     :
+                                              it.status === 'cancelled' ? 'bg-gray-100 text-gray-600'   :
+                                                                          'bg-amber-100 text-amber-700'
+                                            }`} title={(it.status === 'partial' || it.status === 'failed') ? (it.error_message || '') : ''}>
+                                              {it.status === 'partial' ? `partial (${it.count_done}/${it.count_requested})` : it.status}
+                                            </span>
+                                          </td>
+                                          <td className="py-1.5 pr-2">
+                                            {it.status === 'pending' && (
+                                              <div className="flex items-center gap-1 justify-end">
+                                                {it.action_type === 'reply' && !isEditingReply && (
+                                                  <button onClick={() => startEditReply(it)} title="Edit reply text"
+                                                    className="text-gray-400 hover:text-blue-600"><Pencil size={12} /></button>
+                                                )}
+                                                <button onClick={() => removeItem(c.id, it.id)} title="Remove"
+                                                  className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
+                                              </div>
+                                            )}
+                                          </td>
+                                        </tr>
+                                        {isEditingReply && (
+                                          <tr className="border-t border-gray-200 bg-blue-50">
+                                            <td colSpan={5} className="py-2 px-3">
+                                              <div className="flex gap-2 items-start mb-2">
+                                                <select value={editReplySource}
+                                                  onChange={e => setEditReplySource(e.target.value as 'default'|'custom'|'ai')}
+                                                  className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+                                                  <option value="default">Default replies</option>
+                                                  <option value="custom">Custom text</option>
+                                                  {hasAiKey && <option value="ai">AI (default provider)</option>}
+                                                </select>
+                                                {editReplySource === 'custom' && (
+                                                  <textarea rows={2}
+                                                    placeholder={'One reply per line\nAmazing! 🔥\nLove this 😍'}
+                                                    value={editReplyText}
+                                                    onChange={e => setEditReplyText(e.target.value)}
+                                                    className="flex-1 border border-gray-200 rounded px-2 py-1 text-xs bg-white" />
+                                                )}
+                                              </div>
+                                              <div className="flex gap-2 justify-end">
+                                                <button onClick={cancelEditReply}
+                                                  className="text-xs px-3 py-1 bg-white border border-gray-200 text-gray-600 rounded hover:bg-gray-50">Cancel</button>
+                                                <button onClick={() => saveEditReply(c.id, it.id)}
+                                                  className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            )}
+
+                            {/* Add by URL form */}
+                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6 && (() => {
+                              // Compute whether the form is valid; disable Add button until it is.
+                              const customMissing = byUrlActionType === 'reply'
+                                && byUrlReplySource === 'custom'
+                                && byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length === 0;
+                              const urlMissing = !byUrlInput.trim();
+                              const canAdd = !byUrlBusy && !urlMissing && !customMissing;
+                              return (
+                                <div className="border-t border-gray-200 pt-3">
+                                  <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({6 - (c.items_count ?? 0)} slot{6 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
+                                  <div className="flex flex-wrap gap-2 items-end">
+                                    <input type="text" placeholder="https://www.instagram.com/p/SHORTCODE/"
+                                      value={byUrlInput} onChange={e => setByUrlInput(e.target.value)}
+                                      className="flex-1 min-w-[200px] border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                    <select value={byUrlActionType} onChange={e => setByUrlActionType(e.target.value as 'like'|'reply')}
+                                      className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
+                                      <option value="like">Like</option>
+                                      <option value="reply">Reply</option>
+                                    </select>
+                                    <input type="number" min={1} max={100} value={byUrlCount}
+                                      onChange={e => setByUrlCount(e.target.value)}
+                                      className="w-16 border border-gray-200 rounded px-2 py-1.5 text-sm bg-white" />
+                                    <button onClick={() => addByUrl(c.id)} disabled={!canAdd}
+                                      title={customMissing ? 'Type at least one custom reply first' : (urlMissing ? 'Paste a post URL first' : '')}
+                                      className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                      {byUrlBusy ? 'Adding…' : 'Add'}
+                                    </button>
+                                  </div>
+                                  {byUrlActionType === 'reply' && (
+                                    <div className="mt-2 space-y-2">
+                                      <div className="flex gap-2 items-start">
+                                        <select value={byUrlReplySource} onChange={e => setByUrlReplySource(e.target.value as 'default'|'custom'|'ai')}
+                                          className="border border-gray-200 rounded px-2 py-1.5 text-sm bg-white">
+                                          <option value="default">Default replies</option>
+                                          <option value="custom">Custom text</option>
+                                          {hasAiKey && <option value="ai">AI (default provider)</option>}
+                                        </select>
+                                        {byUrlReplySource === 'custom' && (
+                                          <textarea
+                                            placeholder={'One reply per line, e.g.:\nAmazing! 🔥\nLove this 😍\nSo true'}
+                                            rows={3}
+                                            value={byUrlReplyText} onChange={e => setByUrlReplyText(e.target.value)}
+                                            className={`flex-1 border rounded px-2 py-1.5 text-sm bg-white ${customMissing ? 'border-orange-400' : 'border-gray-200'}`} />
+                                        )}
+                                      </div>
+                                      {byUrlReplySource === 'custom' && customMissing && (
+                                        <p className="text-xs text-orange-600">Type at least one reply (one per line) — then click Add.</p>
+                                      )}
+                                      {byUrlReplySource === 'custom' && !customMissing && (
+                                        <p className="text-xs text-gray-500">{byUrlReplyText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length} reply variant(s) — one picked at random per comment.</p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {campaigns.map(c => (
               <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
                 <div className="flex items-center justify-between mb-3">

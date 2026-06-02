@@ -62,6 +62,7 @@ const instagramRouter = require('./routes/instagram');
 app.use('/api/instagram',      instagramRouter);
 app.use('/api/linkedin',       require('./routes/linkedin'));
 app.use('/api/contacts',       require('./routes/contacts'));
+app.use('/api/ai',             require('./routes/ai'));
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');
@@ -79,7 +80,7 @@ if (tgBot.enabled && process.env.TELEGRAM_WEBHOOK_URL && process.env.TELEGRAM_BO
 const fetch = require('node-fetch');
 const SETUP_SECRET = process.env.SETUP_SECRET || 'bibix-setup-2026';
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', pid: process.pid, v: 4 }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', pid: process.pid, v: 5 }));
 
 app.get('/api/ping', (req, res) => res.json({ ok: true, pid: process.pid }));
 
