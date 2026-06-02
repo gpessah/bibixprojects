@@ -1066,27 +1066,31 @@
     }
     if (!headline && titleHeadline) headline = titleHeadline;
     if (!headline) {
-      // Walk up h1's ancestors and parse innerText into lines; the headline
-      // is the first non-trivial line right after the name.
+      // Geometric extraction: find a leaf-text element visually positioned
+      // just below the h1, regardless of class names. Works for any
+      // LinkedIn layout / locale / A-B variant because we rely on actual
+      // rendered position rather than markup.
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
       if (h1) {
-        let p = h1.parentElement;
-        for (let i = 0; i < 5 && p && !headline; i++) {
-          const lines = (p.innerText || '').split(/\n+/).map((l) => l.trim()).filter(Boolean);
-          const nameIdx = lines.findIndex((l) => l.includes(fullName.split(' ')[0]) && l.includes(fullName.split(' ').slice(-1)[0]));
-          if (nameIdx >= 0) {
-            for (let j = nameIdx + 1; j < Math.min(nameIdx + 6, lines.length); j++) {
-              const l = lines[j];
-              if (l.length < 8 || l.length > 400) continue;
-              if (/^[·•]/.test(l) || /^\d/.test(l)) continue;
-              if (/\b(connections?|followers?|mutual|premium|trial|degree)\b/i.test(l)) continue;
-              if (/^Contact info/i.test(l)) continue;
-              if (l === fullName) continue;
-              headline = l; break;
-            }
-          }
-          p = p.parentElement;
-        }
+        const h1Rect = h1.getBoundingClientRect();
+        const candidates = [];
+        document.querySelectorAll('main div, main span, main p').forEach((el) => {
+          if (el.children.length > 0) return; // leaf nodes only
+          const r = el.getBoundingClientRect();
+          if (r.height < 10 || r.height > 60) return;
+          if (r.top < h1Rect.bottom - 4 || r.top > h1Rect.bottom + 120) return;
+          // Must overlap horizontally with the h1
+          if (r.right < h1Rect.left || r.left > h1Rect.right) return;
+          const t = (el.innerText || '').trim();
+          if (!t || t === fullName) return;
+          if (t.length < 6 || t.length > 400) return;
+          if (/^[·•]/.test(t)) return;
+          if (/^\d/.test(t)) return;
+          if (/\b(connections?|followers?|mutual|premium|trial|degree)\b/i.test(t)) return;
+          candidates.push({ top: r.top, text: t });
+        });
+        candidates.sort((a, b) => a.top - b.top);
+        if (candidates[0]) headline = candidates[0].text;
       }
     }
 
@@ -1376,7 +1380,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.7)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.8)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
