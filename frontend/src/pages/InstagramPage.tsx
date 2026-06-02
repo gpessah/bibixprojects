@@ -76,6 +76,8 @@ interface ActionCampaign {
 interface ActionCampaignSummary extends ActionCampaign {
   items_count: number;
   as_account: string | null;
+  followers_back?: number;
+  engagement_back?: number;
 }
 interface ActionItem {
   id: string; campaign_id: string; user_id: string; as_account: string;
@@ -119,6 +121,7 @@ interface Action {
 interface Campaign {
   id: string; type: string; status: string; actions_count: number;
   new_followers: number; started_at: string; ended_at: string | null; notes: string | null;
+  post_urls?: string[]; my_profile?: string | null; engagement_back?: number;
 }
 
 interface Stats {
@@ -3458,7 +3461,14 @@ export default function InstagramPage() {
                             <>
                               <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2 pl-6">
                                 <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
-                                {c.as_account && <span>@{c.as_account}</span>}
+                                {c.as_account && <span>👤 @{c.as_account}</span>}
+                                <span className="text-green-600">💚 +{c.followers_back || 0} followers back</span>
+                                <span className="text-blue-600">💬 +{c.engagement_back || 0} engagement back</span>
+                                {c.total_completed > 0 && (
+                                  <span className="text-purple-600">
+                                    📊 {((((c.followers_back || 0) + (c.engagement_back || 0)) / c.total_completed) * 100).toFixed(1)}% conv.
+                                  </span>
+                                )}
                                 <span>Concurrency: {c.concurrency}</span>
                                 {c.start_at && !c.started_at && <span className="text-amber-600">Scheduled: {fmt(c.start_at)}</span>}
                                 {c.started_at && <span>Started: {fmt(c.started_at)}</span>}
@@ -3681,33 +3691,78 @@ export default function InstagramPage() {
               )}
             </div>
 
-            {campaigns.map(c => (
-              <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold text-gray-900 capitalize">{TYPE_LABEL[c.type] || c.type}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-600'}`}>
-                      {c.status}
-                    </span>
-                  </div>
-                  <span className="text-sm text-gray-400">{fmt(c.started_at)}</span>
-                </div>
-                <div className="flex gap-6 text-sm">
-                  <div><span className="text-gray-500">Actions:</span> <span className="font-semibold">{c.actions_count}</span></div>
-                  <div><span className="text-gray-500">New followers:</span> <span className="font-semibold text-green-600">+{c.new_followers}</span></div>
-                  {c.ended_at && <div><span className="text-gray-500">Ended:</span> <span className="font-semibold">{fmt(c.ended_at)}</span></div>}
-                  {c.ended_at && c.started_at && (
-                    <div>
-                      <span className="text-gray-500">Duration:</span>{' '}
-                      <span className="font-semibold">
-                        {Math.round((new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()) / 60000)} min
+            {campaigns.map(c => {
+              // Extract shortcode from IG post URL for compact display.
+              const shortcode = (u: string) => {
+                const m = u.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+                return m ? m[1] : u;
+              };
+              const posts = c.post_urls || [];
+              return (
+                <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="font-semibold text-gray-900 capitalize">{TYPE_LABEL[c.type] || c.type}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-600'}`}>
+                        {c.status}
                       </span>
+                      {c.my_profile && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-medium">
+                          👤 @{c.my_profile}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-sm text-gray-400">{fmt(c.started_at)}</span>
+                  </div>
+
+                  {posts.length > 0 && (
+                    <div className="text-sm mb-2">
+                      <span className="text-gray-500">📍 Post{posts.length > 1 ? 's' : ''}:</span>{' '}
+                      {posts.length === 1 ? (
+                        <a href={posts[0]} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-mono text-xs">
+                          {shortcode(posts[0])}
+                        </a>
+                      ) : (
+                        <span className="text-gray-700">
+                          {posts.slice(0, 3).map((p, i) => (
+                            <span key={p}>
+                              <a href={p} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-mono text-xs">
+                                {shortcode(p)}
+                              </a>
+                              {i < Math.min(posts.length, 3) - 1 ? ', ' : ''}
+                            </span>
+                          ))}
+                          {posts.length > 3 && <span className="text-gray-400"> +{posts.length - 3} more</span>}
+                        </span>
+                      )}
                     </div>
                   )}
+
+                  <div className="flex gap-6 text-sm flex-wrap">
+                    <div><span className="text-gray-500">Performed:</span> <span className="font-semibold">{c.actions_count}</span></div>
+                    <div><span className="text-gray-500">Followers back:</span> <span className="font-semibold text-green-600">+{c.new_followers}</span></div>
+                    <div><span className="text-gray-500">Engagement back:</span> <span className="font-semibold text-blue-600">+{c.engagement_back || 0}</span></div>
+                    {c.actions_count > 0 && (
+                      <div>
+                        <span className="text-gray-500">Conversion:</span>{' '}
+                        <span className="font-semibold text-purple-600">
+                          {(((c.new_followers + (c.engagement_back || 0)) / c.actions_count) * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
+                    {c.ended_at && c.started_at && (
+                      <div>
+                        <span className="text-gray-500">Duration:</span>{' '}
+                        <span className="font-semibold">
+                          {Math.round((new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()) / 60000)} min
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  {c.notes && <p className="text-sm text-gray-500 mt-2">{c.notes}</p>}
                 </div>
-                {c.notes && <p className="text-sm text-gray-500 mt-2">{c.notes}</p>}
-              </div>
-            ))}
+              );
+            })}
             {campaigns.length === 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
                 <Users size={32} className="text-gray-300 mx-auto mb-3" />

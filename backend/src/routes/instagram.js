@@ -384,6 +384,40 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     WHERE ic.user_id = ?
     ORDER BY ic.started_at DESC
   `).all(uid);
+
+  // Enrich each row with:
+  //   • post_urls  — distinct posts touched by this campaign's actions
+  //   • my_profile — which IG account performed the actions
+  //   • engagement_back — count of received_* events from users we engaged
+  //                       with in this campaign, after the campaign started.
+  //                       Captures likes/replies/follows that came back as
+  //                       a direct result of this outreach.
+  //
+  // Done as small per-row sub-queries (cheap on SQLite at <200 campaigns).
+  const enrichMeta = db.prepare(`
+    SELECT GROUP_CONCAT(DISTINCT post_url) AS posts,
+           MAX(my_profile) AS my_profile
+    FROM instagram_actions
+    WHERE campaign_id = ? AND user_id = ? AND post_url IS NOT NULL
+  `);
+  const enrichEngagementBack = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_actions r
+    WHERE r.user_id = ?
+      AND r.action_type LIKE 'received_%'
+      AND datetime(r.action_date) >= datetime(?)
+      AND r.target_username IN (
+        SELECT DISTINCT target_username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      )
+  `);
+  for (const c of rows) {
+    const meta = enrichMeta.get(c.id, uid);
+    c.post_urls = meta?.posts ? meta.posts.split(',').filter(Boolean) : [];
+    c.my_profile = meta?.my_profile || null;
+    const eb = enrichEngagementBack.get(uid, c.started_at || c.created_at || new Date().toISOString(), c.id, uid);
+    c.engagement_back = eb?.n || 0;
+  }
+
   res.json(rows);
 });
 
@@ -1458,6 +1492,40 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     WHERE c.user_id = ?
     ORDER BY c.created_at DESC LIMIT 100
   `).all(uid);
+
+  // Enrich each batch with conversion metrics: how many of the people we
+  // engaged with came back as followers / engagement events. Same shape as
+  // the legacy /campaigns enrichment so the UI can render both consistently.
+  const followersBack = db.prepare(`
+    SELECT COUNT(DISTINCT r.target_username) AS n
+    FROM instagram_actions r
+    WHERE r.user_id = ?
+      AND r.action_type = 'new_follower'
+      AND datetime(r.action_date) >= datetime(?)
+      AND r.target_username IN (
+        SELECT DISTINCT target_username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      )
+  `);
+  const engagementBack = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_actions r
+    WHERE r.user_id = ?
+      AND r.action_type LIKE 'received_%'
+      AND datetime(r.action_date) >= datetime(?)
+      AND r.target_username IN (
+        SELECT DISTINCT target_username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      )
+  `);
+  for (const c of rows) {
+    // Use started_at if set, otherwise created_at as the attribution window.
+    const since = c.started_at || c.created_at || new Date().toISOString();
+    const fb = followersBack.get(uid, since, c.id, uid);
+    const eb = engagementBack.get(uid, since, c.id, uid);
+    c.followers_back = fb?.n || 0;
+    c.engagement_back = eb?.n || 0;
+  }
+
   res.json(rows);
 });
 
