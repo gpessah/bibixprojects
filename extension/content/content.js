@@ -1066,31 +1066,34 @@
     }
     if (!headline && titleHeadline) headline = titleHeadline;
     if (!headline) {
-      // Geometric extraction: find a leaf-text element visually positioned
-      // just below the h1, regardless of class names. Works for any
-      // LinkedIn layout / locale / A-B variant because we rely on actual
-      // rendered position rather than markup.
+      // Geometric headline extraction. Find an element positioned just
+      // below the h1, overlapping it horizontally, whose first text line
+      // looks like a headline. Works regardless of class names or locale.
       const h1 = document.querySelector('main h1') || document.querySelector('h1');
       if (h1) {
         const h1Rect = h1.getBoundingClientRect();
         const candidates = [];
         document.querySelectorAll('main div, main span, main p').forEach((el) => {
-          if (el.children.length > 0) return; // leaf nodes only
           const r = el.getBoundingClientRect();
-          if (r.height < 10 || r.height > 60) return;
-          if (r.top < h1Rect.bottom - 4 || r.top > h1Rect.bottom + 120) return;
-          // Must overlap horizontally with the h1
-          if (r.right < h1Rect.left || r.left > h1Rect.right) return;
+          if (r.width < 50 || r.height < 14 || r.height > 200) return;
+          if (r.top < h1Rect.bottom - 4 || r.top > h1Rect.bottom + 100) return;
+          if (r.right < h1Rect.left || r.left > h1Rect.right + 100) return;
           const t = (el.innerText || '').trim();
           if (!t || t === fullName) return;
-          if (t.length < 6 || t.length > 400) return;
-          if (/^[·•]/.test(t)) return;
-          if (/^\d/.test(t)) return;
-          if (/\b(connections?|followers?|mutual|premium|trial|degree)\b/i.test(t)) return;
-          candidates.push({ top: r.top, text: t });
+          const firstLine = t.split('\n')[0].trim();
+          if (firstLine.length < 6 || firstLine.length > 400) return;
+          if (/^[·•]/.test(firstLine)) return;
+          if (/^\d/.test(firstLine)) return;
+          if (/^(?:connections?|followers?|mutual|premium|trial|verified|message|connect|follow|contact info)\b/i.test(firstLine)) return;
+          if (/\b(connections?|followers?|mutual|degree)\b/i.test(firstLine)) return;
+          candidates.push({ top: r.top, area: r.width * r.height, firstLine, text: t });
         });
-        candidates.sort((a, b) => a.top - b.top);
-        if (candidates[0]) headline = candidates[0].text;
+        // Prefer top-most, then most-specific (smallest bounding box) at that level.
+        candidates.sort((a, b) => {
+          if (Math.abs(a.top - b.top) > 6) return a.top - b.top;
+          return a.area - b.area;
+        });
+        if (candidates[0]) headline = candidates[0].firstLine;
       }
     }
 
@@ -1380,7 +1383,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.8)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.9)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
