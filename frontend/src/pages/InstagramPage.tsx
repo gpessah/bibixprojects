@@ -976,10 +976,10 @@ export default function InstagramPage() {
   }, [tab]);
 
   // ── Action campaigns (drafts that you build up, then Send) ───────────────
-  // Flow: create empty draft → add up to 6 items (from Research or by URL)
+  // Flow: create empty draft → add up to 20 items (from Research or by URL)
   // → click Send → extension picks it up. Items can be edited (count) or
   // removed while still 'pending'; new items can be appended even after Send
-  // (up to the 6-cap), as long as the campaign isn't completed/cancelled.
+  // (up to the 20-cap), as long as the campaign isn't completed/cancelled.
   const [selectedPosts, setSelectedPosts] = useState<Set<string>>(new Set());
   const [actionCampaigns, setActionCampaigns] = useState<ActionCampaignSummary[]>([]);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
@@ -1072,7 +1072,7 @@ export default function InstagramPage() {
   function openAddToCampaign() {
     // Default to the most-recent draft if any, else first non-completed campaign
     const eligible = actionCampaigns.filter(c =>
-      c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6
+      c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 20
     );
     setAddToCampaignId(eligible[0]?.id || '');
     setShowAddToCampaign(true);
@@ -1084,7 +1084,7 @@ export default function InstagramPage() {
     const selected = viewingPosts.filter(p => selectedPosts.has(p.id));
     if (selected.length === 0) { alert('No posts selected.'); return; }
     const camp = actionCampaigns.find(c => c.id === addToCampaignId);
-    const remaining = camp ? 6 - (camp.items_count ?? 0) : 6;
+    const remaining = camp ? 20 - (camp.items_count ?? 0) : 20;
     if (selected.length > remaining) {
       alert(`That batch has room for only ${remaining} more post(s). You selected ${selected.length}. Remove some or create a new batch.`);
       return;
@@ -1096,7 +1096,7 @@ export default function InstagramPage() {
     }
     setAddToBusy(true);
     try {
-      // Add items sequentially to keep the 6-cap consistent. (Parallel would
+      // Add items sequentially to keep the 20-cap consistent. (Parallel would
       // race on the server-side count check.)
       for (const p of selected) {
         await api.post(`/instagram/action-campaigns/${addToCampaignId}/items${qs}`, {
@@ -3260,7 +3260,7 @@ export default function InstagramPage() {
                 <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                The batch starts as a draft. Add up to 6 posts (from Research or by URL), then click <b>Send</b> to start it.
+                The batch starts as a draft. Add up to 20 posts (from Research or by URL), then click <b>Send</b> to start it.
               </p>
               <div className="mb-3">
                 <label className="block text-xs font-medium text-gray-500 mb-1">Instagram account</label>
@@ -3313,9 +3313,9 @@ export default function InstagramPage() {
                 <button onClick={() => setShowAddToCampaign(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a batch. Each batch holds up to 6 posts total.
+                Adding <b>{selectedPosts.size}</b> post{selectedPosts.size === 1 ? '' : 's'} to a batch. Each batch holds up to 20 posts total.
               </p>
-              {actionCampaigns.filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6).length === 0 ? (
+              {actionCampaigns.filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 20).length === 0 ? (
                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3">
                   No batches available. <button className="underline" onClick={() => { setShowAddToCampaign(false); setShowCreateModal(true); }}>Create one first</button>.
                 </p>
@@ -3327,10 +3327,10 @@ export default function InstagramPage() {
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
                       <option value="">— pick a batch —</option>
                       {actionCampaigns
-                        .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6)
+                        .filter(c => c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 20)
                         .map(c => (
                           <option key={c.id} value={c.id}>
-                            {c.name} — {c.status} ({c.items_count ?? 0}/6, room for {6 - (c.items_count ?? 0)})
+                            {c.name} — {c.status} ({c.items_count ?? 0}/20, room for {20 - (c.items_count ?? 0)})
                           </option>
                         ))}
                     </select>
@@ -3436,7 +3436,7 @@ export default function InstagramPage() {
                                 c.status === 'failed'    ? 'bg-red-100 text-red-700'      :
                                                            'bg-gray-100 text-gray-600'
                               }`}>{c.status}</span>
-                              <span className="text-xs text-gray-500">{c.items_count ?? 0}/6 posts</span>
+                              <span className="text-xs text-gray-500">{c.items_count ?? 0}/20 posts</span>
                             </button>
                             <div className="flex items-center gap-2">
                               {c.status === 'draft' && (
@@ -3635,7 +3635,7 @@ export default function InstagramPage() {
                             )}
 
                             {/* Add by URL form */}
-                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 6 && (() => {
+                            {c.status !== 'completed' && c.status !== 'cancelled' && (c.items_count ?? 0) < 20 && (() => {
                               // Compute whether the form is valid; disable Add button until it is.
                               const customMissing = byUrlActionType === 'reply'
                                 && byUrlReplySource === 'custom'
@@ -3644,7 +3644,7 @@ export default function InstagramPage() {
                               const canAdd = !byUrlBusy && !urlMissing && !customMissing;
                               return (
                                 <div className="border-t border-gray-200 pt-3">
-                                  <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({6 - (c.items_count ?? 0)} slot{6 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
+                                  <p className="text-xs font-medium text-gray-700 mb-2">+ Add post by URL ({20 - (c.items_count ?? 0)} slot{20 - (c.items_count ?? 0) === 1 ? '' : 's'} left)</p>
                                   <div className="flex flex-wrap gap-2 items-end">
                                     <input type="text" placeholder="https://www.instagram.com/p/SHORTCODE/"
                                       value={byUrlInput} onChange={e => setByUrlInput(e.target.value)}

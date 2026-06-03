@@ -1462,9 +1462,11 @@ router.post('/action-campaigns', authenticateFlexible, (req, res) => {
     VALUES (?, ?, ?, ?, 'draft', 0, ?, ?)
   `).run(cid, uid, finalName, cleanedAcct, conc, start_at || null);
 
-  // Optionally seed with items if the caller passed any. Enforce the 6-item cap.
+  // Optionally seed with items if the caller passed any. Enforce the 20-item cap.
+  // (Was 6 — raised so users can spread 800+ likes across enough posts to
+  // overcome the per-post dedup loss.)
   if (Array.isArray(items) && items.length > 0) {
-    if (items.length > 6) return res.status(400).json({ error: 'A campaign can hold at most 6 items.' });
+    if (items.length > 20) return res.status(400).json({ error: 'A campaign can hold at most 20 items.' });
     const insertItem = db.prepare(`
       INSERT INTO instagram_action_queue
         (id, campaign_id, user_id, as_account, post_url, action_type, count_requested, reply_source, reply_texts)
@@ -1542,7 +1544,7 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
 });
 
 // Add a single item to an existing campaign (draft or pending/running).
-// Enforces the per-campaign 6-item cap.
+// Enforces the per-campaign 20-item cap.
 router.post('/action-campaigns/:id/items', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const cid = req.params.id;
@@ -1552,7 +1554,7 @@ router.post('/action-campaigns/:id/items', authenticateFlexible, (req, res) => {
     return res.status(400).json({ error: 'Cannot add items to a completed or cancelled campaign.' });
   }
   const current = db.prepare('SELECT COUNT(*) AS n FROM instagram_action_queue WHERE campaign_id = ?').get(cid);
-  if ((current?.n || 0) >= 6) return res.status(400).json({ error: 'Campaign already has 6 items (max).' });
+  if ((current?.n || 0) >= 20) return res.status(400).json({ error: 'Campaign already has 20 items (max).' });
 
   const { post_url, action_type, count, reply_source, reply_texts, as_account } = req.body || {};
   if (!post_url) return res.status(400).json({ error: 'post_url required' });
