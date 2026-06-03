@@ -3590,6 +3590,15 @@ export default function InstagramPage() {
                                             )}
                                           </td>
                                         </tr>
+                                        {/* Inline error row for failed/partial items so the user
+                                            doesn't have to hover the status badge to see why. */}
+                                        {(it.status === 'failed' || it.status === 'partial' || it.status === 'no_targets') && it.error_message && (
+                                          <tr>
+                                            <td colSpan={5} className="py-1 pl-4 pr-2">
+                                              <p className="text-xs text-red-600">⚠ {it.error_message}</p>
+                                            </td>
+                                          </tr>
+                                        )}
                                         {isEditingReply && (
                                           <tr className="border-t border-gray-200 bg-blue-50">
                                             <td colSpan={5} className="py-2 px-3">
