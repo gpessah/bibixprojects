@@ -204,6 +204,12 @@ try { db.exec('ALTER TABLE instagram_automations ADD COLUMN is_system INTEGER NO
 // LOCAL time in this offset, so "Daily 10:00" fires at 10:00 the user's
 // time regardless of the server's own timezone. Default 0 = treat as UTC.
 try { db.exec('ALTER TABLE instagram_automations ADD COLUMN tz_offset_minutes INTEGER NOT NULL DEFAULT 0'); } catch (_) {}
+// parent_queue_id: when an action-queue batch item dispatches and the content
+// script calls startCampaign, the resulting instagram_campaigns row gets
+// tagged with the originating queue item id. The /campaigns list endpoint
+// excludes these so batch sub-sessions don't pollute the "manual" section
+// (they're already represented by their parent action_campaign row).
+try { db.exec('ALTER TABLE instagram_campaigns ADD COLUMN parent_queue_id TEXT'); } catch (_) {}
 // Remembered per-user default offset so server-created system automations
 // can use the right timezone too.
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_tz_offset_minutes INTEGER'); } catch (_) {}
@@ -337,13 +343,16 @@ router.get("/actions", authenticateFlexible, (req, res) => {
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 router.post("/campaigns", authenticateFlexible, (req, res) => {
-  const { id: providedId, type, notes } = req.body;
+  const { id: providedId, type, notes, parent_queue_id } = req.body;
   if (!type) return res.status(400).json({ error: 'type required' });
   // Same idempotency as /actions — accept client-provided id so dual-write
   // to prod+staging produces matching rows on both backends.
+  // parent_queue_id tags a campaign as a sub-session of an action-queue
+  // batch item, so the unified activity feed can dedupe (the parent
+  // action-campaign row already represents this work).
   const id = providedId || uuidv4();
-  db.prepare(`INSERT OR IGNORE INTO instagram_campaigns (id,user_id,type,notes) VALUES (?,?,?,?)`)
-    .run(id, req.user.id, type, notes||null);
+  db.prepare(`INSERT OR IGNORE INTO instagram_campaigns (id,user_id,type,notes,parent_queue_id) VALUES (?,?,?,?,?)`)
+    .run(id, req.user.id, type, notes||null, parent_queue_id || null);
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(id));
 });
 
@@ -372,7 +381,9 @@ router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
 
 router.get("/campaigns", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  // Compute actions_count from the actions table (campaign_id link) when stored value is 0/null
+  // Only show MANUAL extension popup runs — sub-sessions created by queue
+  // dispatch (parent_queue_id IS NOT NULL) are deduped against their parent
+  // action_campaigns row.
   const rows = db.prepare(`
     SELECT ic.*,
       CASE
@@ -382,6 +393,7 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
       END AS actions_count
     FROM instagram_campaigns ic
     WHERE ic.user_id = ?
+      AND ic.parent_queue_id IS NULL
     ORDER BY ic.started_at DESC
   `).all(uid);
 

@@ -3691,82 +3691,73 @@ export default function InstagramPage() {
               )}
             </div>
 
-            {campaigns.map(c => {
-              // Extract shortcode from IG post URL for compact display.
-              const shortcode = (u: string) => {
-                const m = u.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
-                return m ? m[1] : u;
-              };
-              const posts = c.post_urls || [];
-              return (
-                <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className="font-semibold text-gray-900 capitalize">{TYPE_LABEL[c.type] || c.type}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-600'}`}>
-                        {c.status}
-                      </span>
-                      {c.my_profile && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-medium">
-                          👤 @{c.my_profile}
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-sm text-gray-400">{fmt(c.started_at)}</span>
-                  </div>
-
-                  {posts.length > 0 && (
-                    <div className="text-sm mb-2">
-                      <span className="text-gray-500">📍 Post{posts.length > 1 ? 's' : ''}:</span>{' '}
-                      {posts.length === 1 ? (
-                        <a href={posts[0]} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-mono text-xs">
-                          {shortcode(posts[0])}
-                        </a>
-                      ) : (
-                        <span className="text-gray-700">
-                          {posts.slice(0, 3).map((p, i) => (
-                            <span key={p}>
-                              <a href={p} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-mono text-xs">
-                                {shortcode(p)}
-                              </a>
-                              {i < Math.min(posts.length, 3) - 1 ? ', ' : ''}
+            {/* ───── Manual extension popup sessions (single-post, no parent batch) ─────
+                Only MANUAL runs appear here — backend's /campaigns filters out
+                batch sub-sessions via parent_queue_id IS NULL. So this section
+                is exclusively for likes/replies the user fired by clicking the
+                extension popup on a specific post. */}
+            {campaigns.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <h3 className="font-semibold text-gray-900 mb-3">
+                  Manual sessions <span className="text-gray-400 font-normal">({campaigns.length})</span>
+                  <span className="ml-2 text-xs font-normal text-gray-500">— individual likes/replies fired from the extension popup</span>
+                </h3>
+                <div className="space-y-2">
+                  {campaigns.map(c => {
+                    const shortcode = (u: string) => {
+                      const m = u.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+                      return m ? m[1] : u;
+                    };
+                    const posts = c.post_urls || [];
+                    return (
+                      <div key={c.id} className="border border-gray-200 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">MANUAL</span>
+                            <span className="font-semibold text-gray-900 capitalize text-sm">{TYPE_LABEL[c.type] || c.type}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-600'}`}>
+                              {c.status}
                             </span>
-                          ))}
-                          {posts.length > 3 && <span className="text-gray-400"> +{posts.length - 3} more</span>}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                            {c.my_profile && (
+                              <span className="text-xs text-gray-600">👤 @{c.my_profile}</span>
+                            )}
+                            {posts.length === 1 && (
+                              <a href={posts[0]} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline font-mono">
+                                📍 {shortcode(posts[0])}
+                              </a>
+                            )}
+                            {posts.length > 1 && (
+                              <span className="text-xs text-gray-600">📍 {posts.length} posts</span>
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-400">{fmt(c.started_at)}</span>
+                        </div>
 
-                  <div className="flex gap-6 text-sm flex-wrap">
-                    <div><span className="text-gray-500">Performed:</span> <span className="font-semibold">{c.actions_count}</span></div>
-                    <div><span className="text-gray-500">Followers back:</span> <span className="font-semibold text-green-600">+{c.new_followers}</span></div>
-                    <div><span className="text-gray-500">Engagement back:</span> <span className="font-semibold text-blue-600">+{c.engagement_back || 0}</span></div>
-                    {c.actions_count > 0 && (
-                      <div>
-                        <span className="text-gray-500">Conversion:</span>{' '}
-                        <span className="font-semibold text-purple-600">
-                          {(((c.new_followers + (c.engagement_back || 0)) / c.actions_count) * 100).toFixed(1)}%
-                        </span>
+                        <div className="flex flex-wrap gap-4 text-xs text-gray-600 pl-1">
+                          <span><b className="text-gray-900">{c.actions_count}</b> performed</span>
+                          <span className="text-green-600">💚 +{c.new_followers} followers back</span>
+                          <span className="text-blue-600">💬 +{c.engagement_back || 0} engagement back</span>
+                          {c.actions_count > 0 && (
+                            <span className="text-purple-600">
+                              📊 {(((c.new_followers + (c.engagement_back || 0)) / c.actions_count) * 100).toFixed(1)}% conv.
+                            </span>
+                          )}
+                          {c.ended_at && c.started_at && (
+                            <span>{Math.round((new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()) / 60000)} min</span>
+                          )}
+                        </div>
+                        {c.notes && <p className="text-xs text-gray-500 mt-1 pl-1">{c.notes}</p>}
                       </div>
-                    )}
-                    {c.ended_at && c.started_at && (
-                      <div>
-                        <span className="text-gray-500">Duration:</span>{' '}
-                        <span className="font-semibold">
-                          {Math.round((new Date(c.ended_at).getTime() - new Date(c.started_at).getTime()) / 60000)} min
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  {c.notes && <p className="text-sm text-gray-500 mt-2">{c.notes}</p>}
+                    );
+                  })}
                 </div>
-              );
-            })}
-            {campaigns.length === 0 && (
+              </div>
+            )}
+
+            {actionCampaigns.length === 0 && campaigns.length === 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
                 <Users size={32} className="text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-400">No campaigns yet. Run the extension to start tracking.</p>
+                <p className="text-gray-400">No activity yet. Create a batch above or run the extension popup on a post.</p>
               </div>
             )}
           </div>
