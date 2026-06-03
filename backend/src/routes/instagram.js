@@ -775,18 +775,31 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   const queueItems = db.prepare(queueSql).all(...queueParams);
 
   // Per queue item, look up distinct targets + which of them became
-  // new_followers afterwards. Done as small per-row queries (~100 max)
-  // so the SQL stays readable.
+  // new_followers afterwards. Done as small per-row queries (~100 max).
+  //
+  // NOTE: we don't filter on instagram_actions.campaign_id because that
+  // column references the sub-session (instagram_campaigns.id created by
+  // startCampaign), NOT the queue.campaign_id (action_campaign.id). We
+  // match by (account + post_url + type + time window) which works for
+  // ALL extension versions and is robust to the sub-session indirection.
   const performanceRows = [];
   for (const q of queueItems) {
+    const windowStart = q.claimed_at || q.action_date || null;
+    const windowEnd = q.action_date || null; // completed_at if available
     const targets = db.prepare(`
       SELECT DISTINCT username FROM instagram_actions
       WHERE user_id = ?
-        AND campaign_id IS NOT NULL AND campaign_id = ?
+        AND my_profile = ?
         AND post_url = ?
         AND type = ?
+        AND (? IS NULL OR datetime(action_date) >= datetime(?))
+        AND (? IS NULL OR datetime(action_date) <= datetime(?))
         AND username IS NOT NULL
-    `).all(uid, q.campaign_id, q.post_url, q.action_type).map(r => r.username);
+    `).all(
+      uid, q.as_account, q.post_url, q.action_type,
+      windowStart, windowStart,
+      windowEnd, windowEnd
+    ).map(r => r.username);
 
     let followersBack = 0;
     let avgMinutesToFollowback = null;
@@ -1507,20 +1520,29 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     ORDER BY c.created_at DESC LIMIT 100
   `).all(uid);
 
-  // Reconcile total_completed against actual instagram_actions rows linked
-  // through queue items → sub-session campaigns. count_done on the queue
-  // item is only PATCHed at the script's final DONE — if the action tab
-  // is force-failed by the watchdog before then, the stored count stays at
-  // 0 even though many likes were performed and saved. Use whichever is
-  // bigger: stored vs actual.
+  // Reconcile total_completed against actual instagram_actions rows. The
+  // stored count_done is only PATCHed at the script's final DONE — if the
+  // watchdog kills the tab first, the stored count stays at 0 even though
+  // many likes were performed.
+  //
+  // Robust match: count actions by the batch's account, of the right
+  // outbound types, performed on the batch's post URLs, during the batch's
+  // run window. Works for ALL extension versions (doesn't need
+  // parent_queue_id linkage).
   const liveTotal = db.prepare(`
     SELECT COUNT(*) AS n FROM instagram_actions a
-    JOIN instagram_campaigns ic ON ic.id = a.campaign_id
-    JOIN instagram_action_queue q ON q.id = ic.parent_queue_id
-    WHERE q.campaign_id = ? AND a.user_id = ?
+    WHERE a.user_id = ?
+      AND a.my_profile = ?
+      AND a.type IN ('like', 'reply', 'follow', 'comment', 'comment_reply')
+      AND datetime(a.action_date) >= datetime(?)
+      AND datetime(a.action_date) <= COALESCE(datetime(?), datetime('now'))
+      AND a.post_url IN (
+        SELECT post_url FROM instagram_action_queue WHERE campaign_id = ?
+      )
   `);
   for (const c of rows) {
-    const live = liveTotal.get(c.id, uid)?.n || 0;
+    const since = c.started_at || c.created_at || new Date().toISOString();
+    const live = liveTotal.get(uid, c.as_account || '', since, c.ended_at || null, c.id)?.n || 0;
     if (live > (c.total_completed || 0)) c.total_completed = live;
   }
 
@@ -1819,19 +1841,30 @@ router.get('/action-campaigns/:id', authenticateFlexible, (req, res) => {
     WHERE campaign_id = ? ORDER BY created_at ASC
   `).all(req.params.id);
 
-  // Reconcile each item's count_done against actual instagram_actions
-  // rows linked via parent_queue_id. count_done is only PATCHed at the
-  // script's final DONE — if the watchdog times out the tab first, the
-  // stored value stays at 0 even though dozens of likes were performed
-  // and recorded in instagram_actions. Use whichever is bigger.
+  // Reconcile each item's count_done against actual instagram_actions.
+  // Stored count_done only updates at the script's final DONE — if the
+  // watchdog kills the tab first, it stays 0 even though likes happened.
+  //
+  // Robust match: actions by the item's account, on the item's post URL,
+  // of the matching type, during the item's run window. Works for ALL
+  // extension versions (doesn't depend on parent_queue_id linkage).
   const liveCount = db.prepare(`
     SELECT COUNT(*) AS n FROM instagram_actions a
-    JOIN instagram_campaigns ic ON ic.id = a.campaign_id
-    WHERE ic.parent_queue_id = ? AND ic.user_id = ?
+    WHERE a.user_id = ?
+      AND a.my_profile = ?
+      AND a.post_url = ?
+      AND a.type = ?
+      AND (? IS NULL OR datetime(a.action_date) >= datetime(?))
+      AND (? IS NULL OR datetime(a.action_date) <= datetime(?))
   `);
   let totalLive = 0;
   for (const it of items) {
-    const live = liveCount.get(it.id, uid)?.n || 0;
+    const since = it.claimed_at || it.started_at || null;
+    const until = it.completed_at || null;
+    const live = liveCount.get(
+      uid, it.as_account || '', it.post_url, it.action_type,
+      since, since, until, until
+    )?.n || 0;
     it.count_done_stored = it.count_done;
     it.count_done = Math.max(it.count_done || 0, live);
     totalLive += it.count_done;
