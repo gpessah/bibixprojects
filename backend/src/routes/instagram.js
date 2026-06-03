@@ -1525,8 +1525,17 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   }
 
   // Enrich each batch with conversion metrics: how many of the people we
-  // engaged with came back as followers / engagement events. Same shape as
-  // the legacy /campaigns enrichment so the UI can render both consistently.
+  // engaged with came back as followers / engagement events.
+  //
+  // The OLD query joined directly on action.campaign_id = action_campaign.id,
+  // which never matched anything (instagram_actions.campaign_id references
+  // the sub-session campaign created by startCampaign, NOT the action
+  // campaign). That's why every batch showed "+0 followers back".
+  //
+  // Robust approach: "everyone this batch engaged with" = every outbound
+  // action by the batch's account (my_profile) during the batch's run
+  // window. Works for old AND new batches regardless of whether the
+  // parent_queue_id linkage was set by a recent extension version.
   const followersBack = db.prepare(`
     SELECT COUNT(DISTINCT r.username) AS n
     FROM instagram_actions r
@@ -1534,8 +1543,13 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
       AND r.type = 'new_follower'
       AND datetime(r.action_date) >= datetime(?)
       AND r.username IN (
-        SELECT DISTINCT username FROM instagram_actions
-        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
+        SELECT DISTINCT a.username FROM instagram_actions a
+        WHERE a.user_id = ?
+          AND a.my_profile = ?
+          AND a.type IN ('like', 'reply', 'follow')
+          AND datetime(a.action_date) >= datetime(?)
+          AND datetime(a.action_date) <= COALESCE(datetime(?), datetime('now'))
+          AND a.username IS NOT NULL
       )
   `);
   const engagementBack = db.prepare(`
@@ -1544,15 +1558,22 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
       AND r.type LIKE 'received_%'
       AND datetime(r.action_date) >= datetime(?)
       AND r.username IN (
-        SELECT DISTINCT username FROM instagram_actions
-        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
+        SELECT DISTINCT a.username FROM instagram_actions a
+        WHERE a.user_id = ?
+          AND a.my_profile = ?
+          AND a.type IN ('like', 'reply', 'follow')
+          AND datetime(a.action_date) >= datetime(?)
+          AND datetime(a.action_date) <= COALESCE(datetime(?), datetime('now'))
+          AND a.username IS NOT NULL
       )
   `);
   for (const c of rows) {
     // Use started_at if set, otherwise created_at as the attribution window.
     const since = c.started_at || c.created_at || new Date().toISOString();
-    const fb = followersBack.get(uid, since, c.id, uid);
-    const eb = engagementBack.get(uid, since, c.id, uid);
+    const until = c.ended_at || null;  // null = COALESCE to now (still running)
+    const acct = c.as_account || '';
+    const fb = followersBack.get(uid, since, uid, acct, since, until);
+    const eb = engagementBack.get(uid, since, uid, acct, since, until);
     c.followers_back = fb?.n || 0;
     c.engagement_back = eb?.n || 0;
   }
