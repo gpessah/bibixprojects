@@ -417,9 +417,9 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     WHERE r.user_id = ?
       AND r.type LIKE 'received_%'
       AND datetime(r.action_date) >= datetime(?)
-      AND r.target_username IN (
-        SELECT DISTINCT target_username FROM instagram_actions
-        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      AND r.username IN (
+        SELECT DISTINCT username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
       )
   `);
   for (const c of rows) {
@@ -1509,14 +1509,14 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   // engaged with came back as followers / engagement events. Same shape as
   // the legacy /campaigns enrichment so the UI can render both consistently.
   const followersBack = db.prepare(`
-    SELECT COUNT(DISTINCT r.target_username) AS n
+    SELECT COUNT(DISTINCT r.username) AS n
     FROM instagram_actions r
     WHERE r.user_id = ?
       AND r.type = 'new_follower'
       AND datetime(r.action_date) >= datetime(?)
-      AND r.target_username IN (
-        SELECT DISTINCT target_username FROM instagram_actions
-        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      AND r.username IN (
+        SELECT DISTINCT username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
       )
   `);
   const engagementBack = db.prepare(`
@@ -1524,9 +1524,9 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     WHERE r.user_id = ?
       AND r.type LIKE 'received_%'
       AND datetime(r.action_date) >= datetime(?)
-      AND r.target_username IN (
-        SELECT DISTINCT target_username FROM instagram_actions
-        WHERE campaign_id = ? AND user_id = ? AND target_username IS NOT NULL
+      AND r.username IN (
+        SELECT DISTINCT username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
       )
   `);
   for (const c of rows) {
