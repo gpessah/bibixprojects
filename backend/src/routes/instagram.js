@@ -415,7 +415,7 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
   const enrichEngagementBack = db.prepare(`
     SELECT COUNT(*) AS n FROM instagram_actions r
     WHERE r.user_id = ?
-      AND r.action_type LIKE 'received_%'
+      AND r.type LIKE 'received_%'
       AND datetime(r.action_date) >= datetime(?)
       AND r.target_username IN (
         SELECT DISTINCT target_username FROM instagram_actions
@@ -1512,7 +1512,7 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     SELECT COUNT(DISTINCT r.target_username) AS n
     FROM instagram_actions r
     WHERE r.user_id = ?
-      AND r.action_type = 'new_follower'
+      AND r.type = 'new_follower'
       AND datetime(r.action_date) >= datetime(?)
       AND r.target_username IN (
         SELECT DISTINCT target_username FROM instagram_actions
@@ -1522,7 +1522,7 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   const engagementBack = db.prepare(`
     SELECT COUNT(*) AS n FROM instagram_actions r
     WHERE r.user_id = ?
-      AND r.action_type LIKE 'received_%'
+      AND r.type LIKE 'received_%'
       AND datetime(r.action_date) >= datetime(?)
       AND r.target_username IN (
         SELECT DISTINCT target_username FROM instagram_actions
