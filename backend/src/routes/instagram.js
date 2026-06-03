@@ -412,6 +412,20 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     FROM instagram_actions
     WHERE campaign_id = ? AND user_id = ? AND post_url IS NOT NULL
   `);
+  // Manual-session attribution: instagram_actions.campaign_id DOES match
+  // instagram_campaigns.id for manual sessions (no indirection), so we can
+  // filter on that directly. The "engaged-with" set is everyone we acted
+  // on in this session.
+  const enrichFollowersBack = db.prepare(`
+    SELECT COUNT(DISTINCT r.username) AS n FROM instagram_actions r
+    WHERE r.user_id = ?
+      AND r.type = 'new_follower'
+      AND datetime(r.action_date) >= datetime(?)
+      AND r.username IN (
+        SELECT DISTINCT username FROM instagram_actions
+        WHERE campaign_id = ? AND user_id = ? AND username IS NOT NULL
+      )
+  `);
   const enrichEngagementBack = db.prepare(`
     SELECT COUNT(*) AS n FROM instagram_actions r
     WHERE r.user_id = ?
@@ -426,7 +440,16 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     const meta = enrichMeta.get(c.id, uid);
     c.post_urls = meta?.posts ? meta.posts.split(',').filter(Boolean) : [];
     c.my_profile = meta?.my_profile || null;
-    const eb = enrichEngagementBack.get(uid, c.started_at || c.created_at || new Date().toISOString(), c.id, uid);
+    const since = c.started_at || c.created_at || new Date().toISOString();
+    // Attribution-based follow-backs (people from this session who then
+    // followed us). The legacy `new_followers` column is a snapshot-delta
+    // count — total new followers during the window from ANY source,
+    // including organic. We keep it as `new_followers_snapshot` for
+    // back-compat but the frontend should display followers_back.
+    const fb = enrichFollowersBack.get(uid, since, c.id, uid);
+    c.followers_back = fb?.n || 0;
+    c.new_followers_snapshot = c.new_followers;
+    const eb = enrichEngagementBack.get(uid, since, c.id, uid);
     c.engagement_back = eb?.n || 0;
   }
 

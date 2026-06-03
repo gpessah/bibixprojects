@@ -121,7 +121,12 @@ interface Action {
 interface Campaign {
   id: string; type: string; status: string; actions_count: number;
   new_followers: number; started_at: string; ended_at: string | null; notes: string | null;
-  post_urls?: string[]; my_profile?: string | null; engagement_back?: number;
+  post_urls?: string[]; my_profile?: string | null;
+  followers_back?: number;             // attribution-based: distinct users we engaged
+                                       // who later followed us. Use this for display.
+  engagement_back?: number;            // received_* events from users we engaged
+  new_followers_snapshot?: number;     // legacy column — total new followers during
+                                       // window from any source (includes organic)
 }
 
 interface Stats {
@@ -3462,11 +3467,15 @@ export default function InstagramPage() {
                               <div className="flex flex-wrap gap-4 text-xs text-gray-600 mb-2 pl-6">
                                 <span><b className="text-gray-900">{c.total_completed}</b> / {c.total_requested} actions</span>
                                 {c.as_account && <span>👤 @{c.as_account}</span>}
-                                <span className="text-green-600">💚 +{c.followers_back || 0} followers back</span>
-                                <span className="text-blue-600">💬 +{c.engagement_back || 0} engagement back</span>
+                                <span className="text-green-600" title="Distinct users from this batch who later followed back (attribution-based)">
+                                  💚 +{c.followers_back || 0} followers back
+                                </span>
+                                <span className="text-blue-600" title="Likes/comments/replies received from users we engaged in this batch">
+                                  💬 +{c.engagement_back || 0} engagement back
+                                </span>
                                 {c.total_completed > 0 && (
-                                  <span className="text-purple-600">
-                                    📊 {((((c.followers_back || 0) + (c.engagement_back || 0)) / c.total_completed) * 100).toFixed(1)}% conv.
+                                  <span className="text-purple-600" title="Conversion = unique returning followers / actions performed">
+                                    📊 {(((c.followers_back || 0) / c.total_completed) * 100).toFixed(1)}% conv.
                                   </span>
                                 )}
                                 <span>Concurrency: {c.concurrency}</span>
@@ -3744,11 +3753,15 @@ export default function InstagramPage() {
 
                         <div className="flex flex-wrap gap-4 text-xs text-gray-600 pl-1">
                           <span><b className="text-gray-900">{c.actions_count}</b> performed</span>
-                          <span className="text-green-600">💚 +{c.new_followers} followers back</span>
-                          <span className="text-blue-600">💬 +{c.engagement_back || 0} engagement back</span>
+                          <span className="text-green-600" title="Distinct users from this session who later followed @${c.my_profile} back (attribution-based, not snapshot-delta)">
+                            💚 +{c.followers_back ?? 0} followers back
+                          </span>
+                          <span className="text-blue-600" title="Likes/comments/replies received from users we engaged with in this session">
+                            💬 +{c.engagement_back ?? 0} engagement back
+                          </span>
                           {c.actions_count > 0 && (
-                            <span className="text-purple-600">
-                              📊 {(((c.new_followers + (c.engagement_back || 0)) / c.actions_count) * 100).toFixed(1)}% conv.
+                            <span className="text-purple-600" title="Conversion = unique returning users / actions performed">
+                              📊 {(((c.followers_back ?? 0) / c.actions_count) * 100).toFixed(1)}% conv.
                             </span>
                           )}
                           {c.ended_at && c.started_at && (
