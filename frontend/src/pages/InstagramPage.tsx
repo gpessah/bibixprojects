@@ -3412,7 +3412,7 @@ export default function InstagramPage() {
                 </div>
               </div>
               {actionCampaigns.length === 0 ? (
-                <p className="text-gray-400 text-sm py-6 text-center">No batches yet. Click <b>+ New batch</b> to create your first one.</p>
+                <p className="text-gray-400 text-sm py-6 text-center">No batches yet. Click <b>+ New batch</b> to create your first one.<br/><span className="text-xs">Manual likes/replies from the extension popup appear in <b>Manual sessions</b> below.</span></p>
               ) : (
                 <div className="space-y-2">
                   {actionCampaigns.map(c => {
