@@ -1507,6 +1507,23 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     ORDER BY c.created_at DESC LIMIT 100
   `).all(uid);
 
+  // Reconcile total_completed against actual instagram_actions rows linked
+  // through queue items → sub-session campaigns. count_done on the queue
+  // item is only PATCHed at the script's final DONE — if the action tab
+  // is force-failed by the watchdog before then, the stored count stays at
+  // 0 even though many likes were performed and saved. Use whichever is
+  // bigger: stored vs actual.
+  const liveTotal = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_actions a
+    JOIN instagram_campaigns ic ON ic.id = a.campaign_id
+    JOIN instagram_action_queue q ON q.id = ic.parent_queue_id
+    WHERE q.campaign_id = ? AND a.user_id = ?
+  `);
+  for (const c of rows) {
+    const live = liveTotal.get(c.id, uid)?.n || 0;
+    if (live > (c.total_completed || 0)) c.total_completed = live;
+  }
+
   // Enrich each batch with conversion metrics: how many of the people we
   // engaged with came back as followers / engagement events. Same shape as
   // the legacy /campaigns enrichment so the UI can render both consistently.
@@ -1780,6 +1797,29 @@ router.get('/action-campaigns/:id', authenticateFlexible, (req, res) => {
     SELECT * FROM instagram_action_queue
     WHERE campaign_id = ? ORDER BY created_at ASC
   `).all(req.params.id);
+
+  // Reconcile each item's count_done against actual instagram_actions
+  // rows linked via parent_queue_id. count_done is only PATCHed at the
+  // script's final DONE — if the watchdog times out the tab first, the
+  // stored value stays at 0 even though dozens of likes were performed
+  // and recorded in instagram_actions. Use whichever is bigger.
+  const liveCount = db.prepare(`
+    SELECT COUNT(*) AS n FROM instagram_actions a
+    JOIN instagram_campaigns ic ON ic.id = a.campaign_id
+    WHERE ic.parent_queue_id = ? AND ic.user_id = ?
+  `);
+  let totalLive = 0;
+  for (const it of items) {
+    const live = liveCount.get(it.id, uid)?.n || 0;
+    it.count_done_stored = it.count_done;
+    it.count_done = Math.max(it.count_done || 0, live);
+    totalLive += it.count_done;
+  }
+  if (totalLive > (campaign.total_completed || 0)) {
+    campaign.total_completed_stored = campaign.total_completed;
+    campaign.total_completed = totalLive;
+  }
+
   res.json({ campaign, items });
 });
 
