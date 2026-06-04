@@ -2685,10 +2685,24 @@ function ensureSystemAutomations(userId) {
   // is handled in syncSystemScanAccounts() (called from /accounts routes),
   // which appends new accounts and drops removed ones without overwriting
   // the user's other choices.
+  //
+  // SAFETY (post-runaway): if multiple system rows exist (a previous bug
+  // created duplicates), keep the oldest one and disable+delete the rest
+  // BEFORE running the create check. Without this we'd just skip creation
+  // and leave the dupes firing in parallel.
   const scanActionsJson = JSON.stringify(['scan_notifications']);
-  const scanRow = db.prepare(
-    'SELECT id FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND actions = ? LIMIT 1'
-  ).get(userId, scanActionsJson);
+  const allScanRows = db.prepare(
+    'SELECT id, created_at, enabled FROM instagram_automations WHERE user_id = ? AND is_system = 1 AND actions = ? ORDER BY created_at ASC'
+  ).all(userId, scanActionsJson);
+  if (allScanRows.length > 1) {
+    // Keep [0] (oldest), nuke the rest.
+    const keepId = allScanRows[0].id;
+    for (const row of allScanRows.slice(1)) {
+      db.prepare('DELETE FROM instagram_automations WHERE id = ?').run(row.id);
+      console.warn(`[ensureSystemAutomations] removed duplicate scan_notifications row ${row.id} for user ${userId} (kept ${keepId})`);
+    }
+  }
+  const scanRow = allScanRows[0] || null;
   if (cleanAccounts.length > 0 && !scanRow) {
     // First-time creation. Default schedule: daily 03:00, all accounts.
     const auto = {
