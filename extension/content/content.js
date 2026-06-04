@@ -1262,6 +1262,89 @@
     }
   }
 
+  // ── LinkedIn's own Contact-Info modal — phone, email, website, etc. that
+  // the person chose to publish. Free, unlimited, no third-party API.
+  async function scrapeContactInfo() {
+    const out = { email: '', phone: '', website: '', twitter: '', address: '' };
+    // Strategy 1 — if the contact-info section is already in the DOM
+    // (sometimes pre-rendered), parse it directly.
+    let modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"]');
+
+    if (!modal) {
+      // Strategy 2 — click the "Contact info" link on the profile to open
+      // the modal, then read it. Restore the URL when done.
+      const startUrl = location.href;
+      const link = Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim().toLowerCase();
+        const h = (el.getAttribute('href') || '').toLowerCase();
+        return t === 'contact info' || /overlay\/contact-info/.test(h)
+          || /contact info/i.test(el.getAttribute('aria-label') || '');
+      });
+      if (!link) return out;
+      link.click();
+      // Wait for the modal to mount.
+      for (let i = 0; i < 25; i++) {
+        modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"], div[role="dialog"]:has(h2)');
+        if (modal && (modal.innerText || '').toLowerCase().includes('contact info')) break;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      if (!modal) {
+        // Restore url just in case it changed
+        try { history.replaceState(null, '', startUrl); } catch (_) {}
+        return out;
+      }
+    }
+
+    // Parse the modal's innerText. Format usually looks like:
+    //   Contact Info
+    //   <linkedin-url>
+    //   Email
+    //   foo@bar.com
+    //   Phone
+    //   +1 555 123 4567 (Work)
+    //   Website
+    //   https://...
+    const text = (modal.innerText || '').replace(/\r/g, '');
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+    function valueAfterLabel(label) {
+      const idx = lines.findIndex((l) => l.toLowerCase() === label.toLowerCase());
+      if (idx < 0 || idx + 1 >= lines.length) return '';
+      // The next non-empty line is the value; sometimes followed by a "(Type)" line.
+      return lines[idx + 1].replace(/\s*\((Work|Home|Mobile|Personal)\)\s*$/i, '').trim();
+    }
+
+    out.email = valueAfterLabel('Email');
+    out.phone = valueAfterLabel('Phone');
+    out.website = valueAfterLabel('Website');
+    out.twitter = valueAfterLabel('Twitter');
+    out.address = valueAfterLabel('Address');
+
+    // Even if the labels are localized, fall back to regex match across the
+    // whole text for phone (digits + format) and email (@).
+    if (!out.email) {
+      const m = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+      if (m) out.email = m[0];
+    }
+    if (!out.phone) {
+      const m = text.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+      if (m) out.phone = m[1].trim();
+    }
+
+    // Close the modal: press Escape or click the close button.
+    try {
+      const closeBtn = modal.querySelector('button[aria-label*="Dismiss" i], button[aria-label*="Close" i]');
+      if (closeBtn) closeBtn.click();
+      else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    } catch (_) {}
+    // Restore URL if it changed (the contact-info modal sometimes navigates).
+    if (location.href !== location.href.split('?')[0]) {
+      try { history.replaceState(null, '', location.href.split('?')[0]); } catch (_) {}
+    }
+
+    return out;
+  }
+
   function openSaveCandidateDialog() {
     closePopover();
     const info = extractProfileInfo();
@@ -1294,6 +1377,20 @@
         <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current position</div>
         <input id="bsc-position" value="${(info.position || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Email</div>
+          <input id="bsc-email" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Phone</div>
+          <input id="bsc-phone" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+        <button id="bsc-pull-li" type="button" style="background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">📞 Pull phone/email from LinkedIn Contact Info</button>
+        <span id="bsc-pull-status" style="font-size:11px;color:#94a3b8"></span>
+      </div>
       <div style="margin-bottom:14px;font-size:11px;color:#94a3b8">
         LinkedIn URL: <span style="color:#475569">${info.linkedinUrl}</span>
       </div>
@@ -1309,12 +1406,34 @@
     activePopover = pop;
 
     const status = pop.querySelector('#bsc-status');
+    const pullStatus = pop.querySelector('#bsc-pull-status');
     pop.querySelector('#bsc-close').addEventListener('click', () => closePopover());
     pop.addEventListener('click', (e) => { if (e.target === pop) closePopover(); });
+
+    pop.querySelector('#bsc-pull-li').addEventListener('click', async () => {
+      pullStatus.textContent = 'opening contact info…';
+      try {
+        const ci = await scrapeContactInfo();
+        if (ci.email && !pop.querySelector('#bsc-email').value) pop.querySelector('#bsc-email').value = ci.email;
+        if (ci.phone && !pop.querySelector('#bsc-phone').value) pop.querySelector('#bsc-phone').value = ci.phone;
+        const filled = [];
+        if (ci.email) filled.push('email');
+        if (ci.phone) filled.push('phone');
+        if (ci.website) filled.push('website');
+        pullStatus.textContent = filled.length
+          ? `✓ Filled ${filled.join(' + ')}`
+          : 'No public phone/email on this profile.';
+      } catch (e) {
+        pullStatus.textContent = 'Could not open contact info.';
+      }
+    });
+
     pop.querySelector('#bsc-save').addEventListener('click', async () => {
       const fullName = pop.querySelector('#bsc-name').value.trim();
       const company = pop.querySelector('#bsc-company').value.trim();
       const position = pop.querySelector('#bsc-position').value.trim();
+      const email = pop.querySelector('#bsc-email').value.trim();
+      const phone = pop.querySelector('#bsc-phone').value.trim();
       if (!fullName) { status.innerHTML = '<span style="color:#ef4444">Full name required</span>'; return; }
       status.innerHTML = '<span style="color:#64748b">Saving…</span>';
       const parts = fullName.split(/\s+/);
@@ -1323,6 +1442,7 @@
         firstName: parts[0] || '',
         lastName: parts.slice(1).join(' '),
         company, position,
+        email, phone,
         headline: info.headline,
         linkedinUrl: info.linkedinUrl,
       });
@@ -1454,7 +1574,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.11)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.4.0)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;

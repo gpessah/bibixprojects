@@ -19,6 +19,7 @@ interface Candidate {
   company_domain: string | null;
   email: string | null;
   email_confidence: number | null;
+  phone: string | null;
   position: string | null;
   saved_to_crm: number;
   crm_contact_id: string | null;
@@ -159,9 +160,9 @@ export default function LinkedInPage() {
   }, [candidates, candSearch]);
 
   function exportCandidatesCsv() {
-    const headers = ['Full Name', 'Position', 'Company', 'Email', 'LinkedIn URL', 'Saved At'];
+    const headers = ['Full Name', 'Position', 'Company', 'Email', 'Phone', 'LinkedIn URL', 'Saved At'];
     const rows = filteredCandidates.map(c => [
-      c.full_name || '', c.position || '', c.company || '', c.email || '',
+      c.full_name || '', c.position || '', c.company || '', c.email || '', c.phone || '',
       c.linkedin_url || '', c.created_at || '',
     ]);
     const csv = [headers, ...rows]
@@ -457,6 +458,7 @@ export default function LinkedInPage() {
                       <th className="py-2.5 px-4">Position</th>
                       <th className="py-2.5 px-4">Company</th>
                       <th className="py-2.5 px-4">Email</th>
+                      <th className="py-2.5 px-4">Phone</th>
                       <th className="py-2.5 px-4">Saved</th>
                       <th className="py-2.5 px-4 text-right">Actions</th>
                     </tr>
@@ -471,6 +473,9 @@ export default function LinkedInPage() {
                           {c.email ? (
                             <span className="text-emerald-700">{c.email}{c.email_confidence ? <span className="text-gray-400 ml-1 text-xs">({c.email_confidence}%)</span> : null}</span>
                           ) : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          {c.phone ? <span className="text-blue-700">{c.phone}</span> : <span className="text-gray-400">—</span>}
                         </td>
                         <td className="py-2.5 px-4 text-xs text-gray-500">{c.created_at ? fmt(c.created_at) : '—'}</td>
                         <td className="py-2.5 px-4">
