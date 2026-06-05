@@ -1967,7 +1967,16 @@ router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) =>
   // Sweep stale claimed/running rows before listing pending accounts. If a
   // previous Chrome tab crashed or the user closed it, the row would sit in
   // `claimed`/`running` forever and the rest of the batch would stall.
-  // 10 minutes is the generous upper bound for a real comment-like batch.
+  // 45 minutes is the upper bound for a real comment-like batch. Raised
+  // from 10 min because the extension's per-tab work (load comments +
+  // like 300-800 items + hover-fetch follower counts) genuinely takes
+  // 10-30 min on big posts. Killing at 10 min caused valid in-progress
+  // batches to be falsely marked "Abandoned: extension never reported"
+  // while the script was still actively liking. The 3-min progress-
+  // silence watchdog inside the extension catches truly stuck tabs much
+  // faster than this; this sweep is only a backstop for the rare case
+  // where the extension was force-killed mid-run (Chrome crashed,
+  // computer slept, etc).
   // Falls back to created_at if neither claimed_at nor started_at is set,
   // so rows that got into a weird state from an older bug also get released.
   db.prepare(`
@@ -1976,7 +1985,7 @@ router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) =>
         error_message = COALESCE(error_message, 'Abandoned: extension never reported completion (stale claim).'),
         completed_at = CURRENT_TIMESTAMP
     WHERE user_id = ? AND status IN ('claimed', 'running')
-      AND datetime(COALESCE(claimed_at, started_at, created_at)) < datetime('now', '-10 minutes')
+      AND datetime(COALESCE(claimed_at, started_at, created_at)) < datetime('now', '-45 minutes')
   `).run(uid);
 
   // After sweeping items, any parent campaign whose queue is fully terminal
