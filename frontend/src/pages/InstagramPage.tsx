@@ -1883,7 +1883,7 @@ export default function InstagramPage() {
                               <th className="py-2 pr-3 font-medium text-right" title="Likes we received from users we engaged in this batch (on any of our posts)">❤️ Likes back</th>
                               <th className="py-2 pr-3 font-medium text-right" title="Comments/replies/mentions we received from users we engaged in this batch">💬 Comments back</th>
                               <th className="py-2 pr-3 font-medium text-right">Avg time to follow back</th>
-                              <th className="py-2 pr-3 font-medium text-right" title="(followers_back + likes_back + comments_back) / actions_performed">Conversion</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="followers_back / actions_performed — pure follower acquisition rate">Conversion</th>
                             </tr>
                           </thead>
                           <tbody>

@@ -872,8 +872,12 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       }
     }
     const totalEngagementBack = followersBack + likesBack + commentsBack;
+    // Conversion is specifically the follower-acquisition rate.
+    // Likes back and comments back are tracked separately in their own
+    // columns; mixing them into the conversion % overstates how many
+    // people actually FOLLOWED back, which is the primary KPI.
     const conversionRate = q.count_done > 0
-      ? Math.round((totalEngagementBack / q.count_done) * 1000) / 10
+      ? Math.round((followersBack / q.count_done) * 1000) / 10
       : null;
 
     performanceRows.push({
