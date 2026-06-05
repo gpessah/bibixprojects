@@ -210,6 +210,12 @@ try { db.exec('ALTER TABLE instagram_automations ADD COLUMN tz_offset_minutes IN
 // excludes these so batch sub-sessions don't pollute the "manual" section
 // (they're already represented by their parent action_campaign row).
 try { db.exec('ALTER TABLE instagram_campaigns ADD COLUMN parent_queue_id TEXT'); } catch (_) {}
+// last_heartbeat_at: extension periodically PATCHes the queue item with
+// heartbeat=true while actively running. Backend updates this column.
+// The stale-claim sweep checks heartbeat freshness instead of time-since-
+// claimed — so a 5-hour batch with a healthy script is NEVER touched,
+// while a stuck/crashed tab gets swept within 5 minutes of going silent.
+try { db.exec('ALTER TABLE instagram_action_queue ADD COLUMN last_heartbeat_at DATETIME'); } catch (_) {}
 // Remembered per-user default offset so server-created system automations
 // can use the right timezone too.
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_tz_offset_minutes INTEGER'); } catch (_) {}
@@ -1967,25 +1973,36 @@ router.get('/action-queue/pending-accounts', authenticateFlexible, (req, res) =>
   // Sweep stale claimed/running rows before listing pending accounts. If a
   // previous Chrome tab crashed or the user closed it, the row would sit in
   // `claimed`/`running` forever and the rest of the batch would stall.
-  // 45 minutes is the upper bound for a real comment-like batch. Raised
-  // from 10 min because the extension's per-tab work (load comments +
-  // like 300-800 items + hover-fetch follower counts) genuinely takes
-  // 10-30 min on big posts. Killing at 10 min caused valid in-progress
-  // batches to be falsely marked "Abandoned: extension never reported"
-  // while the script was still actively liking. The 3-min progress-
-  // silence watchdog inside the extension catches truly stuck tabs much
-  // faster than this; this sweep is only a backstop for the rare case
-  // where the extension was force-killed mid-run (Chrome crashed,
-  // computer slept, etc).
-  // Falls back to created_at if neither claimed_at nor started_at is set,
-  // so rows that got into a weird state from an older bug also get released.
+  // Heartbeat-based stale-claim sweep. The extension PATCHes the queue
+  // item every ~60s with heartbeat=true while the script is actively
+  // running (comment loader, likes loop, anything). This UPDATE marks
+  // an item as abandoned ONLY when 5+ minutes have passed since the
+  // last heartbeat — meaning the extension truly has stopped reporting.
+  //
+  // Why heartbeat instead of "time since claimed":
+  //   • A 5-hour batch with a healthy script NEVER gets touched (every
+  //     heartbeat resets the clock).
+  //   • A force-killed extension (Chrome crashed, laptop slept, the
+  //     user uninstalled mid-run) goes silent and gets swept in 5 min.
+  //   • No arbitrary upper bound on how long a batch can run.
+  //
+  // Legacy rows that pre-date the last_heartbeat_at column have NULL —
+  // fall back to claimed_at with a generous 60-min window so they
+  // aren't immediately swept just because they were already in flight
+  // before this migration shipped.
   db.prepare(`
     UPDATE instagram_action_queue
     SET status = 'failed',
         error_message = COALESCE(error_message, 'Abandoned: extension never reported completion (stale claim).'),
         completed_at = CURRENT_TIMESTAMP
     WHERE user_id = ? AND status IN ('claimed', 'running')
-      AND datetime(COALESCE(claimed_at, started_at, created_at)) < datetime('now', '-45 minutes')
+      AND (
+        (last_heartbeat_at IS NOT NULL
+          AND datetime(last_heartbeat_at) < datetime('now', '-5 minutes'))
+        OR
+        (last_heartbeat_at IS NULL
+          AND datetime(COALESCE(claimed_at, started_at, created_at)) < datetime('now', '-60 minutes'))
+      )
   `).run(uid);
 
   // After sweeping items, any parent campaign whose queue is fully terminal
@@ -2090,7 +2107,20 @@ router.get('/action-queue/pending', authenticateFlexible, (req, res) => {
 // Body: { status, count_done, error_message }
 router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
-  const { status, count_done, error_message } = req.body || {};
+  const { status, count_done, error_message, heartbeat } = req.body || {};
+
+  // FAST PATH: heartbeat-only ping. The extension hits this every ~60s
+  // while actively running an item, so the stale-claim sweep can tell
+  // "this tab is still alive" without any other state change. Doesn't
+  // require any other field to be set.
+  if (heartbeat === true && !status && count_done == null && !error_message) {
+    db.prepare(`
+      UPDATE instagram_action_queue
+      SET last_heartbeat_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ? AND status IN ('claimed', 'running')
+    `).run(req.params.id, uid);
+    return res.json({ ok: true });
+  }
   // Terminal statuses, in order of "how complete was the work":
   //   completed  — count_done met or exceeded count_requested
   //   partial    — content script gave up early (post ran out of targets)
@@ -2113,6 +2143,7 @@ router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
         count_done = COALESCE(?, count_done),
         error_message = COALESCE(?, error_message),
         started_at = COALESCE(started_at, CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE NULL END),
+        last_heartbeat_at = CURRENT_TIMESTAMP,
         completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END
     WHERE id = ? AND user_id = ?
   `).run(
