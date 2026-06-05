@@ -164,6 +164,9 @@ interface Stats {
       action_date: string;
       targets: number;
       followers_back: number;
+      likes_back?: number;          // new in v1.34 — received_like_* from targets
+      comments_back?: number;       // new — received_comment/reply/mention from targets
+      total_engagement_back?: number;
       avg_minutes_to_followback: number | null;
       conversion_rate: number | null;
     }[];
@@ -1876,9 +1879,11 @@ export default function InstagramPage() {
                               <th className="py-2 pr-3 font-medium">Account</th>
                               <th className="py-2 pr-3 font-medium">Date</th>
                               <th className="py-2 pr-3 font-medium text-right" title="Performed / Requested">Actions</th>
-                              <th className="py-2 pr-3 font-medium text-right">Followers back</th>
-                              <th className="py-2 pr-3 font-medium text-right">Avg time to respond</th>
-                              <th className="py-2 pr-3 font-medium text-right">Conversion</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="Users we engaged who later followed @my_profile">💚 Followers back</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="Likes we received from users we engaged in this batch (on any of our posts)">❤️ Likes back</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="Comments/replies/mentions we received from users we engaged in this batch">💬 Comments back</th>
+                              <th className="py-2 pr-3 font-medium text-right">Avg time to follow back</th>
+                              <th className="py-2 pr-3 font-medium text-right" title="(followers_back + likes_back + comments_back) / actions_performed">Conversion</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1922,8 +1927,14 @@ export default function InstagramPage() {
                                     </span>
                                     <span className="text-gray-400">/{r.count_requested}</span>
                                   </td>
-                                  <td className="py-2 pr-3 text-right text-xs font-bold text-gray-900">
+                                  <td className="py-2 pr-3 text-right text-xs font-bold text-green-700">
                                     {r.followers_back || '—'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs font-medium text-pink-700">
+                                    {r.likes_back || '—'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-right text-xs font-medium text-blue-700">
+                                    {r.comments_back || '—'}
                                   </td>
                                   <td className="py-2 pr-3 text-right text-xs text-gray-700">
                                     {fmtTime(r.avg_minutes_to_followback)}
@@ -1945,8 +1956,14 @@ export default function InstagramPage() {
                                 <td className="py-2 pr-3 text-right text-xs text-gray-900">
                                   {stats.campaignPerformance.totals.done}<span className="text-gray-400">/{stats.campaignPerformance.totals.requested}</span>
                                 </td>
-                                <td className="py-2 pr-3 text-right text-xs text-gray-900">
+                                <td className="py-2 pr-3 text-right text-xs text-green-700">
                                   {stats.campaignPerformance.totals.followers_back}
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-pink-700">
+                                  {stats.campaignPerformance.rows.reduce((s, r) => s + (r.likes_back || 0), 0)}
+                                </td>
+                                <td className="py-2 pr-3 text-right text-xs text-blue-700">
+                                  {stats.campaignPerformance.rows.reduce((s, r) => s + (r.comments_back || 0), 0)}
                                 </td>
                                 <td className="py-2 pr-3"></td>
                                 <td className="py-2 pr-3 text-right text-xs text-gray-900">

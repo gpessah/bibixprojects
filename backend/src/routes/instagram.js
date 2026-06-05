@@ -798,56 +798,82 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   const queueItems = db.prepare(queueSql).all(...queueParams);
 
   // Per queue item, look up distinct targets + which of them became
-  // new_followers afterwards. Done as small per-row queries (~100 max).
+  // followers / liked our posts / commented on our posts. Per-row.
   //
   // NOTE: we don't filter on instagram_actions.campaign_id because that
   // column references the sub-session (instagram_campaigns.id created by
   // startCampaign), NOT the queue.campaign_id (action_campaign.id). We
   // match by (account + post_url + type + time window) which works for
   // ALL extension versions and is robust to the sub-session indirection.
+  //
+  // IMPORTANT (fixed): if windowStart is NULL (the batch never even
+  // claimed an item — count_done=0), we MUST return zero targets. The
+  // previous code's `(? IS NULL OR datetime >= ?)` clause evaluated to
+  // TRUE when windowStart was null, matching ALL historical actions on
+  // that post. That's how a 0/500 batch was showing 9 followers back —
+  // they came from a PRIOR successful batch on the same post.
   const performanceRows = [];
   for (const q of queueItems) {
     const windowStart = q.claimed_at || q.action_date || null;
-    const windowEnd = q.action_date || null; // completed_at if available
-    const targets = db.prepare(`
-      SELECT DISTINCT username FROM instagram_actions
-      WHERE user_id = ?
-        AND my_profile = ?
-        AND post_url = ?
-        AND type = ?
-        AND (? IS NULL OR datetime(action_date) >= datetime(?))
-        AND (? IS NULL OR datetime(action_date) <= datetime(?))
-        AND username IS NOT NULL
-    `).all(
-      uid, q.as_account, q.post_url, q.action_type,
-      windowStart, windowStart,
-      windowEnd, windowEnd
-    ).map(r => r.username);
+    // No upper bound — inbound engagement can come days after the batch
+    // finished. (Previously bounded by completed_at, which clipped late
+    // attribution.)
+    let targets = [];
+    if (windowStart) {
+      targets = db.prepare(`
+        SELECT DISTINCT username FROM instagram_actions
+        WHERE user_id = ?
+          AND my_profile = ?
+          AND post_url = ?
+          AND type = ?
+          AND datetime(action_date) >= datetime(?)
+          AND username IS NOT NULL
+      `).all(uid, q.as_account, q.post_url, q.action_type, windowStart)
+        .map(r => r.username);
+    }
 
     let followersBack = 0;
+    let likesBack = 0;
+    let commentsBack = 0;
     let avgMinutesToFollowback = null;
     if (targets.length > 0) {
       const ph = targets.map(() => '?').join(',');
-      const fbs = db.prepare(`
-        SELECT username, created_at FROM instagram_actions
+      // All inbound events from THESE targets after the batch started.
+      // We split into followers vs likes-back vs comments-back so the UI
+      // can show separate columns ("when they like my posts back",
+      // "when they comment", etc).
+      const inbound = db.prepare(`
+        SELECT username, type, created_at FROM instagram_actions
         WHERE user_id = ?
-          AND type = 'new_follower'
+          AND (type = 'new_follower' OR type LIKE 'received_%')
           AND username IN (${ph})
           AND datetime(created_at) > datetime(?)
-      `).all(uid, ...targets, q.claimed_at || q.action_date);
-      followersBack = fbs.length;
-      if (fbs.length > 0) {
-        const baseMs = new Date(q.claimed_at || q.action_date).getTime();
+      `).all(uid, ...targets, windowStart);
+
+      const followerEvents = [];
+      for (const ev of inbound) {
+        if (ev.type === 'new_follower') {
+          followerEvents.push(ev);
+        } else if (/^received_(like|got_like)/.test(ev.type)) {
+          likesBack++;
+        } else if (/^received_(comment|reply|got_comment|got_reply|got_mention|mention)/.test(ev.type)) {
+          commentsBack++;
+        }
+      }
+      followersBack = followerEvents.length;
+      if (followerEvents.length > 0) {
+        const baseMs = new Date(windowStart).getTime();
         let sumMin = 0, n = 0;
-        for (const fb of fbs) {
+        for (const fb of followerEvents) {
           const diff = (new Date(fb.created_at).getTime() - baseMs) / 60000;
           if (diff > 0) { sumMin += diff; n++; }
         }
         if (n > 0) avgMinutesToFollowback = Math.round(sumMin / n);
       }
     }
+    const totalEngagementBack = followersBack + likesBack + commentsBack;
     const conversionRate = q.count_done > 0
-      ? Math.round((followersBack / q.count_done) * 1000) / 10
+      ? Math.round((totalEngagementBack / q.count_done) * 1000) / 10
       : null;
 
     performanceRows.push({
@@ -862,6 +888,9 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       action_date: q.action_date,
       targets: targets.length,
       followers_back: followersBack,
+      likes_back: likesBack,
+      comments_back: commentsBack,
+      total_engagement_back: totalEngagementBack,
       avg_minutes_to_followback: avgMinutesToFollowback,
       conversion_rate: conversionRate,
     });
