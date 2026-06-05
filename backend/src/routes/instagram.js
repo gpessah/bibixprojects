@@ -1955,6 +1955,28 @@ router.post('/action-campaigns/:id/cancel', authenticateFlexible, (req, res) => 
   res.json({ ok: true });
 });
 
+// Monday: pause a running/pending campaign. In-flight items (claimed/
+// running queue rows) keep running to completion — pausing only stops
+// NEW items from being claimed by the extension. The user can resume
+// later to continue the remaining pending items where the batch left off.
+router.post('/action-campaigns/:id/pause', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare(`
+    UPDATE instagram_action_campaigns
+    SET status = 'paused'
+    WHERE id = ? AND user_id = ? AND status IN ('pending', 'running')
+  `).run(req.params.id, uid);
+  // Also flip pending queue items to 'paused' so /pending-accounts
+  // doesn't pick them up. Items already 'claimed' or 'running' keep
+  // running until they naturally finish (then they're terminal anyway).
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = 'paused'
+    WHERE campaign_id = ? AND status = 'pending'
+  `).run(req.params.id);
+  res.json({ ok: true });
+});
+
 // Monday: resume paused campaign
 router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
@@ -1963,6 +1985,13 @@ router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => 
     SET status = 'pending', consecutive_failures = 0, error_message = NULL
     WHERE id = ? AND user_id = ? AND status IN ('paused', 'failed')
   `).run(req.params.id, uid);
+  // Flip the items that were paused back to pending so they can be
+  // claimed by the extension on the next poll cycle.
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = 'pending'
+    WHERE campaign_id = ? AND status = 'paused'
+  `).run(req.params.id);
   res.json({ ok: true });
 });
 

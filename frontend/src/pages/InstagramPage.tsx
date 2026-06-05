@@ -1248,6 +1248,10 @@ export default function InstagramPage() {
     await api.post(`/instagram/action-campaigns/${id}/resume${qs}`);
     await loadActionCampaigns();
   }
+  async function pauseActionCampaign(id: string) {
+    await api.post(`/instagram/action-campaigns/${id}/pause${qs}`);
+    await loadActionCampaigns();
+  }
   async function duplicateCampaign(id: string) {
     try {
       const res = await api.post(`/instagram/action-campaigns/${id}/duplicate${qs}`);
@@ -3466,12 +3470,18 @@ export default function InstagramPage() {
                                   className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Send</button>
                               )}
                               {(c.status === 'running' || c.status === 'pending') && (
-                                <button onClick={() => cancelActionCampaign(c.id)}
-                                  className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                                <>
+                                  <button onClick={() => pauseActionCampaign(c.id)}
+                                    title="Pause — stops claiming new items. In-flight tabs finish normally."
+                                    className="text-xs px-2 py-1 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded">⏸ Pause</button>
+                                  <button onClick={() => cancelActionCampaign(c.id)}
+                                    className="text-xs text-red-600 hover:text-red-800">Cancel</button>
+                                </>
                               )}
                               {(c.status === 'paused' || c.status === 'failed') && (
                                 <button onClick={() => resumeActionCampaign(c.id)}
-                                  className="text-xs text-blue-600 hover:text-blue-800">Resume</button>
+                                  title="Resume — pending items return to the queue and the extension picks them up on the next poll."
+                                  className="text-xs px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">▶ Resume</button>
                               )}
                               <button onClick={() => duplicateCampaign(c.id)} title="Duplicate into new draft"
                                 className="text-gray-400 hover:text-blue-600"><Copy size={14} /></button>
