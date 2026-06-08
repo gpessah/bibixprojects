@@ -158,6 +158,22 @@ try {
       ON instagram_actions(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_created
       ON instagram_actions(user_id, type, created_at);
+    -- Hot path: campaignPerformance & /campaigns enrichment look up
+    -- "who did we engage with on this post" — was a full table scan.
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_profile_post_type
+      ON instagram_actions(user_id, my_profile, post_url, type);
+    -- Hot path: followersBack/engagementBack looks up inbound events
+    -- by username. Critical when instagram_actions grows past 10k rows.
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_username
+      ON instagram_actions(user_id, type, username);
+    -- Hot path: /campaigns enrichment joins on (campaign_id, user_id).
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_campaign
+      ON instagram_actions(campaign_id, user_id);
+    -- Hot path: dashboard attribution self-join matches on (username,
+    -- user_id, action_date) when looking for the prior outbound that
+    -- preceded each inbound event.
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_username_date
+      ON instagram_actions(user_id, username, action_date);
     CREATE TABLE IF NOT EXISTS instagram_automations (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -479,9 +495,49 @@ const INBOUND_TYPE_ALIASES = {
 // "any-engagement-back" check.
 const ALL_INBOUND_TYPES = Object.values(INBOUND_TYPE_ALIASES).flat();
 
+// In-memory cache for /stats responses. The endpoint runs many per-row
+// sub-queries (campaignPerformance × N queue items + attribution self-join
+// + per-account growth + ...) and was slow at the dashboard's natural
+// refresh rate. 30s TTL is enough that repeated dashboard views feel
+// instant, but fresh enough that the user isn't looking at stale data.
+// The Refresh button busts the cache via ?bust=<timestamp> in the URL
+// (any unrecognized query param makes the cache key unique).
+const STATS_CACHE = new Map();          // key → { body, ts }
+const STATS_CACHE_TTL_MS = 30 * 1000;
+// Janitor: drop entries older than 5× TTL to bound the map size.
+setInterval(() => {
+  const cutoff = Date.now() - STATS_CACHE_TTL_MS * 5;
+  for (const [k, v] of STATS_CACHE) {
+    if (v.ts < cutoff) STATS_CACHE.delete(k);
+  }
+}, STATS_CACHE_TTL_MS).unref?.();
+
 router.get("/stats", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const days = parseInt(req.query.days, 10) || 30;
+
+  // Cache key includes uid + every query param that affects the response
+  // (date range, profiles filter, action-type filter, batch_id filter).
+  const cacheKey = JSON.stringify({
+    uid, days,
+    from: req.query.from || null, to: req.query.to || null,
+    profiles: req.query.profiles || null,
+    action_types: req.query.action_types || null,
+    batch_id: req.query.batch_id || null,
+    bust: req.query.bust || null, // refresh button sends this to skip cache
+  });
+  if (!req.query.bust) {
+    const cached = STATS_CACHE.get(cacheKey);
+    if (cached && Date.now() - cached.ts < STATS_CACHE_TTL_MS) {
+      return res.json(cached.body);
+    }
+  }
+  // Override res.json to capture the response into the cache.
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    STATS_CACHE.set(cacheKey, { body, ts: Date.now() });
+    return origJson(body);
+  };
 
   // ── Build a reusable WHERE clause + param list based on the query filters
   // (profiles[], action_types[], batch_id, and a date range that can be

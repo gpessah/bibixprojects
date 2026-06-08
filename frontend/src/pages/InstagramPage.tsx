@@ -388,6 +388,11 @@ export default function InstagramPage() {
     if (dashActionTypes.length > 0) params.set('action_types', dashActionTypes.join(','));
     if (dashBatchId) params.set('batch_id', dashBatchId);
     if (asUser) params.set('as_user', asUser);
+    // When the user clicks Refresh, bust the backend's 30s /stats cache
+    // by including a unique `bust` param. Without it, the backend serves
+    // the cached version which is fine for auto-refreshes but feels
+    // broken when the user explicitly asks for a refresh.
+    if (refreshTick > 0) params.set('bust', String(refreshTick));
     api.get(`/instagram/stats?${params.toString()}`)
       .then((r: { data: Stats }) => setStats(r.data))
       .finally(() => setLoading(false));
