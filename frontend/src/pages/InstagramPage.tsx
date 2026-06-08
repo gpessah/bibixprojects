@@ -378,6 +378,14 @@ export default function InstagramPage() {
   // refresh buttons on the Dashboard and History pages so users can pull
   // the latest data without switching tabs or reloading the page.
   const [refreshTick, setRefreshTick] = useState(0);
+  // Pagination state for Batches tab — declared early so useEffects
+  // below can reference these names. Default: load 10 rows, "Load more"
+  // button bumps the limit by BATCH_PAGE_SIZE each click.
+  const BATCH_PAGE_SIZE = 10;
+  const [actionCampaignsLimit, setActionCampaignsLimit] = useState(BATCH_PAGE_SIZE);
+  const [actionCampaignsTotal, setActionCampaignsTotal] = useState(0);
+  const [campaignsLimit, setCampaignsLimit] = useState(BATCH_PAGE_SIZE);
+  const [campaignsTotal, setCampaignsTotal] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -1034,15 +1042,6 @@ export default function InstagramPage() {
   const [byUrlReplySource, setByUrlReplySource] = useState<'default' | 'custom' | 'ai'>('default');
   const [byUrlReplyText, setByUrlReplyText] = useState('');
   const [byUrlBusy, setByUrlBusy] = useState(false);
-
-  // Pagination state — initial load fetches first BATCH_PAGE_SIZE, the
-  // "Load more" button refetches with a larger limit (or a higher offset
-  // — we go with growing limit which keeps the list scrolling cleanly).
-  const BATCH_PAGE_SIZE = 10;
-  const [actionCampaignsLimit, setActionCampaignsLimit] = useState(BATCH_PAGE_SIZE);
-  const [actionCampaignsTotal, setActionCampaignsTotal] = useState(0);
-  const [campaignsLimit, setCampaignsLimit] = useState(BATCH_PAGE_SIZE);
-  const [campaignsTotal, setCampaignsTotal] = useState(0);
 
   const loadActionCampaigns = async (limit = actionCampaignsLimit) => {
     try {
