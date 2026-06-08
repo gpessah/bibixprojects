@@ -2631,7 +2631,7 @@ router.get('/admin/health', authenticateFlexible, (req, res) => {
   // automations but none enabled; FAILING if the last fire reported failure.
   const autoStats = db.prepare(`
     SELECT COUNT(*) AS total,
-           SUM(CASE WHEN is_enabled = 1 THEN 1 ELSE 0 END) AS enabled,
+           SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END) AS enabled,
            MAX(last_run_at) AS last_run
     FROM instagram_automations WHERE user_id = ?
   `).get(uid) || {};
