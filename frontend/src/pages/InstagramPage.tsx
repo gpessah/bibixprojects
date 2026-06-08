@@ -407,9 +407,21 @@ export default function InstagramPage() {
     });
   }, [asUser, refreshTick]);
 
+  // Manual sessions — paginated, default 10. Re-runs when the user clicks
+  // "Load more" (which bumps campaignsLimit). Reads either the new
+  // { rows, total } envelope or the legacy bare array.
   useEffect(() => {
-    api.get(`/instagram/campaigns${qs}`).then((r: { data: Campaign[] }) => setCampaigns(r.data));
-  }, [asUser]);
+    const sep = qs.includes('?') ? '&' : '?';
+    api.get(`/instagram/campaigns${qs}${sep}limit=${campaignsLimit}`).then((r: { data: Campaign[] | { rows: Campaign[]; total: number } }) => {
+      if (Array.isArray(r.data)) {
+        setCampaigns(r.data);
+        setCampaignsTotal(r.data.length);
+      } else {
+        setCampaigns(r.data.rows || []);
+        setCampaignsTotal(r.data.total || 0);
+      }
+    });
+  }, [asUser, campaignsLimit]);
 
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1); }, [fAction, fProfile, fUser, fPostOwner, fDateFrom, fDateTo, fFollowersOp, fFollowersVal, fFollowersVal2]);
@@ -1023,10 +1035,29 @@ export default function InstagramPage() {
   const [byUrlReplyText, setByUrlReplyText] = useState('');
   const [byUrlBusy, setByUrlBusy] = useState(false);
 
-  const loadActionCampaigns = async () => {
+  // Pagination state — initial load fetches first BATCH_PAGE_SIZE, the
+  // "Load more" button refetches with a larger limit (or a higher offset
+  // — we go with growing limit which keeps the list scrolling cleanly).
+  const BATCH_PAGE_SIZE = 10;
+  const [actionCampaignsLimit, setActionCampaignsLimit] = useState(BATCH_PAGE_SIZE);
+  const [actionCampaignsTotal, setActionCampaignsTotal] = useState(0);
+  const [campaignsLimit, setCampaignsLimit] = useState(BATCH_PAGE_SIZE);
+  const [campaignsTotal, setCampaignsTotal] = useState(0);
+
+  const loadActionCampaigns = async (limit = actionCampaignsLimit) => {
     try {
-      const res = await api.get(`/instagram/action-campaigns${qs}`);
-      setActionCampaigns(Array.isArray(res.data) ? res.data as ActionCampaignSummary[] : []);
+      const sep = qs.includes('?') ? '&' : '?';
+      const res = await api.get(`/instagram/action-campaigns${qs}${sep}limit=${limit}`);
+      // New paginated response: { rows, total, has_more }.
+      // Legacy fallback: bare array (for old backend before this commit).
+      const data = res.data;
+      if (Array.isArray(data)) {
+        setActionCampaigns(data as ActionCampaignSummary[]);
+        setActionCampaignsTotal(data.length);
+      } else {
+        setActionCampaigns(Array.isArray(data.rows) ? data.rows as ActionCampaignSummary[] : []);
+        setActionCampaignsTotal(data.total || 0);
+      }
     } catch (_) { /* keep state */ }
   };
   const loadExpandedItems = async (id: string) => {
@@ -1037,8 +1068,8 @@ export default function InstagramPage() {
   };
 
   useEffect(() => {
-    if (tab === 'campaigns' || tab === 'dashboard') loadActionCampaigns();
-  }, [tab, asUser]);
+    if (tab === 'campaigns' || tab === 'dashboard') loadActionCampaigns(actionCampaignsLimit);
+  }, [tab, asUser, actionCampaignsLimit]);
 
   useEffect(() => {
     if (tab !== 'campaigns') return;
@@ -3426,7 +3457,7 @@ export default function InstagramPage() {
             {/* Action campaigns header + create button */}
             <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-gray-900">Action Batches <span className="text-gray-400 font-normal">({actionCampaigns.length})</span></h3>
+                <h3 className="font-semibold text-gray-900">Action Batches <span className="text-gray-400 font-normal">({actionCampaigns.length}{actionCampaignsTotal > actionCampaigns.length ? ` of ${actionCampaignsTotal}` : ''})</span></h3>
                 <div className="flex items-center gap-2">
                   <button onClick={loadActionCampaigns} className="text-gray-400 hover:text-gray-600" title="Refresh">
                     <RefreshCw size={16} />
@@ -3739,6 +3770,17 @@ export default function InstagramPage() {
                   })}
                 </div>
               )}
+              {/* Load more — Action Batches. Same pattern as Manual sessions:
+                  bumps the limit, useEffect refetches with the new value. */}
+              {actionCampaignsTotal > actionCampaigns.length && (
+                <div className="text-center mt-3">
+                  <button onClick={() => setActionCampaignsLimit(l => l + BATCH_PAGE_SIZE)}
+                    className="text-xs px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded border border-gray-200">
+                    Load {Math.min(BATCH_PAGE_SIZE, actionCampaignsTotal - actionCampaigns.length)} more
+                    <span className="text-gray-400 ml-1">({actionCampaignsTotal - actionCampaigns.length} remaining)</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* ───── Manual extension popup sessions (single-post, no parent batch) ─────
@@ -3749,7 +3791,7 @@ export default function InstagramPage() {
             {campaigns.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-5">
                 <h3 className="font-semibold text-gray-900 mb-3">
-                  Manual sessions <span className="text-gray-400 font-normal">({campaigns.length})</span>
+                  Manual sessions <span className="text-gray-400 font-normal">({campaigns.length}{campaignsTotal > campaigns.length ? ` of ${campaignsTotal}` : ''})</span>
                   <span className="ml-2 text-xs font-normal text-gray-500">— individual likes/replies fired from the extension popup</span>
                 </h3>
                 <div className="space-y-2">
@@ -3805,6 +3847,18 @@ export default function InstagramPage() {
                     );
                   })}
                 </div>
+                {/* Load more — bump the limit by another page. Refetches and
+                    replaces the list (the new fetch contains everything from
+                    page 1 through page N, so scroll position is preserved). */}
+                {campaignsTotal > campaigns.length && (
+                  <div className="text-center mt-3">
+                    <button onClick={() => setCampaignsLimit(l => l + BATCH_PAGE_SIZE)}
+                      className="text-xs px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded border border-gray-200">
+                      Load {Math.min(BATCH_PAGE_SIZE, campaignsTotal - campaigns.length)} more
+                      <span className="text-gray-400 ml-1">({campaignsTotal - campaigns.length} remaining)</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

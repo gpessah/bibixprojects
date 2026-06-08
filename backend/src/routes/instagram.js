@@ -403,6 +403,12 @@ router.patch("/campaigns/:id", authenticateFlexible, (req, res) => {
 
 router.get("/campaigns", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  // Pagination — same shape as /action-campaigns. Default 10, max 100.
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const total = db.prepare(
+    'SELECT COUNT(*) AS n FROM instagram_campaigns WHERE user_id = ? AND parent_queue_id IS NULL'
+  ).get(uid)?.n || 0;
   // Only show MANUAL extension popup runs — sub-sessions created by queue
   // dispatch (parent_queue_id IS NOT NULL) are deduped against their parent
   // action_campaigns row.
@@ -416,8 +422,8 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     FROM instagram_campaigns ic
     WHERE ic.user_id = ?
       AND ic.parent_queue_id IS NULL
-    ORDER BY ic.started_at DESC
-  `).all(uid);
+    ORDER BY ic.started_at DESC LIMIT ? OFFSET ?
+  `).all(uid, limit, offset);
 
   // Enrich each row with:
   //   • post_urls  — distinct posts touched by this campaign's actions
@@ -475,7 +481,13 @@ router.get("/campaigns", authenticateFlexible, (req, res) => {
     c.engagement_back = eb?.n || 0;
   }
 
-  res.json(rows);
+  res.json({
+    rows,
+    total,
+    limit,
+    offset,
+    has_more: offset + rows.length < total,
+  });
 });
 
 // ── Stats / Dashboard ─────────────────────────────────────────────────────────
@@ -1627,6 +1639,18 @@ router.post('/action-campaigns', authenticateFlexible, (req, res) => {
 // the target IG account on the list page.
 router.get('/action-campaigns', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
+  // Pagination: default page size 10 (small, fast-loading). Frontend
+  // requests more via ?limit=10&offset=10 ("Load more" button).
+  // Cap limit at 100 to prevent abuse / runaway queries.
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 10));
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+
+  // Total row count for the "Load more" button — lets the UI know if
+  // there are more pages without paginating to find out.
+  const total = db.prepare(
+    'SELECT COUNT(*) AS n FROM instagram_action_campaigns WHERE user_id = ?'
+  ).get(uid)?.n || 0;
+
   const rows = db.prepare(`
     SELECT c.*,
            (SELECT COUNT(*) FROM instagram_action_queue q WHERE q.campaign_id = c.id) AS items_count,
@@ -1635,8 +1659,8 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
            ) AS as_account
     FROM instagram_action_campaigns c
     WHERE c.user_id = ?
-    ORDER BY c.created_at DESC LIMIT 100
-  `).all(uid);
+    ORDER BY c.created_at DESC LIMIT ? OFFSET ?
+  `).all(uid, limit, offset);
 
   // Reconcile total_completed against actual instagram_actions rows. The
   // stored count_done is only PATCHed at the script's final DONE — if the
@@ -1718,7 +1742,16 @@ router.get('/action-campaigns', authenticateFlexible, (req, res) => {
     c.engagement_back = eb?.n || 0;
   }
 
-  res.json(rows);
+  // Paginated response shape: rows + total + has_more flag for the UI.
+  // Kept rows at the top level too for any old client that ignores the
+  // new envelope keys, though the frontend already reads .rows now.
+  res.json({
+    rows,
+    total,
+    limit,
+    offset,
+    has_more: offset + rows.length < total,
+  });
 });
 
 // Add a single item to an existing campaign (draft or pending/running).
