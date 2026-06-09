@@ -343,6 +343,7 @@ export default function InstagramPage() {
   }, []);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [stats, setStats]           = useState<Stats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [actions, setActions]       = useState<Action[]>([]);
   const [campaigns, setCampaigns]   = useState<Campaign[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -401,8 +402,16 @@ export default function InstagramPage() {
     // the cached version which is fine for auto-refreshes but feels
     // broken when the user explicitly asks for a refresh.
     if (refreshTick > 0) params.set('bust', String(refreshTick));
+    setStatsError(null);
     api.get(`/instagram/stats?${params.toString()}`)
-      .then((r: { data: Stats }) => setStats(r.data))
+      .then((r: { data: Stats }) => { setStats(r.data); setStatsError(null); })
+      .catch((e: unknown) => {
+        const msg = (e as { response?: { status?: number; data?: { error?: string } }; message?: string });
+        const status = msg.response?.status;
+        const body = msg.response?.data?.error || msg.message || 'unknown';
+        setStatsError(`Failed to load dashboard (HTTP ${status ?? '?'}): ${body}`);
+        // Don't blank out previous stats — keep them visible if user just toggled a filter
+      })
       .finally(() => setLoading(false));
   }, [days, asUser, dashFrom, dashTo, dashProfiles, dashActionTypes, dashBatchId, refreshTick]);
 
@@ -1514,9 +1523,19 @@ export default function InstagramPage() {
               </div>
             </div>
 
+            {statsError && (
+              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                <strong>Dashboard error:</strong> {statsError}
+                <button onClick={() => setRefreshTick(t => t + 1)} className="ml-3 underline text-red-800">Retry</button>
+              </div>
+            )}
             {loading ? (
               <div className="flex items-center justify-center py-20">
                 <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
+              </div>
+            ) : !stats && !statsError ? (
+              <div className="py-20 text-center text-gray-500 text-sm">
+                No data yet. If this is a fresh install, run an action batch first.
               </div>
             ) : stats && (
               <>
