@@ -1,0 +1,9 @@
+node_modules
+.next
+.env
+.env.local
+*.log
+.DS_Store
+/public/uploads/*
+!/public/uploads/.gitkeep
+.vercel

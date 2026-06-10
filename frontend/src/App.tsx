@@ -21,6 +21,7 @@ import PublicFormPage from './pages/PublicFormPage';
 import InstagramPage from './pages/InstagramPage';
 import LinkedInPage from './pages/LinkedInPage';
 import BackupsPage from './pages/BackupsPage';
+import ReportsPage from './pages/ReportsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="scheduling" element={<ModuleRoute module="scheduling"><SchedulingPage /></ModuleRoute>} />
         <Route path="crm" element={<ModuleRoute module="crm"><CRMPage /></ModuleRoute>} />
         <Route path="invoices" element={<InvoicePage />} />
+        <Route path="bi" element={<ModuleRoute module="reports"><ReportsPage /></ModuleRoute>} />
         <Route path="instagram" element={<Navigate to="/marketing/instagram" replace />} />
         <Route path="marketing/instagram" element={<ModuleRoute module="instagram"><InstagramPage /></ModuleRoute>} />
         <Route path="marketing/linkedin"  element={<ModuleRoute module="linkedin"><LinkedInPage /></ModuleRoute>} />

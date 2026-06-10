@@ -23,6 +23,7 @@ const MODULES: { id: AppModule; label: string; description: string; emoji: strin
   { id: 'scheduling', label: 'Scheduling',           description: 'Manage bookings and schedules',   emoji: '🗓️' },
   { id: 'crm',        label: 'CRM',                  description: 'Contacts, forms and reports',     emoji: '👥' },
   { id: 'invoices',   label: 'Invoices',             description: 'Create and manage invoices',      emoji: '🧾' },
+  { id: 'reports',    label: 'Reports & BI',         description: 'Dashboards from Google Sheets',   emoji: '📊' },
   { id: 'marketing',  label: 'Marketing',            description: 'Social media and campaigns',      emoji: '📣' },
 ];
 

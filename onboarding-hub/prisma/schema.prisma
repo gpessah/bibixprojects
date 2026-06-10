@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Branding / look & feel (singleton row) ----------
+model Branding {
+  id              Int      @id @default(1)
+  companyName     String   @default("Acme")
+  tagline         String   @default("Welcome aboard")
+  logoUrl         String?
+  faviconUrl      String?
+  bgColor         String   @default("#000000")
+  surfaceColor    String   @default("#0b0b0b")
+  borderColor     String   @default("#1f1f1f")
+  textColor       String   @default("#ffffff")
+  mutedColor      String   @default("#8a8a8a")
+  primaryColor    String   @default("#6366f1")
+  accentColor     String   @default("#22d3ee")
+  fontFamily      String   @default("ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif")
+  cardRadius      Int      @default(18)
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------- Welcome / hero ----------
+model Welcome {
+  id            Int     @id @default(1)
+  title         String  @default("Welcome to the team")
+  message       String  @default("We're thrilled to have you. This hub is your starting point.")
+  videoUrl      String?
+  heroImageUrl  String?
+  ctaLabel      String  @default("Get started")
+  ctaUrl        String?
+}
+
+// ---------- Top-level dashboard sections (the 6 cards) ----------
+model Section {
+  id        String        @id @default(cuid())
+  key       String        @unique // "welcome", "first-week", "product", "engineering", "compliance", "people"
+  title     String
+  icon      String        @default("Sparkles") // lucide icon name
+  enabled   Boolean       @default(true)
+  order     Int           @default(0)
+  items     SectionItem[]
+}
+
+model SectionItem {
+  id         String   @id @default(cuid())
+  sectionId  String
+  section    Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  title      String
+  body       String?  // markdown / plain text
+  linkUrl    String?
+  order      Int      @default(0)
+}
+
+// ---------- 90-day plan ----------
+model PlanMilestone {
+  id          String     @id @default(cuid())
+  title       String
+  description String?
+  dayRange    String     @default("Day 1-7") // freeform label
+  order       Int        @default(0)
+  tasks       PlanTask[]
+}
+
+model PlanTask {
+  id            String        @id @default(cuid())
+  milestoneId   String
+  milestone     PlanMilestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  title         String
+  description   String?
+  required      Boolean       @default(false)
+  order         Int           @default(0)
+}
+
+// ---------- Products & platform ----------
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  imageUrl    String?
+  linkUrl     String?
+  // recharts-friendly JSON: [{label, value}, ...]
+  chartData   String? // serialized JSON
+  chartLabel  String?
+  order       Int     @default(0)
+}
+
+// ---------- Team members ----------
+model TeamMember {
+  id        String  @id @default(cuid())
+  name      String
+  role      String?
+  photoUrl  String?
+  bio       String?
+  order     Int     @default(0)
+}
+
+// ---------- Values ----------
+model Value {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  icon        String  @default("Sparkles")
+  order       Int     @default(0)
+}
+
+// ---------- Admin user ----------
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+}

@@ -63,6 +63,11 @@ app.use('/api/instagram',      instagramRouter);
 app.use('/api/linkedin',       require('./routes/linkedin'));
 app.use('/api/contacts',       require('./routes/contacts'));
 app.use('/api/ai',             require('./routes/ai'));
+app.use('/api/bibixchat',      require('./routes/bibixchat'));
+const biRouter = require('./routes/bi');
+app.use('/api/bi',             biRouter);
+// Start the BI sheet-sync scheduler (refreshes datasources on their interval)
+try { biRouter.startScheduler(); } catch (e) { console.warn('[BI] scheduler start failed:', e.message); }
 
 // Start Telegram bot (only if TELEGRAM_BOT_TOKEN is set)
 const tgBot = require('./bot/telegram');
