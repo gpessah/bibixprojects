@@ -1252,6 +1252,22 @@ export default function InstagramPage() {
     }
   }
 
+  // Retry a failed/partial/no_targets/cancelled queue item. Backend resets
+  // status → pending, clears count_done, claimed/started/completed/heartbeat,
+  // and re-opens the parent campaign if it was paused or completed. The
+  // extension's next dispatch poll picks it up automatically. IG's
+  // already-liked state handles dedup of comments we hit previously.
+  async function retryItem(campaignId: string, itemId: string) {
+    try {
+      await api.post(`/instagram/action-queue/${itemId}/retry${qs}`);
+      await loadExpandedItems(campaignId);
+      await loadActionCampaigns();
+    } catch (e: unknown) {
+      const msg = e as { response?: { data?: { error?: string } } };
+      alert('Failed to retry: ' + (msg.response?.data?.error || (e instanceof Error ? e.message : String(e))));
+    }
+  }
+
   async function sendCampaign(id: string) {
     try {
       await api.post(`/instagram/action-campaigns/${id}/send${qs}`);
@@ -3668,16 +3684,24 @@ export default function InstagramPage() {
                                             </span>
                                           </td>
                                           <td className="py-1.5 pr-2">
-                                            {it.status === 'pending' && (
-                                              <div className="flex items-center gap-1 justify-end">
-                                                {it.action_type === 'reply' && !isEditingReply && (
-                                                  <button onClick={() => startEditReply(it)} title="Edit reply text"
-                                                    className="text-gray-400 hover:text-blue-600"><Pencil size={12} /></button>
-                                                )}
-                                                <button onClick={() => removeItem(c.id, it.id)} title="Remove"
-                                                  className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
-                                              </div>
-                                            )}
+                                            <div className="flex items-center gap-1 justify-end">
+                                              {it.status === 'pending' && (
+                                                <>
+                                                  {it.action_type === 'reply' && !isEditingReply && (
+                                                    <button onClick={() => startEditReply(it)} title="Edit reply text"
+                                                      className="text-gray-400 hover:text-blue-600"><Pencil size={12} /></button>
+                                                  )}
+                                                  <button onClick={() => removeItem(c.id, it.id)} title="Remove"
+                                                    className="text-gray-400 hover:text-red-500"><Trash2 size={12} /></button>
+                                                </>
+                                              )}
+                                              {(it.status === 'failed' || it.status === 'partial' || it.status === 'no_targets' || it.status === 'cancelled') && (
+                                                <button onClick={() => retryItem(c.id, it.id)} title="Retry this item"
+                                                  className="text-xs px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100">
+                                                  ↻ Retry
+                                                </button>
+                                              )}
+                                            </div>
                                           </td>
                                         </tr>
                                         {/* Inline error row for failed/partial items so the user

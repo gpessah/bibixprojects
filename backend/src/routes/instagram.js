@@ -2309,6 +2309,64 @@ router.patch('/action-queue/:id', authenticateFlexible, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Retry a failed/partial/no_targets queue item ─────────────────────────────
+// Resets the row back to 'pending' so the extension's dispatch loop picks it
+// up on its next poll. Use cases:
+//   • failed: tab went silent / crashed → retry afresh (count_done reset)
+//   • partial: post had enough comments but loader ran out → retry to push
+//     toward the full target. IG already remembers the comments we liked
+//     before, so the new attempt automatically skips them and only adds
+//     incremental likes toward the target.
+//   • no_targets: post had nothing eligible at the time → retry to see if
+//     IG has surfaced more comments since.
+//   • cancelled: user cancelled mid-batch → can be revived via retry.
+//   • completed: no-op (don't allow re-running a successful item).
+//   • pending/claimed/running: no-op (already in flight).
+//
+// Also re-opens the parent campaign if it was 'paused' (after 3 consecutive
+// failures) or 'completed' (final item finished but user wants to extend).
+router.post('/action-queue/:id/retry', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const item = db.prepare('SELECT * FROM instagram_action_queue WHERE id = ? AND user_id = ?').get(req.params.id, uid);
+  if (!item) return res.status(404).json({ error: 'not found' });
+
+  const RETRYABLE = ['failed', 'partial', 'no_targets', 'cancelled'];
+  if (!RETRYABLE.includes(item.status)) {
+    return res.status(400).json({ error: `cannot retry status='${item.status}' (only ${RETRYABLE.join('/')})` });
+  }
+
+  // Reset the item — clear all in-flight markers and counters so a fresh
+  // attempt starts cleanly. Keep count_requested unchanged.
+  db.prepare(`
+    UPDATE instagram_action_queue
+    SET status = 'pending',
+        count_done = 0,
+        error_message = NULL,
+        claimed_at = NULL,
+        started_at = NULL,
+        completed_at = NULL,
+        last_heartbeat_at = NULL
+    WHERE id = ?
+  `).run(req.params.id);
+
+  // Re-open the parent campaign if it was paused/completed — there's pending
+  // work again. Reset consecutive_failures so the auto-pause-after-3 logic
+  // gives the retry a clean window.
+  const camp = db.prepare('SELECT * FROM instagram_action_campaigns WHERE id = ?').get(item.campaign_id);
+  if (camp && (camp.status === 'paused' || camp.status === 'completed')) {
+    db.prepare(`
+      UPDATE instagram_action_campaigns
+      SET status = 'running',
+          ended_at = NULL,
+          consecutive_failures = 0,
+          error_message = NULL
+      WHERE id = ?
+    `).run(camp.id);
+  }
+
+  res.json({ ok: true });
+});
+
 // ── Daily follower count tracking ────────────────────────────────────────────
 // Extension scrapes the public profile page of each managed account once a
 // day, reads the follower count from the og:description meta tag, and POSTs
