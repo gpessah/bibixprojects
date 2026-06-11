@@ -1035,6 +1035,18 @@ export default function InstagramPage() {
   const [createStartAt, setCreateStartAt] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
 
+  // ─── Quick Batch (mobile-first one-screen create + send) ──────────────────
+  // The classic flow has three steps (create draft → add posts one by one →
+  // press Send). On mobile that's tedious — this panel collapses all three
+  // into a single screen: pick account, pick action, set count, paste post
+  // URLs (one per line), tap one button.
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [quickAccount, setQuickAccount] = useState('');
+  const [quickActionType, setQuickActionType] = useState<'like' | 'reply' | 'follow'>('like');
+  const [quickCount, setQuickCount] = useState('100');
+  const [quickUrls, setQuickUrls] = useState('');
+  const [quickBusy, setQuickBusy] = useState(false);
+
   // Add-to-campaign modal (triggered from Research)
   const [showAddToCampaign, setShowAddToCampaign] = useState(false);
   const [addToCampaignId, setAddToCampaignId] = useState('');
@@ -1119,6 +1131,74 @@ export default function InstagramPage() {
     } catch (e: unknown) {
       alert('Failed to create batch: ' + (e instanceof Error ? e.message : String(e)));
     } finally { setCreateBusy(false); }
+  }
+
+  // Mobile Quick Batch — one tap to create draft, add all pasted posts as
+  // items, and send. Bundles three API calls (POST campaign, POST items,
+  // POST send) into one flow so the PWA user never has to navigate between
+  // steps. Validates: at least one valid post URL, account picked, count > 0.
+  //
+  // Accepted URL formats (all parsed to canonical /p/<code>/):
+  //   https://www.instagram.com/p/CODE/
+  //   https://www.instagram.com/reel/CODE/
+  //   https://www.instagram.com/<user>/p/CODE/
+  //   instagram.com/p/CODE
+  //   p/CODE/
+  function parsePostUrls(text: string): string[] {
+    const lines = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    const out: string[] = [];
+    for (const line of lines) {
+      const m = line.match(/(?:^|\/)(?:p|reel)\/([A-Za-z0-9_-]+)/);
+      if (m) out.push(`https://www.instagram.com/p/${m[1]}/`);
+    }
+    // Deduplicate while preserving order
+    return [...new Set(out)];
+  }
+
+  async function submitQuickBatch() {
+    if (!quickAccount) { alert('Pick an Instagram account first.'); return; }
+    const urls = parsePostUrls(quickUrls);
+    if (urls.length === 0) { alert('Paste at least one Instagram post URL (one per line).'); return; }
+    if (urls.length > 20) { alert(`Max 20 posts per batch — you pasted ${urls.length}. Trim the list and try again.`); return; }
+    const count = Math.max(1, Math.min(800, parseInt(quickCount, 10) || 0));
+    if (count === 0) { alert('Count must be at least 1.'); return; }
+
+    setQuickBusy(true);
+    try {
+      // 1) Create draft batch
+      const camp = await api.post(`/instagram/action-campaigns${qs}`, {
+        as_account: quickAccount,
+        concurrency: 6,
+        free_text: `quick · ${urls.length} post${urls.length === 1 ? '' : 's'} × ${count} ${quickActionType}`,
+        start_at: null,
+      });
+      const campaignId = camp.data?.id;
+      if (!campaignId) throw new Error('Backend did not return a campaign id.');
+
+      // 2) Add each post as an item (sequential to honor the 20-cap check)
+      for (const url of urls) {
+        await api.post(`/instagram/action-campaigns/${campaignId}/items${qs}`, {
+          post_url: url,
+          action_type: quickActionType,
+          count,
+        });
+      }
+
+      // 3) Send (transition draft → pending → ready for extension dispatch)
+      await api.post(`/instagram/action-campaigns/${campaignId}/send${qs}`);
+
+      // Reset form + reload list + open the new batch so the user sees it.
+      setQuickUrls('');
+      setQuickOpen(false);
+      await loadActionCampaigns();
+      setExpandedCampaign(campaignId);
+      loadExpandedItems(campaignId);
+    } catch (e: unknown) {
+      const msg = e as { response?: { data?: { error?: string } } };
+      alert('Failed to create batch: ' + (msg.response?.data?.error || (e instanceof Error ? e.message : String(e))));
+    } finally {
+      setQuickBusy(false);
+    }
   }
 
   function openAddToCampaign() {
@@ -3487,6 +3567,95 @@ export default function InstagramPage() {
         {/* ══════════════════════════════ CAMPAIGNS ══════════════════════════════ */}
         {tab === 'campaigns' && (
           <div className="space-y-3">
+
+            {/* ─── Quick Batch (mobile-first) ───────────────────────────────
+                One-tap create+add+send. Collapsed by default — tap header to
+                expand. Layout uses single column on mobile, generous touch
+                targets, and a textarea that accepts pasted post URLs in any
+                format. */}
+            <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl border border-blue-200 mb-4 overflow-hidden">
+              <button onClick={() => { if (!quickAccount) setQuickAccount(igAccounts[0] || ''); setQuickOpen(o => !o); }}
+                className="w-full px-4 py-4 sm:py-3 flex items-center justify-between text-left active:bg-blue-100 transition">
+                <div className="flex items-center gap-2">
+                  <Plus size={18} className="text-blue-600" />
+                  <div>
+                    <h3 className="font-semibold text-gray-900 text-sm sm:text-base">Quick Batch</h3>
+                    <p className="text-[11px] text-gray-500">Tap to create + send in one step</p>
+                  </div>
+                </div>
+                <span className={`text-blue-600 transition-transform ${quickOpen ? 'rotate-180' : ''}`}>▾</span>
+              </button>
+
+              {quickOpen && (
+                <div className="px-4 pb-4 space-y-3 border-t border-blue-200 bg-white/60 backdrop-blur">
+
+                  {/* Account picker — big tap target on mobile */}
+                  <div className="pt-3">
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Instagram account</label>
+                    <select value={quickAccount} onChange={e => setQuickAccount(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base bg-white">
+                      <option value="">— pick one —</option>
+                      {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Action type — 3 big segmented buttons */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Action</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['like', 'reply', 'follow'] as const).map(at => (
+                        <button key={at} onClick={() => setQuickActionType(at)}
+                          className={`py-3 rounded-lg text-sm font-medium border-2 transition ${
+                            quickActionType === at
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                              : 'bg-white text-gray-700 border-gray-200 active:bg-gray-50'
+                          }`}>
+                          {at === 'like' ? '❤️ Like' : at === 'reply' ? '💬 Reply' : '👤 Follow'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Count per post */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                      Count per post <span className="text-gray-400 font-normal">(1–800)</span>
+                    </label>
+                    <input type="number" inputMode="numeric" min={1} max={800}
+                      value={quickCount} onChange={e => setQuickCount(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base bg-white" />
+                  </div>
+
+                  {/* Post URLs — bulk paste, one per line */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                      Post URLs <span className="text-gray-400 font-normal">(one per line, max 20)</span>
+                    </label>
+                    <textarea rows={4} value={quickUrls} onChange={e => setQuickUrls(e.target.value)}
+                      placeholder={'https://www.instagram.com/p/SHORTCODE/\nhttps://www.instagram.com/p/ANOTHER/'}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-3 text-sm bg-white font-mono" />
+                    {quickUrls.trim() && (() => {
+                      const parsed = parsePostUrls(quickUrls);
+                      const lines = quickUrls.split(/[\n,]+/).map(s => s.trim()).filter(Boolean).length;
+                      return (
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          Detected <b className={parsed.length === 0 ? 'text-red-500' : 'text-gray-700'}>{parsed.length}</b> valid Instagram post URL{parsed.length === 1 ? '' : 's'}{lines > parsed.length ? ` (${lines - parsed.length} skipped)` : ''}.
+                        </p>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Single big action button */}
+                  <button onClick={submitQuickBatch} disabled={quickBusy}
+                    className="w-full py-4 bg-blue-600 text-white rounded-lg font-semibold text-base hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50 shadow-sm">
+                    {quickBusy ? 'Creating…' : `Create & Send${parsePostUrls(quickUrls).length > 0 ? ` (${parsePostUrls(quickUrls).length} post${parsePostUrls(quickUrls).length === 1 ? '' : 's'} × ${quickCount} ${quickActionType})` : ''}`}
+                  </button>
+                  <p className="text-[11px] text-gray-500 text-center">
+                    Goes straight to <b>pending</b> — the extension picks it up on next poll (~60s).
+                  </p>
+                </div>
+              )}
+            </div>
 
             {/* Action campaigns header + create button */}
             <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
