@@ -87,8 +87,9 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
               <label className={lbl}>Data source type</label>
               <select className={inp} value={sourceType} onChange={(e) => { setSourceType(e.target.value as any); setSourceId(''); }}>
                 <option value="none">None</option>
-                <option value="datasource">Google Sheet</option>
-                <option value="manual">Manual dataset</option>
+                <option value="datasource">Google / Drive file</option>
+                <option value="manual">Manual / uploaded</option>
+                {isKpi && <option value="measure">Saved measure</option>}
               </select>
             </div>
             <div>
@@ -97,6 +98,19 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
                 <option value="">— select —</option>
                 {sourceType === 'datasource' && datasources.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 {sourceType === 'manual' && manualDatasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {sourceType === 'measure' && metrics.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Measure source: the measure already defines what to compute */}
+        {isKpi && sourceType === 'measure' && (
+          <div className="bg-blue-50/60 border border-blue-100 rounded-lg p-3 text-xs text-gray-600">
+            This card shows the value of the selected measure. Manage measures in the <strong>Metrics</strong> tab.
+            <div className="mt-2 w-40"><label className={lbl}>Number format</label>
+              <select className={inp} value={cfg.format || ''} onChange={(e) => setC({ format: e.target.value })}>
+                <option value="">Plain</option><option value="currency">Currency</option><option value="percent">Percent</option>
               </select>
             </div>
           </div>
@@ -110,8 +124,8 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
           </div>
         )}
 
-        {/* KPI / gauge */}
-        {isKpi && (
+        {/* KPI / gauge (field-based; hidden when using a saved measure) */}
+        {isKpi && sourceType !== 'measure' && (
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>Value field</label>{colSelect(cfg.valueField, (v) => setC({ valueField: v }), columns)}</div>
             <div><label className={lbl}>Aggregation</label>
@@ -173,8 +187,12 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
         {/* Computed columns */}
         {type !== 'text' && (
           <details className="border border-gray-200 rounded-lg p-3">
-            <summary className="text-sm font-medium text-gray-700 cursor-pointer">Computed columns (formulas)</summary>
-            <p className="text-xs text-gray-400 mt-1 mb-2">e.g. <code>Revenue - Cost</code> or <code>(Revenue - Cost) / Revenue * 100</code>. Reference columns by name.</p>
+            <summary className="text-sm font-medium text-gray-700 cursor-pointer">Computed columns (per-row formulas)</summary>
+            <div className="text-xs text-gray-500 mt-1 mb-2 space-y-1">
+              <p>Create a new column from a formula evaluated on <strong>each row</strong>. Reference other columns by name (e.g. <code>Revenue</code>); spaces become <code>_</code> (e.g. <code>Unit Price</code> → <code>Unit_Price</code>).</p>
+              <p>Examples: <code>Revenue - Cost</code> · <code>Qty * Unit_Price</code> · <code>(Revenue - Cost) / Revenue * 100</code></p>
+              <p>Operators <code>+ - * / %</code> · functions <code>abs() round() min() max() if(cond, a, b)</code>. The new column can then be charted or aggregated like any other.</p>
+            </div>
             {computed.map((c, i) => (
               <div key={i} className="flex gap-2 mb-2">
                 <input className={inp} placeholder="Name" value={c.name} onChange={(e) => { const n = [...computed]; n[i] = { ...n[i], name: e.target.value }; setComputed(n); }} />

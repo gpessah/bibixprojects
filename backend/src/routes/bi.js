@@ -142,6 +142,14 @@ db.exec(`
 for (const m of [
   'ALTER TABLE bi_datasources ADD COLUMN mime_type TEXT',
   "ALTER TABLE bi_datasources ADD COLUMN kind TEXT DEFAULT 'gsheet'",
+  // Measures: a metric is now an aggregation tied to a dataset, or a formula
+  // over other measures.
+  'ALTER TABLE bi_metrics ADD COLUMN source_type TEXT',
+  'ALTER TABLE bi_metrics ADD COLUMN source_id TEXT',
+  "ALTER TABLE bi_metrics ADD COLUMN kind TEXT DEFAULT 'calculated'",
+  'ALTER TABLE bi_metrics ADD COLUMN fn TEXT',
+  'ALTER TABLE bi_metrics ADD COLUMN field TEXT',
+  'ALTER TABLE bi_metrics ADD COLUMN filters TEXT',
 ]) { try { db.exec(m); } catch { /* column exists */ } }
 
 // biSync requires this module's tables to exist; require after DDL.
@@ -495,26 +503,71 @@ router.post('/uploads', authenticate, upload.single('file'), (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// Named metrics (reusable formulas)
+// Measures (reusable, dataset-scoped metrics)
+//   - aggregate:  fn (sum/avg/count/count_distinct/min/max/median) over a field
+//                 of a dataset, optional filters → a single number
+//   - calculated: an expression over OTHER measures, by their sanitized token
+//                 e.g. (Total_Revenue - Total_Cost) / Total_Revenue * 100
 // ════════════════════════════════════════════════════════════════════════════
+
+// Compute a measure to a scalar. `guard` prevents calculated-measure cycles.
+function computeMeasure(userId, measure, guard = new Set()) {
+  if (!measure) return null;
+  if (measure.kind === 'aggregate') {
+    const resolved = resolveSource(userId, measure.source_type, measure.source_id);
+    if (!resolved) return null;
+    const rows = engine.runQuery(resolved.rows, { filters: J(measure.filters, []) });
+    return engine.aggregateValues(rows.map((r) => r[measure.field]), measure.fn);
+  }
+  // calculated → evaluate expression with all OTHER aggregate measures in scope
+  if (guard.has(measure.id)) return null;
+  guard.add(measure.id);
+  const others = db.prepare('SELECT * FROM bi_metrics WHERE user_id=? AND id != ?').all(userId, measure.id);
+  const scalars = {};
+  for (const m of others) scalars[m.name] = computeMeasure(userId, m, guard);
+  return engine.evalScalar(measure.expression || '0', scalars);
+}
+
 router.get('/metrics', authenticate, (req, res) => {
-  res.json(db.prepare('SELECT * FROM bi_metrics WHERE user_id=? ORDER BY created_at DESC').all(req.user.id));
+  const rows = db.prepare('SELECT * FROM bi_metrics WHERE user_id=? ORDER BY created_at DESC').all(req.user.id);
+  res.json(rows.map((m) => ({ ...m, filters: J(m.filters, []) })));
 });
+
+// Live value(s) for one or all measures (used by the Measures panel previews).
+router.get('/metrics/values', authenticate, (req, res) => {
+  const rows = db.prepare('SELECT * FROM bi_metrics WHERE user_id=?').all(req.user.id);
+  const out = {};
+  for (const m of rows) { try { out[m.id] = computeMeasure(req.user.id, m); } catch { out[m.id] = null; } }
+  res.json(out);
+});
+
 router.post('/metrics', authenticate, (req, res) => {
-  const { name, expression, description } = req.body;
-  if (!name || !expression) return res.status(400).json({ error: 'name and expression required' });
+  const { name, kind, source_type, source_id, fn, field, filters, expression, description } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const k = kind === 'aggregate' ? 'aggregate' : 'calculated';
+  if (k === 'aggregate' && (!source_id || !fn)) return res.status(400).json({ error: 'aggregate measure needs a dataset, function and field' });
+  if (k === 'calculated' && !expression) return res.status(400).json({ error: 'calculated measure needs an expression' });
   const id = uuidv4();
-  db.prepare('INSERT INTO bi_metrics (id,user_id,name,expression,description) VALUES (?,?,?,?,?)')
-    .run(id, req.user.id, name, expression, description || null);
-  res.json(db.prepare('SELECT * FROM bi_metrics WHERE id=?').get(id));
+  db.prepare(`INSERT INTO bi_metrics (id,user_id,name,description,kind,source_type,source_id,fn,field,filters,expression)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, req.user.id, name, description || null, k, source_type || null, source_id || null,
+      fn || null, field || null, JSON.stringify(filters || []), expression || ''); // expression is NOT NULL
+  const m = db.prepare('SELECT * FROM bi_metrics WHERE id=?').get(id);
+  let value = null; try { value = computeMeasure(req.user.id, m); } catch {}
+  res.json({ ...m, filters: J(m.filters, []), value });
 });
+
 router.patch('/metrics/:id', authenticate, (req, res) => {
   const m = db.prepare('SELECT * FROM bi_metrics WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
   if (!m) return res.status(404).json({ error: 'Not found' });
-  db.prepare('UPDATE bi_metrics SET name=?, expression=?, description=? WHERE id=?')
-    .run(req.body.name ?? m.name, req.body.expression ?? m.expression, req.body.description ?? m.description, req.params.id);
+  const b = req.body;
+  db.prepare(`UPDATE bi_metrics SET name=?, description=?, kind=?, source_type=?, source_id=?, fn=?, field=?, filters=?, expression=? WHERE id=?`)
+    .run(b.name ?? m.name, b.description ?? m.description, b.kind ?? m.kind, b.source_type ?? m.source_type,
+      b.source_id ?? m.source_id, b.fn ?? m.fn, b.field ?? m.field,
+      b.filters !== undefined ? JSON.stringify(b.filters) : m.filters, b.expression ?? m.expression, req.params.id);
   res.json({ success: true });
 });
+
 router.delete('/metrics/:id', authenticate, (req, res) => {
   db.prepare('DELETE FROM bi_metrics WHERE id=? AND user_id=?').run(req.params.id, req.user.id);
   res.json({ success: true });
@@ -655,15 +708,22 @@ router.post('/query', authenticate, (req, res) => {
   const { source, config = {}, metrics, kpi } = req.body;
   if (!source || !source.type) return res.status(400).json({ error: 'source required' });
 
+  // A widget can point directly at a saved measure → return its computed value.
+  if (source.type === 'measure') {
+    const m = db.prepare('SELECT * FROM bi_metrics WHERE id=? AND user_id=?').get(source.id, req.user.id);
+    if (!m) return res.status(404).json({ error: 'Measure not found' });
+    return res.json({ kpi: true, value: computeMeasure(req.user.id, m), previous: null, delta: null });
+  }
+
   const resolved = resolveSource(req.user.id, source.type, source.id);
   if (!resolved) return res.status(404).json({ error: 'Source not found' });
 
-  // Build scalar scope: named metrics + any caller-supplied scalars.
+  // Build scalar scope: chosen measures (computed to their value) + caller scalars.
   const scalars = { ...(config.scalars || {}) };
   if (Array.isArray(metrics) && metrics.length) {
-    const rows = db.prepare(`SELECT name, expression FROM bi_metrics WHERE user_id=? AND id IN (${metrics.map(() => '?').join(',')})`)
+    const rows = db.prepare(`SELECT * FROM bi_metrics WHERE user_id=? AND id IN (${metrics.map(() => '?').join(',')})`)
       .all(req.user.id, ...metrics);
-    for (const m of rows) scalars[m.name] = engine.evalScalar(m.expression, scalars);
+    for (const m of rows) scalars[m.name] = computeMeasure(req.user.id, m);
   }
 
   try {

@@ -14,7 +14,15 @@ export interface BiDatasource {
 }
 
 export interface BiManualDataset { id: string; name: string; columns: BiColumn[]; created_at: string; }
-export interface BiMetric { id: string; name: string; expression: string; description?: string; }
+export interface BiMetric {
+  id: string; name: string; description?: string;
+  kind: 'aggregate' | 'calculated';
+  source_type?: 'datasource' | 'manual';
+  source_id?: string;
+  fn?: string; field?: string; filters?: any[];
+  expression?: string;
+  value?: number | null;
+}
 
 export type WidgetType =
   | 'table' | 'pivot' | 'kpi' | 'bar' | 'line' | 'area' | 'pie'
@@ -79,8 +87,9 @@ export const biApi = {
   manualRows: (id: string) => api.get(`/bi/manual-datasets/${id}/rows`).then(r => r.data),
   saveManualRows: (id: string, rows: any[]) => api.put(`/bi/manual-datasets/${id}/rows`, { rows }),
 
-  // Metrics
+  // Metrics / measures
   listMetrics: () => api.get<BiMetric[]>('/bi/metrics').then(r => r.data),
+  metricValues: () => api.get<Record<string, number | null>>('/bi/metrics/values').then(r => r.data),
   createMetric: (body: any) => api.post<BiMetric>('/bi/metrics', body).then(r => r.data),
   updateMetric: (id: string, body: any) => api.patch(`/bi/metrics/${id}`, body),
   deleteMetric: (id: string) => api.delete(`/bi/metrics/${id}`),
