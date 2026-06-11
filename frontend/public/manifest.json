@@ -1,10 +1,11 @@
 {
-  "name": "Bibix Projects",
-  "short_name": "Bibix",
-  "description": "Your complete project management platform",
-  "start_url": "/",
+  "name": "Bibix · IG Batches",
+  "short_name": "Bibix IG",
+  "description": "Create and monitor Instagram action batches from your phone.",
+  "start_url": "/m",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#0f0f23",
+  "background_color": "#f9fafb",
   "theme_color": "#0073ea",
   "orientation": "portrait",
   "icons": [

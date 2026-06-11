@@ -21,6 +21,7 @@ import PublicFormPage from './pages/PublicFormPage';
 import InstagramPage from './pages/InstagramPage';
 import LinkedInPage from './pages/LinkedInPage';
 import BackupsPage from './pages/BackupsPage';
+import MobileBatches from './pages/MobileBatches';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
@@ -53,6 +54,9 @@ export default function App() {
       <Route path="/form/:formId" element={<PublicFormPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Navigate to="/login" replace />} />
+      {/* Mobile PWA routes — outside <Layout> so no desktop sidebar/header */}
+      <Route path="/m" element={<ProtectedRoute><MobileBatches /></ProtectedRoute>} />
+      <Route path="/m/batches" element={<ProtectedRoute><MobileBatches /></ProtectedRoute>} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Home />} />
         <Route path="board/:boardId" element={<BoardPage />} />
