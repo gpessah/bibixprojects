@@ -48,6 +48,18 @@ export const biApi = {
     api.get(`/bi/connections/${connId}/spreadsheets`, { params: { q } }).then(r => r.data),
   listTabs: (connId: string, sheetId: string) =>
     api.get(`/bi/connections/${connId}/spreadsheets/${sheetId}/tabs`).then(r => r.data),
+  browseDrive: (connId: string, folderId?: string, q?: string) =>
+    api.get(`/bi/connections/${connId}/drive`, { params: { folderId, q } }).then(r => r.data),
+  listFileSheets: (connId: string, fileId: string) =>
+    api.get(`/bi/connections/${connId}/file/${fileId}/sheets`).then(r => r.data),
+  uploadFile: (file: File, name?: string) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (name) fd.append('name', name);
+    return api.post('/bi/uploads', fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data);
+  },
+
+  GSHEET_MIME: 'application/vnd.google-apps.spreadsheet',
 
   // Datasources
   listDatasources: () => api.get<BiDatasource[]>('/bi/datasources').then(r => r.data),

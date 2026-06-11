@@ -138,8 +138,29 @@ db.exec(`
   );
 `);
 
+// Migrations — add file-type columns to datasources (safe to run repeatedly).
+for (const m of [
+  'ALTER TABLE bi_datasources ADD COLUMN mime_type TEXT',
+  "ALTER TABLE bi_datasources ADD COLUMN kind TEXT DEFAULT 'gsheet'",
+]) { try { db.exec(m); } catch { /* column exists */ } }
+
 // biSync requires this module's tables to exist; require after DDL.
 const biSync = require('../services/biSync');
+
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
+
+// File types we can read as tabular data.
+const SUPPORTED_MIMES = [
+  biSync.GSHEET_MIME,
+  'text/csv', 'text/tab-separated-values',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel',                                          // .xls
+  'application/vnd.oasis.opendocument.spreadsheet',                    // .ods
+];
+const SUPPORTED_EXT = /\.(csv|tsv|xlsx|xls|ods)$/i;
+const isSupportedFile = (f) => f.mimeType === 'application/vnd.google-apps.folder'
+  ? false : (SUPPORTED_MIMES.includes(f.mimeType) || SUPPORTED_EXT.test(f.name || ''));
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const J = (v, fallback) => { try { return JSON.parse(v); } catch { return fallback; } };
@@ -227,7 +248,35 @@ router.delete('/connections/:id', authenticate, (req, res) => {
   res.json({ success: true });
 });
 
-// ── Sheet picker (Drive + Sheets metadata) ─────────────────────────────────────
+// ── File picker (Drive) ─────────────────────────────────────────────────────
+// Browse a folder: returns its sub-folders + supported tabular files. Pass
+// ?folderId=<id> to navigate (default the user's Drive root). Works with Shared
+// Drives too. Pass ?q=<text> to search across all of Drive instead of a folder.
+router.get('/connections/:id/drive', authenticate, async (req, res) => {
+  const conn = db.prepare('SELECT * FROM bi_connections WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  try {
+    const auth = biSync.getGoogleClient(conn);
+    const drive = google.drive({ version: 'v3', auth });
+    const search = req.query.q ? String(req.query.q).replace(/'/g, "\\'") : '';
+    const folderId = req.query.folderId || 'root';
+    const q = search
+      ? `name contains '${search}' and trashed=false`
+      : `'${folderId}' in parents and trashed=false`;
+    const { data } = await drive.files.list({
+      q, fields: 'files(id,name,mimeType,modifiedTime)', orderBy: 'folder,name',
+      pageSize: 200, supportsAllDrives: true, includeItemsFromAllDrives: true,
+    });
+    const all = data.files || [];
+    res.json({
+      folderId,
+      folders: all.filter((f) => f.mimeType === 'application/vnd.google-apps.folder'),
+      files: all.filter(isSupportedFile),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Backwards-compatible: list spreadsheets/files (now all supported types).
 router.get('/connections/:id/spreadsheets', authenticate, async (req, res) => {
   const conn = db.prepare('SELECT * FROM bi_connections WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
   if (!conn) return res.status(404).json({ error: 'Connection not found' });
@@ -235,13 +284,28 @@ router.get('/connections/:id/spreadsheets', authenticate, async (req, res) => {
     const auth = biSync.getGoogleClient(conn);
     const drive = google.drive({ version: 'v3', auth });
     const q = req.query.q ? ` and name contains '${String(req.query.q).replace(/'/g, "\\'")}'` : '';
+    const mimeQ = SUPPORTED_MIMES.map((m) => `mimeType='${m}'`).join(' or ');
     const { data } = await drive.files.list({
-      q: `mimeType='application/vnd.google-apps.spreadsheet' and trashed=false${q}`,
-      fields: 'files(id,name,modifiedTime)',
-      orderBy: 'modifiedTime desc',
-      pageSize: 50,
+      q: `(${mimeQ}) and trashed=false${q}`,
+      fields: 'files(id,name,mimeType,modifiedTime)', orderBy: 'modifiedTime desc',
+      pageSize: 50, supportsAllDrives: true, includeItemsFromAllDrives: true,
     });
     res.json(data.files || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// For an Excel/ODS file in Drive, list its sheet/tab names (CSV → []).
+router.get('/connections/:id/file/:fileId/sheets', authenticate, async (req, res) => {
+  const conn = db.prepare('SELECT * FROM bi_connections WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!conn) return res.status(404).json({ error: 'Connection not found' });
+  try {
+    const auth = biSync.getGoogleClient(conn);
+    const drive = google.drive({ version: 'v3', auth });
+    const resp = await drive.files.get(
+      { fileId: req.params.fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'arraybuffer' }
+    );
+    res.json({ sheets: biSync.workbookSheetNames(Buffer.from(resp.data)) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -280,18 +344,19 @@ router.get('/datasources', authenticate, (req, res) => {
 
 router.post('/datasources', authenticate, async (req, res) => {
   const { connection_id, name, spreadsheet_id, spreadsheet_name, sheet_name, cell_range,
-    refresh_interval_minutes, auto_sync } = req.body;
+    refresh_interval_minutes, auto_sync, mime_type } = req.body;
   const conn = db.prepare('SELECT id FROM bi_connections WHERE id=? AND user_id=?').get(connection_id, req.user.id);
   if (!conn) return res.status(400).json({ error: 'Invalid connection' });
   if (!spreadsheet_id) return res.status(400).json({ error: 'spreadsheet_id required' });
 
+  const kind = (mime_type && mime_type !== biSync.GSHEET_MIME) ? 'gfile' : 'gsheet';
   const id = uuidv4();
   db.prepare(`INSERT INTO bi_datasources
-    (id,user_id,connection_id,name,spreadsheet_id,spreadsheet_name,sheet_name,cell_range,refresh_interval_minutes,auto_sync)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    (id,user_id,connection_id,name,spreadsheet_id,spreadsheet_name,sheet_name,cell_range,refresh_interval_minutes,auto_sync,mime_type,kind)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(id, req.user.id, connection_id, name || spreadsheet_name || 'Untitled', spreadsheet_id,
       spreadsheet_name || null, sheet_name || null, cell_range || null,
-      refresh_interval_minutes ?? 60, auto_sync === false ? 0 : 1);
+      refresh_interval_minutes ?? 60, auto_sync === false ? 0 : 1, mime_type || null, kind);
 
   const result = await biSync.syncDatasourceSafe(id);
   const ds = db.prepare('SELECT * FROM bi_datasources WHERE id=?').get(id);
@@ -400,6 +465,33 @@ router.put('/manual-datasets/:id/rows', authenticate, (req, res) => {
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); return res.status(500).json({ error: e.message }); }
   res.json({ success: true, count: rows.length });
+});
+
+// ── Upload a file from the user's computer (CSV / Excel / TSV / ODS) ──────────
+// Parsed into a manual dataset so it's instantly usable as a widget source and
+// the rows stay editable. Re-upload to refresh.
+router.post('/uploads', authenticate, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!SUPPORTED_EXT.test(req.file.originalname) && !SUPPORTED_MIMES.includes(req.file.mimetype)) {
+    return res.status(400).json({ error: 'Unsupported file type. Use CSV, Excel (.xlsx/.xls), TSV or ODS.' });
+  }
+  let parsed;
+  try { parsed = biSync.parseWorkbook(req.file.buffer, req.body.sheet_name); }
+  catch (e) { return res.status(400).json({ error: 'Could not parse file: ' + e.message }); }
+
+  const name = req.body.name || req.file.originalname.replace(SUPPORTED_EXT, '');
+  const id = uuidv4();
+  db.exec('BEGIN');
+  try {
+    db.prepare('INSERT INTO bi_manual_datasets (id,user_id,name,columns) VALUES (?,?,?,?)')
+      .run(id, req.user.id, name, JSON.stringify(parsed.columns));
+    const ins = db.prepare('INSERT INTO bi_manual_rows (id,dataset_id,row_index,data) VALUES (?,?,?,?)');
+    parsed.rows.forEach((r, i) => ins.run(uuidv4(), id, i, JSON.stringify(r)));
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); return res.status(500).json({ error: e.message }); }
+
+  const d = db.prepare('SELECT * FROM bi_manual_datasets WHERE id=?').get(id);
+  res.json({ dataset: { ...d, columns: J(d.columns, []) }, rowCount: parsed.rows.length, sheetNames: parsed.sheetNames });
 });
 
 // ════════════════════════════════════════════════════════════════════════════

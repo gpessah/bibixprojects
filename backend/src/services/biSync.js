@@ -13,8 +13,32 @@
 // ─────────────────────────────────────────────────────────────────────────────
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
+const XLSX = require('xlsx');
 const db = require('../db/database');
 const { toNumber } = require('./biEngine');
+
+const GSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+
+// Parse a CSV/Excel/TSV/ODS file buffer (via the xlsx lib, which reads them all)
+// into the same { headers, rows, columns } shape as Google Sheets values.
+function parseWorkbook(buf, sheetName) {
+  const wb = XLSX.read(buf, { type: 'buffer', raw: true, cellDates: true });
+  const pick = sheetName && wb.SheetNames.includes(sheetName) ? sheetName : wb.SheetNames[0];
+  const ws = pick ? wb.Sheets[pick] : null;
+  const values = ws ? XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '', blankrows: false }) : [];
+  // Date cells come back as Date objects → normalise to YYYY-MM-DD strings.
+  const norm = values.map((row) => (Array.isArray(row) ? row.map((c) => (c instanceof Date ? c.toISOString().slice(0, 10) : c)) : row));
+  const parsed = parseValues(norm);
+  parsed.sheetName = pick || null;
+  parsed.sheetNames = wb.SheetNames || [];
+  return parsed;
+}
+
+// List sheet/tab names inside an Excel workbook buffer (CSV → single sheet).
+function workbookSheetNames(buf) {
+  try { return XLSX.read(buf, { type: 'buffer', bookSheets: true }).SheetNames || []; }
+  catch { return []; }
+}
 
 // BI needs its OWN redirect URI (distinct from the Calendar integration's
 // GOOGLE_REDIRECT_URI), since the OAuth callback path differs. Callers pass the
@@ -101,14 +125,27 @@ function resolveRange(ds) {
 
 async function fetchRows(ds, conn) {
   const auth = getGoogleClient(conn);
-  const sheets = google.sheets({ version: 'v4', auth });
-  const resp = await sheets.spreadsheets.values.get({
-    spreadsheetId: ds.spreadsheet_id,
-    range: resolveRange(ds),
-    valueRenderOption: 'UNFORMATTED_VALUE',
-    dateTimeRenderOption: 'FORMATTED_STRING',
-  });
-  return parseValues(resp.data.values);
+  const mime = ds.mime_type || '';
+  const isGoogleSheet = mime === GSHEET_MIME || (!mime && ds.kind !== 'gfile');
+
+  if (isGoogleSheet) {
+    const sheets = google.sheets({ version: 'v4', auth });
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId: ds.spreadsheet_id,
+      range: resolveRange(ds),
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING',
+    });
+    return parseValues(resp.data.values);
+  }
+
+  // CSV / Excel / TSV stored in Drive → download the raw bytes and parse locally.
+  const drive = google.drive({ version: 'v3', auth });
+  const resp = await drive.files.get(
+    { fileId: ds.spreadsheet_id, alt: 'media', supportsAllDrives: true },
+    { responseType: 'arraybuffer' }
+  );
+  return parseWorkbook(Buffer.from(resp.data), ds.sheet_name);
 }
 
 // Compute per-numeric-column sums for the history snapshot (cheap trend metrics).
@@ -205,5 +242,8 @@ module.exports = {
   syncDatasource,
   syncDatasourceSafe,
   parseValues,
+  parseWorkbook,
+  workbookSheetNames,
   startScheduler,
+  GSHEET_MIME,
 };
