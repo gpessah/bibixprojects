@@ -122,6 +122,13 @@ db.exec(`
 // Migration: add default_workspace_id if it doesn't exist yet
 try { db.exec('ALTER TABLE telegram_links ADD COLUMN default_workspace_id TEXT'); } catch (_) {}
 
+// Indexes for the reminder/habit scheduler that runs every 60s — without these
+// the "due reminders" query scans every already-sent row each minute, freezing
+// the synchronous DB for all users.
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_bot_reminders_due ON bot_reminders(sent, remind_at)'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_bot_habits_active ON bot_habits(active)'); } catch (_) {}
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_telegram_links_user ON telegram_links(user_id)'); } catch (_) {}
+
 // ── Session state ────────────────────────────────────────────────────────────
 const sessions  = new Map();
 const getSession   = (id) => { if (!sessions.has(id)) sessions.set(id, { step: 'idle' }); return sessions.get(id); };

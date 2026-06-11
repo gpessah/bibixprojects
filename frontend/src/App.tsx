@@ -1,27 +1,38 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { useWorkspaceStore } from './store/workspaceStore';
 import type { AppModule } from './types';
+// Core shell loads eagerly; everything else is code-split so the initial bundle
+// stays small and each page (esp. the large InstagramPage) downloads on demand.
 import Layout from './components/layout/Layout';
 import Login from './pages/Login';
 import Home from './pages/Home';
-import BoardPage from './pages/BoardPage';
-import SearchPage from './pages/SearchPage';
-import SettingsPage from './pages/SettingsPage';
-import NotificationsPanel from './components/notifications/NotificationsPanel';
-import AdminPage from './pages/AdminPage';
-import CalendarPage from './pages/CalendarPage';
-import BibixBotPage from './pages/BibixBotPage';
-import BookingPage from './pages/BookingPage';
-import SchedulingPage from './pages/SchedulingPage';
-import CRMPage from './pages/CRMPage';
-import InvoicePage from './pages/InvoicePage';
-import PublicFormPage from './pages/PublicFormPage';
-import InstagramPage from './pages/InstagramPage';
-import LinkedInPage from './pages/LinkedInPage';
-import BackupsPage from './pages/BackupsPage';
-import ReportsPage from './pages/ReportsPage';
+
+const BoardPage = lazy(() => import('./pages/BoardPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const NotificationsPanel = lazy(() => import('./components/notifications/NotificationsPanel'));
+const AdminPage = lazy(() => import('./pages/AdminPage'));
+const CalendarPage = lazy(() => import('./pages/CalendarPage'));
+const BibixBotPage = lazy(() => import('./pages/BibixBotPage'));
+const BookingPage = lazy(() => import('./pages/BookingPage'));
+const SchedulingPage = lazy(() => import('./pages/SchedulingPage'));
+const CRMPage = lazy(() => import('./pages/CRMPage'));
+const InvoicePage = lazy(() => import('./pages/InvoicePage'));
+const PublicFormPage = lazy(() => import('./pages/PublicFormPage'));
+const InstagramPage = lazy(() => import('./pages/InstagramPage'));
+const LinkedInPage = lazy(() => import('./pages/LinkedInPage'));
+const BackupsPage = lazy(() => import('./pages/BackupsPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+
+function PageLoader() {
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <div className="animate-spin w-8 h-8 border-4 border-monday-blue border-t-transparent rounded-full" />
+    </div>
+  );
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
@@ -49,6 +60,7 @@ export default function App() {
   useEffect(() => { if (user) loadWorkspaces(); }, [user?.id]);
 
   return (
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       <Route path="/schedule/:userId" element={<BookingPage />} />
       <Route path="/form/:formId" element={<PublicFormPage />} />
@@ -73,5 +85,6 @@ export default function App() {
         <Route path="admin" element={<AdminPage />} />
       </Route>
     </Routes>
+    </Suspense>
   );
 }

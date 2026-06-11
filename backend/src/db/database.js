@@ -68,6 +68,10 @@ try { fs.rmSync(LOCK_PATH, { recursive: true, force: true }); } catch {}
 
 const rawDb = new WasmDatabase(DB_PATH);
 rawDb.exec('PRAGMA foreign_keys = ON');
+// Wait up to 5s for a lock instead of failing immediately. node-sqlite3-wasm is
+// synchronous and single-connection; without this, a query that collides with a
+// concurrent write throws "database is locked" — which surfaces as "failed to load".
+rawDb.exec('PRAGMA busy_timeout = 5000');
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
 rawDb.exec(schema);
 
@@ -89,6 +93,28 @@ const migrations = [
 ];
 for (const m of migrations) {
   try { rawDb.exec(m); } catch { /* column already exists */ }
+}
+
+// ── Performance indexes ───────────────────────────────────────────────────────
+// The core tables shipped with NO indexes, so every board load did full table
+// scans — and because node-sqlite3-wasm is synchronous, each scan froze the whole
+// process. These are idempotent (IF NOT EXISTS) and built once on first startup.
+const indexes = [
+  'CREATE INDEX IF NOT EXISTS idx_boards_workspace ON boards(workspace_id)',
+  'CREATE INDEX IF NOT EXISTS idx_columns_board ON board_columns(board_id)',
+  'CREATE INDEX IF NOT EXISTS idx_groups_board ON groups(board_id)',
+  'CREATE INDEX IF NOT EXISTS idx_items_board ON items(board_id)',
+  'CREATE INDEX IF NOT EXISTS idx_items_group ON items(group_id)',
+  // item_values(item_id) is already covered by the UNIQUE(item_id,column_id) index;
+  // add column_id so the startup orphan-cleanup and FK cascades don't scan.
+  'CREATE INDEX IF NOT EXISTS idx_item_values_column ON item_values(column_id)',
+  'CREATE INDEX IF NOT EXISTS idx_updates_item ON updates(item_id)',
+  'CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_workspace_members_user ON workspace_members(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_automations_board ON automations(board_id)',
+];
+for (const ix of indexes) {
+  try { rawDb.exec(ix); } catch (e) { console.warn('[DB] index skipped:', e.message); }
 }
 
 // Compatibility shim: node-sqlite3-wasm requires array params,

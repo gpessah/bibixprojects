@@ -28,6 +28,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS board_members (
   FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 )`);
+// Index user_id so /boards/shared-with-me and per-user membership lookups don't
+// scan the whole table (the PRIMARY KEY only indexes the board_id prefix).
+try { db.exec('CREATE INDEX IF NOT EXISTS idx_board_members_user ON board_members(user_id)'); } catch (_) {}
 
 // GET /boards/:boardId/members
 router.get('/', authenticate, (req, res) => {

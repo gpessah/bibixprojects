@@ -761,7 +761,8 @@ export default function InstagramPage() {
     if (tab !== 'research') return;
     const hasActive = scrapeJobs.some(j => j.status === 'pending' || j.status === 'running');
     if (!hasActive) return;
-    const id = setInterval(loadResearch, 5000);
+    // Skip polling while the browser tab is hidden to avoid hammering the server.
+    const id = setInterval(() => { if (!document.hidden) loadResearch(); }, 5000);
     return () => clearInterval(id);
   }, [tab, scrapeJobs, asUser]);
 
@@ -1029,6 +1030,7 @@ export default function InstagramPage() {
     const active = actionCampaigns.some(c => c.status === 'pending' || c.status === 'running');
     if (!active && !expandedCampaign) return;
     const id = setInterval(() => {
+      if (document.hidden) return; // pause polling when the tab isn't visible
       loadActionCampaigns();
       if (expandedCampaign) loadExpandedItems(expandedCampaign);
     }, 5000);
