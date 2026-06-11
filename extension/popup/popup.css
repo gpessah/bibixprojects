@@ -244,3 +244,57 @@ label input, label textarea { margin-top: 4px; }
   max-height: 120px;
   overflow-y: auto;
 }
+
+/* Candidates tab */
+.candidates-header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.candidates-header input[type=search] {
+  flex: 1;
+  padding: 7px 9px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.cand-list {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.cand-empty {
+  padding: 18px 14px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+.cand-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 11px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.cand-row:last-child { border-bottom: 0; }
+.cand-main { flex: 1; min-width: 0; }
+.cand-name { font-weight: 600; font-size: 13px; color: #1f2937; }
+.cand-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+.cand-email { font-size: 11px; color: #10b981; margin-top: 2px; }
+.cand-actions { display: flex; gap: 4px; align-items: center; }
+.cand-link {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  border-radius: 6px; background: #eef2ff; color: #4338ca;
+  text-decoration: none; font-size: 14px;
+}
+.cand-link:hover { background: #e0e7ff; }
+.cand-del {
+  width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 6px;
+  background: #fef2f2; color: #ef4444;
+  font-size: 13px; cursor: pointer;
+}
+.cand-del:hover { background: #fee2e2; }

@@ -74,6 +74,9 @@ const handlers = {
   async findEmail(body) {
     return apiFetch('/api/contacts/find-email', { method: 'POST', body });
   },
+  async saveCandidate(body) {
+    return apiFetch('/api/contacts/save-candidate', { method: 'POST', body });
+  },
   async listContacts() {
     return apiFetch('/api/contacts');
   },

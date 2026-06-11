@@ -999,60 +999,460 @@
   function isProfilePage() { return /^\/in\//.test(location.pathname); }
 
   function extractProfileInfo() {
-    const h1 = document.querySelector('main h1, h1');
-    const fullName = h1 ? (h1.innerText || '').trim() : '';
+    // --- JSON-LD first (most reliable, untouched by class renames) ---------
+    let ldName = '', ldHeadline = '', ldCompany = '', ldPosition = '';
+    document.querySelectorAll('script[type="application/ld+json"]').forEach((s) => {
+      try {
+        const data = JSON.parse(s.textContent || s.innerText || 'null');
+        const flat = [];
+        const collect = (n) => {
+          if (!n) return;
+          if (Array.isArray(n)) { n.forEach(collect); return; }
+          if (typeof n !== 'object') return;
+          flat.push(n);
+          if (n['@graph']) collect(n['@graph']);
+        };
+        collect(data);
+        for (const node of flat) {
+          if (node['@type'] === 'Person' || node['@type'] === 'ProfilePage') {
+            const p = node['@type'] === 'ProfilePage' ? (node.mainEntity || node) : node;
+            if (p.name && !ldName) ldName = String(p.name).trim();
+            if (p.jobTitle && !ldPosition) ldPosition = String(p.jobTitle).trim();
+            if (p.description && !ldHeadline) ldHeadline = String(p.description).trim();
+            const wf = p.worksFor;
+            if (wf && !ldCompany) {
+              if (Array.isArray(wf) && wf[0]) ldCompany = (wf[0].name || '').trim();
+              else if (typeof wf === 'object') ldCompany = (wf.name || '').trim();
+              else if (typeof wf === 'string') ldCompany = wf.trim();
+            }
+          }
+        }
+      } catch (_) {}
+    });
+
+    // --- Full name ----------------------------------------------------------
+    let fullName = ldName;
+    let titleHeadline = '';
+    const title = (document.title || '').trim();
+    if (!fullName) {
+      let m = title.match(/^(.+?)\s+[-–]\s+(.+?)\s*\|\s*LinkedIn/i);
+      if (m) { fullName = m[1].trim(); titleHeadline = m[2].trim(); }
+    }
+    if (!fullName) {
+      const m = title.match(/^(.+?)\s*\|\s*LinkedIn/i);
+      if (m) fullName = m[1].trim();
+    }
+    if (!fullName) {
+      const h1 = document.querySelector('main h1') || document.querySelector('h1');
+      if (h1) {
+        const raw = ((h1.innerText || h1.textContent || '').trim()).split('\n')[0].trim();
+        fullName = raw.replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\+?\s*$/i, '').trim();
+      }
+    }
     const parts = fullName.split(/\s+/).filter(Boolean);
     const firstName = parts[0] || '';
     const lastName = parts.slice(1).join(' ') || '';
-    // Headline (job title + company line)
-    const headlineEl = document.querySelector(
-      'main .text-body-medium.break-words, '
-      + 'main [data-generated-suggestion-target] + div, '
-      + 'main section .text-body-medium'
-    );
-    const headline = headlineEl ? (headlineEl.innerText || '').trim() : '';
-    // Current company — try the "Current Company" badge next to the photo
-    let company = '';
-    const companyEl = document.querySelector(
-      'main [data-test-id="current-company"], '
-      + 'main button[aria-label*="Current company" i], '
-      + 'ul.pv-text-details__right-panel li button, '
-      + 'main section[data-section="currentPositionsDetails"] a'
-    );
-    if (companyEl) company = (companyEl.innerText || '').trim();
-    // Fallback — parse headline "Role at Company"
-    if (!company && /\bat\b|\sב\s/.test(headline)) {
-      const m = headline.match(/\b(?:at|@|ב)\s+([^|·•·\n]+)/i);
-      if (m) company = m[1].trim();
+
+    // --- Headline -----------------------------------------------------------
+    let headline = ldHeadline;
+    if (!headline) {
+      const metaDesc = document.querySelector('meta[name="description"]')
+        || document.querySelector('meta[property="og:description"]');
+      if (metaDesc) {
+        const c = (metaDesc.getAttribute('content') || '').trim();
+        const cleaned = c.replace(/\s*\|\s*LinkedIn\s*$/i, '').trim();
+        if (cleaned && cleaned !== fullName) headline = cleaned;
+      }
     }
-    return { firstName, lastName, fullName, headline, company, linkedinUrl: location.href.split('?')[0] };
+    if (!headline && titleHeadline) headline = titleHeadline;
+    if (!headline) {
+      // Strategy A: split <main>'s innerText into lines and find the
+      // headline by position relative to the name. Works on any layout
+      // because LinkedIn renders all profile text inside <main>.
+      const mainEl = document.querySelector('main') || document.body;
+      const lines = (mainEl.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      let nameIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === fullName) { nameIdx = i; break; }
+      }
+      // Looser match if exact didn't hit
+      if (nameIdx < 0 && fullName) {
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith(fullName) && lines[i].length < fullName.length + 25) { nameIdx = i; break; }
+        }
+      }
+      if (nameIdx >= 0) {
+        for (let j = nameIdx + 1; j < Math.min(nameIdx + 8, lines.length); j++) {
+          const l = lines[j];
+          if (l.length < 6 || l.length > 400) continue;
+          if (l === fullName) continue;
+          if (/^[·•]/.test(l)) continue;
+          if (/^\d/.test(l)) continue;
+          if (/^(?:connections?|followers?|mutual|premium|trial|verified|message|connect|follow|contact info|view|see|more options|view\snavigator)\b/i.test(l)) continue;
+          if (/\b(connections?|followers?|mutual|degree)\b/i.test(l)) continue;
+          headline = l;
+          break;
+        }
+      }
+    }
+
+    if (!headline) {
+      // Strategy B: geometric — element positioned right below the h1.
+      const h1 = document.querySelector('main h1') || document.querySelector('h1');
+      if (h1) {
+        const h1Rect = h1.getBoundingClientRect();
+        const candidates = [];
+        document.querySelectorAll('main div, main span, main p').forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (r.width < 50 || r.height < 14 || r.height > 200) return;
+          if (r.top < h1Rect.bottom - 4 || r.top > h1Rect.bottom + 100) return;
+          if (r.right < h1Rect.left || r.left > h1Rect.right + 100) return;
+          const t = (el.innerText || '').trim();
+          if (!t || t === fullName) return;
+          const firstLine = t.split('\n')[0].trim();
+          if (firstLine.length < 6 || firstLine.length > 400) return;
+          if (/^[·•]/.test(firstLine)) return;
+          if (/^\d/.test(firstLine)) return;
+          if (/^(?:connections?|followers?|mutual|premium|trial|verified|message|connect|follow|contact info)\b/i.test(firstLine)) return;
+          if (/\b(connections?|followers?|mutual|degree)\b/i.test(firstLine)) return;
+          candidates.push({ top: r.top, area: r.width * r.height, firstLine, text: t });
+        });
+        // Prefer top-most, then most-specific (smallest bounding box) at that level.
+        candidates.sort((a, b) => {
+          if (Math.abs(a.top - b.top) > 6) return a.top - b.top;
+          return a.area - b.area;
+        });
+        if (candidates[0]) headline = candidates[0].firstLine;
+      }
+    }
+
+    // --- Parse company + position ------------------------------------------
+    let company = ldCompany;
+    let position = ldPosition;
+
+    // PRIMARY: read the Experience section. First entry is the current job.
+    if (!company || !position) {
+      const mainEl = document.querySelector('main') || document.body;
+      const mainText = (mainEl.innerText || '');
+      // Find "Experience" as a section header on its own line.
+      const expMatch = mainText.match(/^Experience\s*$/m);
+      if (expMatch) {
+        const after = mainText.slice(expMatch.index + expMatch[0].length);
+        const expLines = after.split('\n').map((l) => l.trim()).filter(Boolean);
+        // Pattern A — multi-role-at-one-company:
+        //   Company | "2 yrs 5 mos" | Role1 | Full-time | "Mar 2024 - Present · ..."
+        // Pattern B — single-role:
+        //   Role | Company · Full-time | "Mar 2024 - Present · ..."
+        const durationRE = /^\d+\s*(?:yrs?|mos?|years?|months?)\b/i;
+        const dateRE = /^[A-Z][a-z]{2}\s+\d{4}\s*[-–]/i;
+        const employmentRE = /^(?:Full-time|Part-time|Contract|Internship|Freelance|Self-employed|Apprenticeship|Permanent|Seasonal)$/i;
+
+        // Heuristic: lines[0] is either Company (Pattern A) or Role (Pattern B).
+        // Pattern A: lines[1] is a duration → lines[0] = company, find role next.
+        // Pattern B: lines[1] is "Company · Employment-type" → split it.
+        const cand0 = expLines[0];
+        const cand1 = expLines[1] || '';
+        if (cand0 && cand1) {
+          if (durationRE.test(cand1)) {
+            // Pattern A
+            if (!company) company = cand0;
+            for (let i = 2; i < Math.min(expLines.length, 10); i++) {
+              const l = expLines[i];
+              if (durationRE.test(l) || dateRE.test(l) || employmentRE.test(l)) continue;
+              if (/^\d/.test(l)) continue;
+              if (!position) { position = l; }
+              break;
+            }
+          } else {
+            // Pattern B (assume cand0 is role, cand1 contains company)
+            if (!position) position = cand0;
+            // cand1 might be "Wolf Financial · Full-time"
+            const co = cand1.split(/\s*·\s*/)[0].trim();
+            if (co && !employmentRE.test(co) && !company) company = co;
+          }
+        }
+      }
+    }
+
+    // SECONDARY: parse from the headline (covers cases without Experience).
+    if ((!company || !position) && headline) {
+      const segs = headline.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
+      for (const seg of segs) {
+        const mm = seg.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
+        if (mm) {
+          if (!position) position = mm[1].trim();
+          if (!company) company = mm[2].trim().split(/\s*[·•,]\s*/)[0].trim();
+          break;
+        }
+      }
+      if (!position && !company) {
+        if (segs.length >= 2) { company = segs[0]; position = segs[1]; }
+        else if (segs.length === 1) { position = segs[0]; }
+      }
+    }
+    // TERTIARY: any /company/ link inside <main>.
+    if (!company) {
+      const link = document.querySelector('main a[href*="/company/"]');
+      if (link) {
+        const txt = ((link.innerText || '').trim().split('\n')[0] || '').trim();
+        if (txt && txt.length < 80 && !/^\d/.test(txt)) company = txt;
+      }
+    }
+
+    const result = {
+      firstName, lastName, fullName, headline, company, position,
+      linkedinUrl: location.href.split('?')[0],
+    };
+    console.log('[Bibix Profile Extract]', {
+      title: document.title,
+      metaDesc: (document.querySelector('meta[name="description"]') || {}).content
+        || (document.querySelector('meta[property="og:description"]') || {}).content,
+      result,
+    });
+    return result;
   }
 
   function injectFindContactButton() {
     if (!isProfilePage()) {
-      // If we navigate away from a profile, remove any floating button
-      const existing = document.getElementById('bibix-floating-find');
-      if (existing) existing.remove();
+      // Navigating away — remove any floating buttons we injected.
+      const find = document.getElementById('bibix-floating-find');
+      const save = document.getElementById('bibix-floating-save');
+      if (find) find.remove();
+      if (save) save.remove();
       return;
     }
-    // Floating button — fixed top-right, can't be hidden by LinkedIn's chrome.
-    if (document.getElementById('bibix-floating-find')) return;
-    const btn = el('button', {
-      id: 'bibix-floating-find',
-      className: FIND_BTN_CLASS,
-      type: 'button',
-      title: 'Find this person\'s email via Hunter.io',
-      style: {
-        position: 'fixed',
-        top: '90px',
-        right: '24px',
-        zIndex: '2147483646',
-        padding: '12px 18px',
-        fontSize: '14px',
-      },
-      onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
-    }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Contact']);
-    document.body.appendChild(btn);
+    // Vertical stack of floating action buttons in the top-right.
+    if (!document.getElementById('bibix-floating-save')) {
+      const saveBtn = el('button', {
+        id: 'bibix-floating-save',
+        className: FIND_BTN_CLASS,
+        type: 'button',
+        title: 'Save this profile as a candidate in Monday',
+        style: {
+          position: 'fixed',
+          top: '90px',
+          right: '24px',
+          zIndex: '2147483646',
+          padding: '12px 18px',
+          fontSize: '14px',
+          background: 'linear-gradient(135deg, #4338ca, #6366f1)',
+          boxShadow: '0 2px 6px rgba(67, 56, 202, 0.35)',
+        },
+        onClick: (e) => { e.preventDefault(); e.stopPropagation(); openSaveCandidateDialog(); },
+      }, [el('span', { className: 'bibix-spark' }, '💾'), 'Save Contact']);
+      document.body.appendChild(saveBtn);
+    }
+    if (!document.getElementById('bibix-floating-find')) {
+      const findBtn = el('button', {
+        id: 'bibix-floating-find',
+        className: FIND_BTN_CLASS,
+        type: 'button',
+        title: 'Find this person\'s email via Hunter.io',
+        style: {
+          position: 'fixed',
+          top: '142px',
+          right: '24px',
+          zIndex: '2147483646',
+          padding: '12px 18px',
+          fontSize: '14px',
+        },
+        onClick: (e) => { e.preventDefault(); e.stopPropagation(); openFindContactDialog(); },
+      }, [el('span', { className: 'bibix-spark' }, '✨'), 'Find Email']);
+      document.body.appendChild(findBtn);
+    }
+  }
+
+  // ── LinkedIn's own Contact-Info modal — phone, email, website, etc. that
+  // the person chose to publish. Free, unlimited, no third-party API.
+  async function scrapeContactInfo() {
+    const out = { email: '', phone: '', website: '', twitter: '', address: '' };
+    // Strategy 1 — if the contact-info section is already in the DOM
+    // (sometimes pre-rendered), parse it directly.
+    let modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"]');
+
+    if (!modal) {
+      // Strategy 2 — click the "Contact info" link on the profile to open
+      // the modal, then read it. Restore the URL when done.
+      const startUrl = location.href;
+      const link = Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim().toLowerCase();
+        const h = (el.getAttribute('href') || '').toLowerCase();
+        return t === 'contact info' || /overlay\/contact-info/.test(h)
+          || /contact info/i.test(el.getAttribute('aria-label') || '');
+      });
+      if (!link) return out;
+      link.click();
+      // Wait for the modal to mount.
+      for (let i = 0; i < 25; i++) {
+        modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"], div[role="dialog"]:has(h2)');
+        if (modal && (modal.innerText || '').toLowerCase().includes('contact info')) break;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      if (!modal) {
+        // Restore url just in case it changed
+        try { history.replaceState(null, '', startUrl); } catch (_) {}
+        return out;
+      }
+    }
+
+    // Parse the modal's innerText. Format usually looks like:
+    //   Contact Info
+    //   <linkedin-url>
+    //   Email
+    //   foo@bar.com
+    //   Phone
+    //   +1 555 123 4567 (Work)
+    //   Website
+    //   https://...
+    const text = (modal.innerText || '').replace(/\r/g, '');
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+    function valueAfterLabel(label) {
+      const idx = lines.findIndex((l) => l.toLowerCase() === label.toLowerCase());
+      if (idx < 0 || idx + 1 >= lines.length) return '';
+      // The next non-empty line is the value; sometimes followed by a "(Type)" line.
+      return lines[idx + 1].replace(/\s*\((Work|Home|Mobile|Personal)\)\s*$/i, '').trim();
+    }
+
+    out.email = valueAfterLabel('Email');
+    out.phone = valueAfterLabel('Phone');
+    out.website = valueAfterLabel('Website');
+    out.twitter = valueAfterLabel('Twitter');
+    out.address = valueAfterLabel('Address');
+
+    // Even if the labels are localized, fall back to regex match across the
+    // whole text for phone (digits + format) and email (@).
+    if (!out.email) {
+      const m = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+      if (m) out.email = m[0];
+    }
+    if (!out.phone) {
+      const m = text.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+      if (m) out.phone = m[1].trim();
+    }
+
+    // Close the modal: press Escape or click the close button.
+    try {
+      const closeBtn = modal.querySelector('button[aria-label*="Dismiss" i], button[aria-label*="Close" i]');
+      if (closeBtn) closeBtn.click();
+      else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    } catch (_) {}
+    // Restore URL if it changed (the contact-info modal sometimes navigates).
+    if (location.href !== location.href.split('?')[0]) {
+      try { history.replaceState(null, '', location.href.split('?')[0]); } catch (_) {}
+    }
+
+    return out;
+  }
+
+  function openSaveCandidateDialog() {
+    closePopover();
+    const info = extractProfileInfo();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '480px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#4338ca,#6366f1);-webkit-background-clip:text;background-clip:text;color:transparent">
+        💾 Save as Candidate
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        Saves this profile to your Monday → LinkedIn → Candidates list.
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Full name</div>
+        <input id="bsc-name" value="${(info.fullName || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current company</div>
+        <input id="bsc-company" value="${(info.company || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current position</div>
+        <input id="bsc-position" value="${(info.position || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Email</div>
+          <input id="bsc-email" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Phone</div>
+          <input id="bsc-phone" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+        <button id="bsc-pull-li" type="button" style="background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">📞 Pull phone/email from LinkedIn Contact Info</button>
+        <span id="bsc-pull-status" style="font-size:11px;color:#94a3b8"></span>
+      </div>
+      <div style="margin-bottom:14px;font-size:11px;color:#94a3b8">
+        LinkedIn URL: <span style="color:#475569">${info.linkedinUrl}</span>
+      </div>
+      <div id="bsc-status" style="font-size:12px;min-height:18px;margin-bottom:10px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bsc-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Cancel</button>
+        <button id="bsc-save" style="background:linear-gradient(135deg,#4338ca,#6366f1);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Save Candidate</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const status = pop.querySelector('#bsc-status');
+    const pullStatus = pop.querySelector('#bsc-pull-status');
+    pop.querySelector('#bsc-close').addEventListener('click', () => closePopover());
+    pop.addEventListener('click', (e) => { if (e.target === pop) closePopover(); });
+
+    pop.querySelector('#bsc-pull-li').addEventListener('click', async () => {
+      pullStatus.textContent = 'opening contact info…';
+      try {
+        const ci = await scrapeContactInfo();
+        if (ci.email && !pop.querySelector('#bsc-email').value) pop.querySelector('#bsc-email').value = ci.email;
+        if (ci.phone && !pop.querySelector('#bsc-phone').value) pop.querySelector('#bsc-phone').value = ci.phone;
+        const filled = [];
+        if (ci.email) filled.push('email');
+        if (ci.phone) filled.push('phone');
+        if (ci.website) filled.push('website');
+        pullStatus.textContent = filled.length
+          ? `✓ Filled ${filled.join(' + ')}`
+          : 'No public phone/email on this profile.';
+      } catch (e) {
+        pullStatus.textContent = 'Could not open contact info.';
+      }
+    });
+
+    pop.querySelector('#bsc-save').addEventListener('click', async () => {
+      const fullName = pop.querySelector('#bsc-name').value.trim();
+      const company = pop.querySelector('#bsc-company').value.trim();
+      const position = pop.querySelector('#bsc-position').value.trim();
+      const email = pop.querySelector('#bsc-email').value.trim();
+      const phone = pop.querySelector('#bsc-phone').value.trim();
+      if (!fullName) { status.innerHTML = '<span style="color:#ef4444">Full name required</span>'; return; }
+      status.innerHTML = '<span style="color:#64748b">Saving…</span>';
+      const parts = fullName.split(/\s+/);
+      const res = await send('saveCandidate', {
+        fullName,
+        firstName: parts[0] || '',
+        lastName: parts.slice(1).join(' '),
+        company, position,
+        email, phone,
+        headline: info.headline,
+        linkedinUrl: info.linkedinUrl,
+      });
+      if (res.ok) {
+        status.innerHTML = `<span style="color:#10b981">✓ ${res.data.updated ? 'Updated' : 'Saved'} candidate.</span>`;
+        setTimeout(() => closePopover(), 1200);
+      } else {
+        status.innerHTML = `<span style="color:#ef4444">${res.error || 'save failed'}</span>`;
+      }
+    });
   }
 
   function openFindContactDialog() {
@@ -1174,7 +1574,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.1)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.4.0)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;

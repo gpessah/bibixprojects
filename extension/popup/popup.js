@@ -88,6 +88,69 @@ function bindReplyTab() {
   $('#reply-ack').addEventListener('change',   e => queueSave({ reply_ack_only_own_posts: e.target.checked ? 1 : 0 }));
 }
 
+// ── Candidates tab ──────────────────────────────────────────────────────────
+let candidatesCache = [];
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function renderCandidates(filter) {
+  const list = $('#cand-list');
+  const q = (filter || '').toLowerCase().trim();
+  const rows = q
+    ? candidatesCache.filter((c) => {
+        return (c.full_name || '').toLowerCase().includes(q)
+          || (c.company || '').toLowerCase().includes(q)
+          || (c.position || '').toLowerCase().includes(q);
+      })
+    : candidatesCache;
+  if (rows.length === 0) {
+    list.innerHTML = q
+      ? '<div class="cand-empty">No matches.</div>'
+      : '<div class="cand-empty">No candidates yet. Visit a LinkedIn profile and click the 💾 Save Contact button.</div>';
+    return;
+  }
+  list.innerHTML = rows.map((c) => `
+    <div class="cand-row" data-id="${c.id}">
+      <div class="cand-main">
+        <div class="cand-name">${escapeHtml(c.full_name || '—')}</div>
+        <div class="cand-sub">${escapeHtml(c.position || '')}${c.position && c.company ? ' · ' : ''}${escapeHtml(c.company || '')}</div>
+        ${c.email ? `<div class="cand-email">${escapeHtml(c.email)}</div>` : ''}
+      </div>
+      <div class="cand-actions">
+        ${c.linkedin_url ? `<a href="${escapeHtml(c.linkedin_url)}" target="_blank" class="cand-link" title="Open profile">↗</a>` : ''}
+        <button class="cand-del" data-id="${c.id}" title="Delete">✕</button>
+      </div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.cand-del').forEach((b) => {
+    b.addEventListener('click', async (e) => {
+      const id = Number(e.target.getAttribute('data-id'));
+      if (!confirm('Delete this candidate?')) return;
+      await send('deleteContact', { contactId: id });
+      candidatesCache = candidatesCache.filter((c) => c.id !== id);
+      renderCandidates($('#cand-search').value);
+    });
+  });
+}
+
+async function loadCandidates() {
+  $('#cand-list').innerHTML = '<div class="cand-empty">Loading…</div>';
+  const res = await send('listContacts');
+  if (res.ok) {
+    candidatesCache = res.data || [];
+    renderCandidates($('#cand-search').value);
+  } else {
+    $('#cand-list').innerHTML = `<div class="cand-empty">Error: ${escapeHtml(res.error || 'failed')}</div>`;
+  }
+}
+
+function bindCandidatesTab() {
+  $('#cand-search').addEventListener('input', (e) => renderCandidates(e.target.value));
+  $('#cand-refresh').addEventListener('click', loadCandidates);
+}
+
 function bindAccountTab() {
   $('#acct-display-name').addEventListener('input',  e => queueSave({ display_name: e.target.value }));
   $('#acct-headline').addEventListener('input',      e => queueSave({ headline: e.target.value }));
@@ -166,10 +229,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   populateTones();
   bindCommentTab();
   bindReplyTab();
+  bindCandidatesTab();
   bindAccountTab();
   bindLogin();
 
-  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setActiveTab(b.dataset.tab)));
+  document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
+    setActiveTab(b.dataset.tab);
+    if (b.dataset.tab === 'candidates') loadCandidates();
+  }));
   setActiveTab('comment');
 
   const me = await send('me');
