@@ -26,6 +26,10 @@ const SHEETS_SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
+// Dedicated OAuth callback for BI (must be registered in Google Cloud and is
+// separate from the Calendar integration's redirect URI).
+const BI_REDIRECT_URI = process.env.GOOGLE_BI_REDIRECT_URI || `${APP_URL}/api/bi/google/callback`;
+
 // ── Schema ──────────────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS bi_connections (
@@ -177,7 +181,7 @@ router.get('/connections', authenticate, (req, res) => {
 
 router.get('/google/auth', authenticate, (req, res) => {
   if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).json({ error: 'Google not configured' });
-  const auth = biSync.makeOAuth2Client();
+  const auth = biSync.makeOAuth2Client(BI_REDIRECT_URI);
   const state = jwt.sign({ userId: req.user.id, scope: 'bi' }, JWT_SECRET, { expiresIn: '10m' });
   const url = auth.generateAuthUrl({
     access_type: 'offline', prompt: 'consent', scope: SHEETS_SCOPES, state,
@@ -194,7 +198,7 @@ router.get('/google/callback', async (req, res) => {
   catch { return res.redirect(`${APP_URL}/bi?bi=error&msg=invalid_state`); }
 
   try {
-    const auth = biSync.makeOAuth2Client();
+    const auth = biSync.makeOAuth2Client(BI_REDIRECT_URI);
     const { tokens } = await auth.getToken(code);
     auth.setCredentials(tokens);
     const oauth2 = google.oauth2({ version: 'v2', auth });

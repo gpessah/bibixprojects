@@ -3,6 +3,10 @@ import biApi, {
   BiConnection, BiDatasource, BiManualDataset, BiMetric, BiDashboard, BiTemplate, BiWidget,
 } from '../api/bi';
 
+// Defensive: never let a non-array API response (e.g. an HTML error page during
+// a deploy window) reach the UI and crash a .map() into a blank screen.
+const arr = <T,>(v: any): T[] => (Array.isArray(v) ? v : []);
+
 interface BiState {
   connections: BiConnection[];
   datasources: BiDatasource[];
@@ -45,17 +49,20 @@ export const useBiStore = create<BiState>((set, get) => ({
         biApi.listConnections(), biApi.listDatasources(), biApi.listManual(),
         biApi.listMetrics(), biApi.listDashboards(), biApi.listTemplates(),
       ]);
-      set({ connections, datasources, manualDatasets, metrics, dashboards, templates });
+      set({
+        connections: arr(connections), datasources: arr(datasources), manualDatasets: arr(manualDatasets),
+        metrics: arr(metrics), dashboards: arr(dashboards), templates: arr(templates),
+      });
     } finally {
       set({ loading: false });
     }
   },
 
-  loadConnections: async () => set({ connections: await biApi.listConnections() }),
-  loadDatasources: async () => set({ datasources: await biApi.listDatasources() }),
-  loadManual: async () => set({ manualDatasets: await biApi.listManual() }),
-  loadMetrics: async () => set({ metrics: await biApi.listMetrics() }),
-  loadDashboards: async () => set({ dashboards: await biApi.listDashboards() }),
+  loadConnections: async () => set({ connections: arr(await biApi.listConnections()) }),
+  loadDatasources: async () => set({ datasources: arr(await biApi.listDatasources()) }),
+  loadManual: async () => set({ manualDatasets: arr(await biApi.listManual()) }),
+  loadMetrics: async () => set({ metrics: arr(await biApi.listMetrics()) }),
+  loadDashboards: async () => set({ dashboards: arr(await biApi.listDashboards()) }),
 
   openDashboard: async (id) => {
     set({ loading: true });

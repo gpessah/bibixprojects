@@ -16,11 +16,14 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { toNumber } = require('./biEngine');
 
-function makeOAuth2Client() {
+// BI needs its OWN redirect URI (distinct from the Calendar integration's
+// GOOGLE_REDIRECT_URI), since the OAuth callback path differs. Callers pass the
+// BI callback URL for the auth/token-exchange steps; refresh calls don't care.
+function makeOAuth2Client(redirectUri) {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    redirectUri || process.env.GOOGLE_BI_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI
   );
 }
 
