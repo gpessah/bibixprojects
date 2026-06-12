@@ -1,19 +1,14 @@
 // Mobile-first PWA page for creating and monitoring Instagram action batches.
+// Designed for narrow viewports (360-480px). Lives at /m so the PWA can be
+// installed via "Add to Home Screen" and run fullscreen.
 //
-// Designed from the ground up for narrow viewports (360-480px). Layout is a
-// vertical stack with full-width inputs, large tap targets (min 44px), and
-// no desktop chrome (no sidebar, no tabs, no hover states). Lives at /m so
-// users can "Add to Home Screen" and get a near-native experience.
-//
-// Three sections, top to bottom:
-//   1. Compact header — app title + account picker + logout
-//   2. Create Batch form — single screen: account, action, count, URLs, send
-//   3. Recent Batches list — last 10, tap to expand, retry buttons on failures
+// Re-written as a single-effect, single-state-object page to avoid React's
+// invariant #426 (suspense boundary update conflict) that the previous,
+// more granular version triggered under staging's Suspense + lazy() wrapper.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/client';
-import { useAuthStore } from '../store/authStore';
 
 type Status =
   | 'draft' | 'pending' | 'running' | 'paused' | 'completed'
@@ -31,322 +26,255 @@ interface Item {
 
 interface Campaign {
   id: string;
-  name?: string | null;
   as_account: string;
   status: Status;
   total_completed: number;
   total_requested: number;
   items_count?: number;
-  created_at?: string;
-  started_at?: string | null;
-  ended_at?: string | null;
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  draft:      'bg-gray-100 text-gray-700',
-  pending:    'bg-amber-100 text-amber-800',
-  claimed:    'bg-blue-100 text-blue-700',
-  running:    'bg-blue-100 text-blue-700',
-  paused:     'bg-orange-100 text-orange-800',
-  completed:  'bg-green-100 text-green-800',
-  partial:    'bg-orange-100 text-orange-800',
-  no_targets: 'bg-yellow-100 text-yellow-800',
-  failed:     'bg-red-100 text-red-700',
-  cancelled:  'bg-gray-200 text-gray-700',
+  draft:      '#e5e7eb', pending: '#fef3c7', claimed: '#dbeafe',
+  running:    '#dbeafe', paused: '#fed7aa', completed: '#bbf7d0',
+  partial:    '#fed7aa', no_targets: '#fef9c3', failed: '#fecaca',
+  cancelled:  '#e5e7eb',
 };
 
 function parsePostUrls(text: string): string[] {
-  const lines = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
   const out: string[] = [];
-  for (const line of lines) {
+  for (const line of text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)) {
     const m = line.match(/(?:^|\/)(?:p|reel)\/([A-Za-z0-9_-]+)/);
     if (m) out.push(`https://www.instagram.com/p/${m[1]}/`);
   }
-  return [...new Set(out)];
+  return Array.from(new Set(out));
 }
 
 export default function MobileBatches() {
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
-
-  const [igAccounts, setIgAccounts] = useState<string[]>([]);
+  const [accounts, setAccounts] = useState<string[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [expandedItems, setExpandedItems] = useState<Record<string, Item[]>>({});
-
-  // Quick batch form state
-  const [account, setAccount] = useState('');
-  const [actionType, setActionType] = useState<'like' | 'reply' | 'follow'>('like');
-  const [count, setCount] = useState('100');
-  const [urls, setUrls] = useState('');
+  const [expandedItems, setExpandedItems] = useState<Item[]>([]);
+  const [form, setForm] = useState({
+    account: '',
+    actionType: 'like' as 'like' | 'reply' | 'follow',
+    count: '100',
+    urls: '',
+  });
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
-  const [debug, setDebug] = useState<string>('mounted');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Mark mount in console + on-screen so we can SEE the page reached the
-  // render path even if subsequent steps fail.
+  // Single mount-effect — load accounts + campaigns serially, set form
+  // defaults at the end. No second useEffect means no Suspense interaction.
   useEffect(() => {
-    console.log('[MobileBatches] mounted, user=', user?.email, 'token=', localStorage.getItem('token') ? 'yes' : 'no');
-    setDebug(d => d + ' → useEffect-mount');
-  }, []);
+    (async () => {
+      if (!localStorage.getItem('token')) {
+        navigate('/login', { replace: true });
+        return;
+      }
+      try {
+        const accRes = await api.get('/instagram/accounts');
+        const accList: string[] = Array.isArray(accRes.data) ? accRes.data : [];
+        const campRes = await api.get('/instagram/action-campaigns?limit=10');
+        const campList: Campaign[] = Array.isArray(campRes.data)
+          ? campRes.data
+          : (campRes.data?.rows ?? []);
+        setAccounts(accList);
+        setCampaigns(campList);
+        if (accList.length) setForm(f => ({ ...f, account: accList[0] }));
+      } catch (e) {
+        const err = e as { response?: { status?: number; data?: { error?: string } } };
+        if (err.response?.status === 401) { navigate('/login', { replace: true }); return; }
+        setMsg({ ok: false, text: err.response?.data?.error || 'Failed to load' });
+      }
+    })();
+  }, [navigate]);
 
-  // Bounce to login if unauthenticated. The mobile route is protected at the
-  // App level too, but doing it here gives a faster user-visible redirect.
-  useEffect(() => {
-    if (user === null && !localStorage.getItem('token')) {
-      console.log('[MobileBatches] no user + no token → /login');
-      navigate('/login', { replace: true });
-    }
-  }, [user, navigate]);
-
-  // Initial load: accounts + recent batches (10 latest)
-  useEffect(() => {
-    setDebug(d => d + ' → loading');
-    api.get('/instagram/accounts').then((r: { data: unknown }) => {
-      const list = Array.isArray(r.data) ? (r.data as string[]) : [];
-      setIgAccounts(list);
-      if (list.length && !account) setAccount(list[0]);
-      setDebug(d => d + ` → accounts=${list.length}`);
-    }).catch((e) => {
-      console.error('[MobileBatches] /accounts failed:', e);
-      setDebug(d => d + ` → accounts ERR ${e?.message || '?'}`);
-    });
-    refreshCampaigns();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function refreshCampaigns() {
+  async function reloadCampaigns() {
     try {
       const r = await api.get('/instagram/action-campaigns?limit=10');
-      const rows = Array.isArray(r.data) ? r.data : (r.data?.rows ?? []);
-      setCampaigns(rows);
-    } catch {
-      setToast({ kind: 'error', text: 'Failed to load batches' });
-    }
+      const list: Campaign[] = Array.isArray(r.data) ? r.data : (r.data?.rows ?? []);
+      setCampaigns(list);
+    } catch { /* ignore */ }
   }
 
-  async function expandCampaign(id: string) {
+  async function expandRow(id: string) {
     if (expandedId === id) { setExpandedId(null); return; }
     setExpandedId(id);
-    if (!expandedItems[id]) {
-      try {
-        const r = await api.get(`/instagram/action-campaigns/${id}/items`);
-        setExpandedItems(prev => ({ ...prev, [id]: r.data || [] }));
-      } catch { /* leave undefined, retry on next expand */ }
-    }
+    setExpandedItems([]);
+    try {
+      const r = await api.get(`/instagram/action-campaigns/${id}/items`);
+      setExpandedItems(Array.isArray(r.data) ? r.data : []);
+    } catch { /* ignore */ }
   }
 
-  async function submit() {
-    if (!account) { setToast({ kind: 'error', text: 'Pick an account first.' }); return; }
-    const parsedUrls = parsePostUrls(urls);
-    if (parsedUrls.length === 0) { setToast({ kind: 'error', text: 'Paste at least one IG post URL.' }); return; }
-    if (parsedUrls.length > 20) { setToast({ kind: 'error', text: `Max 20 posts — you have ${parsedUrls.length}.` }); return; }
-    const c = Math.max(1, Math.min(800, parseInt(count, 10) || 0));
-    if (c === 0) { setToast({ kind: 'error', text: 'Count must be ≥ 1.' }); return; }
-
-    setBusy(true);
-    setToast(null);
+  async function send() {
+    if (!form.account) { setMsg({ ok: false, text: 'Pick an account.' }); return; }
+    const urls = parsePostUrls(form.urls);
+    if (urls.length === 0) { setMsg({ ok: false, text: 'Paste at least 1 valid IG URL.' }); return; }
+    if (urls.length > 20) { setMsg({ ok: false, text: `Max 20 posts (you have ${urls.length}).` }); return; }
+    const n = Math.max(1, Math.min(800, parseInt(form.count, 10) || 0));
+    if (n === 0) { setMsg({ ok: false, text: 'Count must be ≥ 1.' }); return; }
+    setBusy(true); setMsg(null);
     try {
-      const camp = await api.post(`/instagram/action-campaigns`, {
-        as_account: account,
+      const camp = await api.post('/instagram/action-campaigns', {
+        as_account: form.account,
         concurrency: 6,
-        free_text: `mobile · ${parsedUrls.length} × ${c} ${actionType}`,
+        free_text: `mobile · ${urls.length} × ${n} ${form.actionType}`,
         start_at: null,
       });
-      const campaignId = camp.data?.id;
-      if (!campaignId) throw new Error('Backend did not return a campaign id.');
-      for (const url of parsedUrls) {
-        await api.post(`/instagram/action-campaigns/${campaignId}/items`, {
-          post_url: url, action_type: actionType, count: c,
+      const cid = camp.data?.id;
+      if (!cid) throw new Error('No campaign id returned');
+      for (const url of urls) {
+        await api.post(`/instagram/action-campaigns/${cid}/items`, {
+          post_url: url, action_type: form.actionType, count: n,
         });
       }
-      await api.post(`/instagram/action-campaigns/${campaignId}/send`);
-      setUrls('');
-      setToast({ kind: 'success', text: `Sent ${parsedUrls.length} post${parsedUrls.length === 1 ? '' : 's'} — extension picks it up in ~60s.` });
-      await refreshCampaigns();
-    } catch (e: unknown) {
-      const msg = e as { response?: { data?: { error?: string } } };
-      setToast({ kind: 'error', text: msg.response?.data?.error || (e instanceof Error ? e.message : String(e)) });
+      await api.post(`/instagram/action-campaigns/${cid}/send`);
+      setForm(f => ({ ...f, urls: '' }));
+      setMsg({ ok: true, text: `Sent ${urls.length} post${urls.length === 1 ? '' : 's'}.` });
+      await reloadCampaigns();
+    } catch (e) {
+      const err = e as { response?: { data?: { error?: string } }; message?: string };
+      setMsg({ ok: false, text: err.response?.data?.error || err.message || 'Send failed' });
     } finally {
       setBusy(false);
     }
   }
 
-  async function retryItem(campaignId: string, itemId: string) {
+  async function retry(itemId: string) {
     try {
       await api.post(`/instagram/action-queue/${itemId}/retry`);
-      // Reload that campaign's items
-      const r = await api.get(`/instagram/action-campaigns/${campaignId}/items`);
-      setExpandedItems(prev => ({ ...prev, [campaignId]: r.data || [] }));
-      setToast({ kind: 'success', text: 'Retry queued — extension picks it up shortly.' });
-      await refreshCampaigns();
-    } catch (e: unknown) {
-      const msg = e as { response?: { data?: { error?: string } } };
-      setToast({ kind: 'error', text: 'Retry failed: ' + (msg.response?.data?.error || 'unknown') });
+      if (expandedId) {
+        const r = await api.get(`/instagram/action-campaigns/${expandedId}/items`);
+        setExpandedItems(Array.isArray(r.data) ? r.data : []);
+      }
+      await reloadCampaigns();
+      setMsg({ ok: true, text: 'Retry queued.' });
+    } catch (e) {
+      const err = e as { response?: { data?: { error?: string } } };
+      setMsg({ ok: false, text: 'Retry failed: ' + (err.response?.data?.error || 'unknown') });
     }
   }
 
-  const parsedCount = useMemo(() => parsePostUrls(urls).length, [urls]);
+  const parsedCount = parsePostUrls(form.urls).length;
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 pb-12" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-
-      {/* TEMP DEBUG BANNER — confirms the page reached the render path.
-          Remove once the white-screen issue is identified. */}
-      <div style={{ background: '#fef3c7', color: '#92400e', padding: '6px 12px', fontSize: 11, fontFamily: 'monospace' }}>
-        DEBUG: {debug} · user={user?.email || 'none'} · token={localStorage.getItem('token') ? 'yes' : 'no'}
-      </div>
-
-      {/* ───── Header ───── */}
-      <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
-        <div>
-          <h1 className="text-base font-bold text-gray-900 leading-tight">Bibix · IG Batches</h1>
-          <p className="text-[11px] text-gray-500">{user?.email}</p>
-        </div>
-        <button onClick={() => { logout(); navigate('/login'); }} className="text-xs text-gray-500 active:text-gray-800 px-2 py-1">Log out</button>
+    <div style={{ minHeight: '100vh', background: '#f9fafb', color: '#111827', paddingBottom: 24, fontFamily: '-apple-system, system-ui, sans-serif' }}>
+      <header style={{ position: 'sticky', top: 0, zIndex: 10, background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+        <h1 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Bibix · IG Batches</h1>
+        <button onClick={() => { localStorage.removeItem('token'); navigate('/login'); }} style={{ fontSize: 12, color: '#6b7280', background: 'none', border: 'none', padding: 4 }}>Log out</button>
       </header>
 
-      {/* ───── Toast ───── */}
-      {toast && (
-        <div className={`mx-4 mt-3 p-3 rounded-lg text-sm flex items-start gap-2 ${
-          toast.kind === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-800'
-        }`} onClick={() => setToast(null)}>
-          <span className="flex-1">{toast.text}</span>
-          <button className="text-current opacity-60">✕</button>
+      {msg && (
+        <div onClick={() => setMsg(null)} style={{ margin: '12px 12px 0', padding: 12, borderRadius: 8, fontSize: 14, background: msg.ok ? '#d1fae5' : '#fee2e2', color: msg.ok ? '#065f46' : '#991b1b', border: `1px solid ${msg.ok ? '#a7f3d0' : '#fecaca'}` }}>
+          {msg.text}
         </div>
       )}
 
-      {/* ───── Create form ───── */}
-      <section className="bg-white mt-3 mx-3 rounded-xl border border-gray-200 p-4 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900 mb-3">New batch</h2>
+      {/* CREATE FORM */}
+      <section style={{ background: '#fff', margin: '12px 12px 0', borderRadius: 12, padding: 16, border: '1px solid #e5e7eb' }}>
+        <h2 style={{ fontSize: 14, fontWeight: 600, margin: '0 0 12px' }}>New batch</h2>
 
-        {/* Account */}
-        <label className="block text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wider">Account</label>
-        <select value={account} onChange={e => setAccount(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base bg-white mb-3">
-          {igAccounts.length === 0 && <option value="">— no accounts configured —</option>}
-          {igAccounts.map(u => <option key={u} value={u}>@{u}</option>)}
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 500, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Account</label>
+        <select value={form.account} onChange={e => setForm(f => ({ ...f, account: e.target.value }))}
+          style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 8, padding: '12px', fontSize: 16, background: '#fff', marginBottom: 12, boxSizing: 'border-box' }}>
+          {accounts.length === 0 && <option value="">— no accounts —</option>}
+          {accounts.map(a => <option key={a} value={a}>@{a}</option>)}
         </select>
 
-        {/* Action type */}
-        <label className="block text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wider">Action</label>
-        <div className="grid grid-cols-3 gap-2 mb-3">
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 500, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Action</label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
           {(['like', 'reply', 'follow'] as const).map(at => (
-            <button key={at} onClick={() => setActionType(at)}
-              className={`py-3 rounded-lg text-sm font-medium border-2 active:scale-95 transition ${
-                actionType === at
-                  ? 'bg-blue-600 text-white border-blue-600'
-                  : 'bg-white text-gray-700 border-gray-200'
-              }`}>
+            <button key={at} onClick={() => setForm(f => ({ ...f, actionType: at }))}
+              style={{ padding: '12px 0', borderRadius: 8, fontSize: 14, fontWeight: 500, border: form.actionType === at ? '2px solid #2563eb' : '2px solid #e5e7eb', background: form.actionType === at ? '#2563eb' : '#fff', color: form.actionType === at ? '#fff' : '#374151' }}>
               {at === 'like' ? '❤️ Like' : at === 'reply' ? '💬 Reply' : '👤 Follow'}
             </button>
           ))}
         </div>
 
-        {/* Count */}
-        <label className="block text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wider">
-          {actionType === 'follow' ? 'Follow count' : 'Per post'}
-        </label>
-        <input type="number" inputMode="numeric" min={1} max={800}
-          value={count} onChange={e => setCount(e.target.value)}
-          className="w-full border border-gray-300 rounded-lg px-3 py-3 text-base bg-white mb-3" />
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 500, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Per post</label>
+        <input type="number" inputMode="numeric" min={1} max={800} value={form.count}
+          onChange={e => setForm(f => ({ ...f, count: e.target.value }))}
+          style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 8, padding: '12px', fontSize: 16, background: '#fff', marginBottom: 12, boxSizing: 'border-box' }} />
 
-        {/* URLs */}
-        <label className="block text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wider">
-          Post URLs <span className="text-gray-400 normal-case tracking-normal">(one per line, max 20)</span>
-        </label>
-        <textarea rows={4} value={urls} onChange={e => setUrls(e.target.value)}
-          placeholder={'https://www.instagram.com/p/SHORTCODE/'}
-          className="w-full border border-gray-300 rounded-lg px-3 py-3 text-sm bg-white font-mono mb-1" />
-        {urls.trim() && (
-          <p className={`text-[11px] mb-3 ${parsedCount === 0 ? 'text-red-600' : 'text-gray-500'}`}>
+        <label style={{ display: 'block', fontSize: 11, fontWeight: 500, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Post URLs <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400, color: '#9ca3af' }}>(one per line, max 20)</span></label>
+        <textarea rows={4} value={form.urls}
+          onChange={e => setForm(f => ({ ...f, urls: e.target.value }))}
+          placeholder="https://www.instagram.com/p/SHORTCODE/"
+          style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 8, padding: '12px', fontSize: 13, background: '#fff', fontFamily: 'ui-monospace, monospace', boxSizing: 'border-box', marginBottom: 4 }} />
+        {form.urls.trim() && (
+          <p style={{ fontSize: 11, color: parsedCount === 0 ? '#dc2626' : '#6b7280', margin: '0 0 12px' }}>
             <b>{parsedCount}</b> valid post URL{parsedCount === 1 ? '' : 's'} detected
           </p>
         )}
-        {!urls.trim() && <div className="h-2" />}
+        {!form.urls.trim() && <div style={{ height: 8 }} />}
 
-        {/* Submit */}
-        <button onClick={submit} disabled={busy}
-          className="w-full py-4 bg-blue-600 active:bg-blue-800 text-white rounded-lg font-semibold text-base disabled:opacity-50">
-          {busy ? 'Sending…' : parsedCount > 0
-              ? `Send ${parsedCount} × ${count} ${actionType}`
-              : 'Send batch'}
+        <button onClick={send} disabled={busy}
+          style={{ width: '100%', padding: 16, background: busy ? '#93c5fd' : '#2563eb', color: '#fff', borderRadius: 8, fontWeight: 600, fontSize: 16, border: 'none' }}>
+          {busy ? 'Sending…' : parsedCount > 0 ? `Send ${parsedCount} × ${form.count} ${form.actionType}` : 'Send batch'}
         </button>
       </section>
 
-      {/* ───── Recent batches ───── */}
-      <section className="mt-4 mx-3">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-semibold text-gray-700">Recent batches</h2>
-          <button onClick={refreshCampaigns} className="text-xs text-blue-600 active:text-blue-800 px-2 py-1">Refresh</button>
+      {/* RECENT BATCHES */}
+      <section style={{ margin: '16px 12px 0' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <h2 style={{ fontSize: 14, fontWeight: 600, color: '#374151', margin: 0 }}>Recent batches</h2>
+          <button onClick={reloadCampaigns} style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', padding: 4 }}>Refresh</button>
         </div>
 
         {campaigns.length === 0 ? (
-          <p className="text-center text-gray-400 text-sm py-8 bg-white rounded-xl border border-gray-100">
+          <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: 14, padding: 32, background: '#fff', borderRadius: 12, border: '1px solid #f3f4f6', margin: 0 }}>
             No batches yet. Create one above ↑
           </p>
         ) : (
-          <div className="space-y-2">
+          <div>
             {campaigns.map(c => {
               const pct = c.total_requested > 0 ? Math.round((c.total_completed / c.total_requested) * 100) : 0;
-              const items = expandedItems[c.id] || [];
               const isExpanded = expandedId === c.id;
               return (
-                <div key={c.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <button onClick={() => expandCampaign(c.id)} className="w-full text-left p-3 active:bg-gray-50">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-medium text-sm">@{c.as_account}</span>
-                      <span className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded ${STATUS_COLOR[c.status] || 'bg-gray-100 text-gray-700'}`}>
+                <div key={c.id} style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', marginBottom: 8, overflow: 'hidden' }}>
+                  <button onClick={() => expandRow(c.id)}
+                    style={{ width: '100%', textAlign: 'left', padding: 12, background: 'none', border: 'none' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontWeight: 500, fontSize: 14 }}>@{c.as_account}</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', padding: '2px 8px', borderRadius: 4, background: STATUS_COLOR[c.status] || '#e5e7eb', color: '#374151' }}>
                         {c.status}
                       </span>
                     </div>
-                    <div className="text-[11px] text-gray-500 mb-1.5">
+                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>
                       {c.total_completed.toLocaleString()} / {c.total_requested.toLocaleString()} actions
-                      {(c.items_count ?? 0) > 0 && <> · {c.items_count} post{c.items_count === 1 ? '' : 's'}</>}
                     </div>
-                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${
-                        c.status === 'completed' ? 'bg-green-500' :
-                        c.status === 'failed' || c.status === 'cancelled' ? 'bg-red-400' :
-                        c.status === 'partial' ? 'bg-orange-400' : 'bg-blue-500'
-                      }`} style={{ width: `${pct}%` }} />
+                    <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: c.status === 'completed' ? '#22c55e' : c.status === 'failed' || c.status === 'cancelled' ? '#f87171' : '#3b82f6' }} />
                     </div>
                   </button>
 
                   {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-3 py-2 space-y-1.5">
-                      {items.length === 0 && <p className="text-[11px] text-gray-400 py-1">Loading items…</p>}
-                      {items.map(it => {
+                    <div style={{ borderTop: '1px solid #f3f4f6', background: '#f9fafb', padding: 8 }}>
+                      {expandedItems.length === 0 && <p style={{ fontSize: 11, color: '#9ca3af', margin: 0, padding: '8px 0' }}>Loading…</p>}
+                      {expandedItems.map(it => {
                         const shortcode = it.post_url.match(/(?:p|reel)\/([\w-]+)/)?.[1] || it.post_url.slice(-12);
-                        const retryable = ['failed', 'partial', 'no_targets', 'cancelled'].includes(it.status);
+                        const canRetry = it.status === 'failed' || it.status === 'partial' || it.status === 'no_targets' || it.status === 'cancelled';
                         return (
-                          <div key={it.id} className="flex items-center gap-2 py-1.5">
+                          <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px', borderBottom: '1px solid #f3f4f6' }}>
                             <a href={it.post_url} target="_blank" rel="noreferrer"
-                               className="text-blue-600 active:underline text-xs flex-1 truncate font-mono">
+                              style={{ color: '#2563eb', fontSize: 12, flex: 1, fontFamily: 'ui-monospace, monospace', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {shortcode}
                             </a>
-                            <span className="text-[11px] text-gray-600 tabular-nums">
+                            <span style={{ fontSize: 11, color: '#4b5563', fontVariantNumeric: 'tabular-nums' }}>
                               {it.count_done}/{it.count_requested}
                             </span>
-                            <span className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded ${STATUS_COLOR[it.status] || 'bg-gray-100'}`}>
+                            <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 3, background: STATUS_COLOR[it.status] || '#e5e7eb', color: '#374151' }}>
                               {it.status}
                             </span>
-                            {retryable && (
-                              <button onClick={() => retryItem(c.id, it.id)}
-                                className="text-[11px] px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded active:bg-blue-100">
-                                ↻
-                              </button>
+                            {canRetry && (
+                              <button onClick={() => retry(it.id)}
+                                style={{ fontSize: 11, padding: '4px 8px', background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', borderRadius: 4 }}>↻</button>
                             )}
                           </div>
                         );
                       })}
-                      {items.some(i => i.error_message) && (
-                        <div className="border-t border-gray-200 mt-1 pt-1.5 space-y-0.5">
-                          {items.filter(i => i.error_message).map(i => (
-                            <p key={i.id} className="text-[10px] text-red-600 leading-tight">⚠ {i.error_message}</p>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -356,9 +284,8 @@ export default function MobileBatches() {
         )}
       </section>
 
-      {/* Bottom-anchored link back to the full desktop UI for power users */}
-      <p className="text-center text-[11px] text-gray-400 mt-6">
-        <a href="/marketing/instagram" className="underline">Open desktop view</a>
+      <p style={{ textAlign: 'center', fontSize: 11, color: '#9ca3af', marginTop: 24 }}>
+        <a href="/marketing/instagram" style={{ color: '#9ca3af', textDecoration: 'underline' }}>Open desktop view</a>
       </p>
     </div>
   );
