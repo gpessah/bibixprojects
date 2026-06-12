@@ -81,18 +81,36 @@ export default function MobileBatches() {
   const [urls, setUrls] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [debug, setDebug] = useState<string>('mounted');
+
+  // Mark mount in console + on-screen so we can SEE the page reached the
+  // render path even if subsequent steps fail.
+  useEffect(() => {
+    console.log('[MobileBatches] mounted, user=', user?.email, 'token=', localStorage.getItem('token') ? 'yes' : 'no');
+    setDebug(d => d + ' → useEffect-mount');
+  }, []);
 
   // Bounce to login if unauthenticated. The mobile route is protected at the
   // App level too, but doing it here gives a faster user-visible redirect.
-  useEffect(() => { if (user === null) navigate('/login', { replace: true }); }, [user, navigate]);
+  useEffect(() => {
+    if (user === null && !localStorage.getItem('token')) {
+      console.log('[MobileBatches] no user + no token → /login');
+      navigate('/login', { replace: true });
+    }
+  }, [user, navigate]);
 
   // Initial load: accounts + recent batches (10 latest)
   useEffect(() => {
+    setDebug(d => d + ' → loading');
     api.get('/instagram/accounts').then((r: { data: unknown }) => {
       const list = Array.isArray(r.data) ? (r.data as string[]) : [];
       setIgAccounts(list);
       if (list.length && !account) setAccount(list[0]);
-    }).catch(() => {});
+      setDebug(d => d + ` → accounts=${list.length}`);
+    }).catch((e) => {
+      console.error('[MobileBatches] /accounts failed:', e);
+      setDebug(d => d + ` → accounts ERR ${e?.message || '?'}`);
+    });
     refreshCampaigns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -172,6 +190,12 @@ export default function MobileBatches() {
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 pb-12" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+
+      {/* TEMP DEBUG BANNER — confirms the page reached the render path.
+          Remove once the white-screen issue is identified. */}
+      <div style={{ background: '#fef3c7', color: '#92400e', padding: '6px 12px', fontSize: 11, fontFamily: 'monospace' }}>
+        DEBUG: {debug} · user={user?.email || 'none'} · token={localStorage.getItem('token') ? 'yes' : 'no'}
+      </div>
 
       {/* ───── Header ───── */}
       <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
