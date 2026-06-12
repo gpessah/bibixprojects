@@ -24,6 +24,10 @@ export interface BiMetric {
   value?: number | null;
 }
 
+export interface BiJoinDef { type: 'datasource' | 'manual'; id: string; leftKey: string; rightKey: string; how: 'left' | 'inner'; alias?: string; }
+export interface BiCombinedDef { base: { type: 'datasource' | 'manual'; id: string }; joins: BiJoinDef[]; }
+export interface BiCombined { id: string; name: string; definition: BiCombinedDef; columns: BiColumn[]; created_at: string; }
+
 export type WidgetType =
   | 'table' | 'pivot' | 'kpi' | 'bar' | 'line' | 'area' | 'pie'
   | 'scatter' | 'combo' | 'funnel' | 'gauge' | 'heatmap' | 'treemap' | 'text';
@@ -86,6 +90,12 @@ export const biApi = {
   deleteManual: (id: string) => api.delete(`/bi/manual-datasets/${id}`),
   manualRows: (id: string) => api.get(`/bi/manual-datasets/${id}/rows`).then(r => r.data),
   saveManualRows: (id: string, rows: any[]) => api.put(`/bi/manual-datasets/${id}/rows`, { rows }),
+
+  // Combined datasets (joins)
+  listCombined: () => api.get<BiCombined[]>('/bi/combined').then(r => r.data),
+  createCombined: (body: any) => api.post<BiCombined & { rowCount: number }>('/bi/combined', body).then(r => r.data),
+  updateCombined: (id: string, body: any) => api.patch(`/bi/combined/${id}`, body),
+  deleteCombined: (id: string) => api.delete(`/bi/combined/${id}`),
 
   // Metrics / measures
   listMetrics: () => api.get<BiMetric[]>('/bi/metrics').then(r => r.data),

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import biApi, {
-  BiConnection, BiDatasource, BiManualDataset, BiMetric, BiDashboard, BiTemplate, BiWidget,
+  BiConnection, BiDatasource, BiManualDataset, BiMetric, BiDashboard, BiTemplate, BiWidget, BiCombined,
 } from '../api/bi';
 
 // Defensive: never let a non-array API response (e.g. an HTML error page during
@@ -11,6 +11,7 @@ interface BiState {
   connections: BiConnection[];
   datasources: BiDatasource[];
   manualDatasets: BiManualDataset[];
+  combined: BiCombined[];
   metrics: BiMetric[];
   dashboards: BiDashboard[];
   templates: BiTemplate[];
@@ -21,6 +22,7 @@ interface BiState {
   loadConnections: () => Promise<void>;
   loadDatasources: () => Promise<void>;
   loadManual: () => Promise<void>;
+  loadCombined: () => Promise<void>;
   loadMetrics: () => Promise<void>;
   loadDashboards: () => Promise<void>;
 
@@ -36,6 +38,7 @@ export const useBiStore = create<BiState>((set, get) => ({
   connections: [],
   datasources: [],
   manualDatasets: [],
+  combined: [],
   metrics: [],
   dashboards: [],
   templates: [],
@@ -45,13 +48,13 @@ export const useBiStore = create<BiState>((set, get) => ({
   loadAll: async () => {
     set({ loading: true });
     try {
-      const [connections, datasources, manualDatasets, metrics, dashboards, templates] = await Promise.all([
+      const [connections, datasources, manualDatasets, combined, metrics, dashboards, templates] = await Promise.all([
         biApi.listConnections(), biApi.listDatasources(), biApi.listManual(),
-        biApi.listMetrics(), biApi.listDashboards(), biApi.listTemplates(),
+        biApi.listCombined(), biApi.listMetrics(), biApi.listDashboards(), biApi.listTemplates(),
       ]);
       set({
         connections: arr(connections), datasources: arr(datasources), manualDatasets: arr(manualDatasets),
-        metrics: arr(metrics), dashboards: arr(dashboards), templates: arr(templates),
+        combined: arr(combined), metrics: arr(metrics), dashboards: arr(dashboards), templates: arr(templates),
       });
     } finally {
       set({ loading: false });
@@ -61,6 +64,7 @@ export const useBiStore = create<BiState>((set, get) => ({
   loadConnections: async () => set({ connections: arr(await biApi.listConnections()) }),
   loadDatasources: async () => set({ datasources: arr(await biApi.listDatasources()) }),
   loadManual: async () => set({ manualDatasets: arr(await biApi.listManual()) }),
+  loadCombined: async () => set({ combined: arr(await biApi.listCombined()) }),
   loadMetrics: async () => set({ metrics: arr(await biApi.listMetrics()) }),
   loadDashboards: async () => set({ dashboards: arr(await biApi.listDashboards()) }),
 

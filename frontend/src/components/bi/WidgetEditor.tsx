@@ -12,7 +12,7 @@ const lbl = 'block text-xs font-medium text-gray-500 mb-1';
 const inp = 'w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm';
 
 export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
-  const { datasources, manualDatasets, metrics } = useBiStore();
+  const { datasources, manualDatasets, combined, metrics } = useBiStore();
   const [type, setType] = useState(widget.type);
   const [title, setTitle] = useState(widget.title || '');
   const [sourceType, setSourceType] = useState(widget.source_type);
@@ -26,8 +26,9 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
   const columns: { name: string; type: string }[] = useMemo(() => {
     if (sourceType === 'datasource') return datasources.find((d) => d.id === sourceId)?.column_meta || [];
     if (sourceType === 'manual') return manualDatasets.find((d) => d.id === sourceId)?.columns || [];
+    if (sourceType === 'combined') return combined.find((d) => d.id === sourceId)?.columns || [];
     return [];
-  }, [sourceType, sourceId, datasources, manualDatasets]);
+  }, [sourceType, sourceId, datasources, manualDatasets, combined]);
 
   const numCols = columns.filter((c) => c.type === 'number');
   const isChart = ['bar', 'line', 'area', 'combo', 'scatter'].includes(type);
@@ -89,6 +90,7 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
                 <option value="none">None</option>
                 <option value="datasource">Google / Drive file</option>
                 <option value="manual">Manual / uploaded</option>
+                <option value="combined">Combined (joined)</option>
                 {isKpi && <option value="measure">Saved measure</option>}
               </select>
             </div>
@@ -98,6 +100,7 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
                 <option value="">— select —</option>
                 {sourceType === 'datasource' && datasources.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 {sourceType === 'manual' && manualDatasets.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {sourceType === 'combined' && combined.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 {sourceType === 'measure' && metrics.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             </div>

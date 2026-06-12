@@ -5,8 +5,9 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Modal from '../ui/Modal';
-import biApi, { BiDatasource } from '../../api/bi';
+import biApi, { BiDatasource, BiCombined } from '../../api/bi';
 import { useBiStore } from '../../store/biStore';
+import CombinedBuilder from './CombinedBuilder';
 
 function timeAgo(iso?: string | null) {
   if (!iso) return 'never';
@@ -18,13 +19,19 @@ function timeAgo(iso?: string | null) {
 }
 
 export default function DataSourcesPanel() {
-  const { connections, datasources, loadConnections, loadDatasources, loadManual } = useBiStore();
+  const { connections, datasources, combined, loadConnections, loadDatasources, loadManual, loadCombined } = useBiStore();
   const [showAdd, setShowAdd] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [showCombine, setShowCombine] = useState<BiCombined | true | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { loadConnections(); loadDatasources(); }, []);
+  useEffect(() => { loadConnections(); loadDatasources(); loadManual(); loadCombined(); }, []);
+
+  const removeCombined = async (id: string) => {
+    if (!confirm('Delete this combined dataset?')) return;
+    await biApi.deleteCombined(id); await loadCombined(); toast.success('Deleted');
+  };
 
   const connect = async () => {
     try { window.location.href = await biApi.googleAuthUrl(); }
@@ -119,7 +126,32 @@ export default function DataSourcesPanel() {
             </div>}
       </div>
 
+      {/* Combined datasets (joins) */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold text-gray-700">Combined datasets (joins)</h2>
+          <button onClick={() => setShowCombine(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"><Link2 size={14} /> Combine tables</button>
+        </div>
+        <p className="text-xs text-gray-400 mb-2">Join two or more tables on a shared key (e.g. clientID) into one dataset you can chart or measure.</p>
+        {combined.length === 0
+          ? <p className="text-sm text-gray-400">No combined datasets yet.</p>
+          : <div className="space-y-2">
+              {combined.map((c) => (
+                <div key={c.id} className="flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-lg">
+                  <Link2 size={18} className="text-purple-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-800 truncate">{c.name}</div>
+                    <div className="text-xs text-gray-400 truncate">{(c.definition?.joins?.length || 0) + 1} tables · {c.columns.length} columns</div>
+                  </div>
+                  <button onClick={() => setShowCombine(c)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"><Plus size={15} className="rotate-45" /></button>
+                  <button onClick={() => removeCombined(c.id)} className="p-2 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
+                </div>
+              ))}
+            </div>}
+      </div>
+
       {showAdd && <AddFileModal onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); loadDatasources(); }} />}
+      {showCombine && <CombinedBuilder existing={showCombine === true ? undefined : showCombine} onClose={() => setShowCombine(null)} onSaved={() => { setShowCombine(null); loadCombined(); }} />}
     </div>
   );
 }

@@ -152,6 +152,19 @@ for (const m of [
   'ALTER TABLE bi_metrics ADD COLUMN filters TEXT',
 ]) { try { db.exec(m); } catch { /* column exists */ } }
 
+// Combined datasets — a saved join of two or more sources on a key field.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS bi_combined_datasets (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    definition TEXT NOT NULL DEFAULT '{}',
+    columns TEXT DEFAULT '[]',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
 // biSync requires this module's tables to exist; require after DDL.
 const biSync = require('../services/biSync');
 
@@ -196,7 +209,56 @@ function resolveSource(userId, sourceType, sourceId) {
       .all(sourceId).map((r) => J(r.data, {}));
     return { rows, columns: J(dataset.columns, []), meta: dataset };
   }
+  if (sourceType === 'combined') {
+    const c = db.prepare('SELECT * FROM bi_combined_datasets WHERE id=? AND user_id=?').get(sourceId, userId);
+    if (!c) return null;
+    return resolveCombined(userId, J(c.definition, {}));
+  }
   return null;
+}
+
+// Join a base source with one or more others on a key field (left or inner join).
+// Colliding column names from a joined source are prefixed with its alias.
+// definition = { base:{type,id}, joins:[{type,id,leftKey,rightKey,how,alias}] }
+function resolveCombined(userId, def) {
+  if (!def || !def.base) return null;
+  const base = resolveSource(userId, def.base.type, def.base.id);
+  if (!base) return null;
+  let rows = base.rows.map((r) => ({ ...r }));
+  const columns = base.columns.map((c) => ({ ...c }));
+  const used = new Set(columns.map((c) => c.name));
+
+  for (const j of (def.joins || [])) {
+    const right = resolveSource(userId, j.type, j.id);
+    if (!right || !j.leftKey || !j.rightKey) continue;
+    const alias = j.alias || right.meta?.name || 'joined';
+    const lookup = new Map();
+    for (const rr of right.rows) {
+      const k = String(rr[j.rightKey] ?? '');
+      if (!lookup.has(k)) lookup.set(k, rr); // first match wins
+    }
+    // joined columns to bring in (everything except the join key), renamed on collision
+    const rename = {};
+    for (const c of right.columns) {
+      if (c.name === j.rightKey) continue;
+      let nm = c.name;
+      if (used.has(nm)) nm = `${alias}.${c.name}`;
+      rename[c.name] = nm; used.add(nm);
+      columns.push({ name: nm, type: c.type });
+    }
+    rows = rows.map((r) => {
+      const match = lookup.get(String(r[j.leftKey] ?? ''));
+      const merged = { ...r, __m: !!match };
+      for (const c of right.columns) {
+        if (c.name === j.rightKey) continue;
+        merged[rename[c.name]] = match ? match[c.name] : '';
+      }
+      return merged;
+    });
+    if (j.how === 'inner') rows = rows.filter((r) => r.__m);
+    rows.forEach((r) => delete r.__m);
+  }
+  return { rows, columns, meta: { name: 'combined' } };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -500,6 +562,46 @@ router.post('/uploads', authenticate, upload.single('file'), (req, res) => {
 
   const d = db.prepare('SELECT * FROM bi_manual_datasets WHERE id=?').get(id);
   res.json({ dataset: { ...d, columns: J(d.columns, []) }, rowCount: parsed.rows.length, sheetNames: parsed.sheetNames });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Combined datasets (joins)
+// ════════════════════════════════════════════════════════════════════════════
+function recomputeCombinedColumns(userId, definition) {
+  try { return resolveCombined(userId, definition)?.columns || []; } catch { return []; }
+}
+
+router.get('/combined', authenticate, (req, res) => {
+  const rows = db.prepare('SELECT * FROM bi_combined_datasets WHERE user_id=? ORDER BY created_at DESC').all(req.user.id);
+  res.json(rows.map((c) => ({ ...c, definition: J(c.definition, {}), columns: J(c.columns, []) })));
+});
+
+router.post('/combined', authenticate, (req, res) => {
+  const { name, definition } = req.body;
+  if (!name || !definition || !definition.base) return res.status(400).json({ error: 'name and a base dataset are required' });
+  const id = uuidv4();
+  const columns = recomputeCombinedColumns(req.user.id, definition);
+  db.prepare('INSERT INTO bi_combined_datasets (id,user_id,name,definition,columns) VALUES (?,?,?,?,?)')
+    .run(id, req.user.id, name, JSON.stringify(definition), JSON.stringify(columns));
+  const c = db.prepare('SELECT * FROM bi_combined_datasets WHERE id=?').get(id);
+  const preview = resolveCombined(req.user.id, definition);
+  res.json({ ...c, definition: J(c.definition, {}), columns, rowCount: preview ? preview.rows.length : 0 });
+});
+
+router.patch('/combined/:id', authenticate, (req, res) => {
+  const c = db.prepare('SELECT * FROM bi_combined_datasets WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const name = req.body.name ?? c.name;
+  const definition = req.body.definition !== undefined ? req.body.definition : J(c.definition, {});
+  const columns = recomputeCombinedColumns(req.user.id, definition);
+  db.prepare('UPDATE bi_combined_datasets SET name=?, definition=?, columns=? WHERE id=?')
+    .run(name, JSON.stringify(definition), JSON.stringify(columns), req.params.id);
+  res.json({ success: true, columns });
+});
+
+router.delete('/combined/:id', authenticate, (req, res) => {
+  db.prepare('DELETE FROM bi_combined_datasets WHERE id=? AND user_id=?').run(req.params.id, req.user.id);
+  res.json({ success: true });
 });
 
 // ════════════════════════════════════════════════════════════════════════════

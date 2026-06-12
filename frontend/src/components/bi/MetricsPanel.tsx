@@ -10,26 +10,28 @@ const tokenize = (s: string) => String(s).replace(/[^a-zA-Z0-9_]/g, '_').replace
 
 const blank = {
   name: '', description: '', kind: 'aggregate' as 'aggregate' | 'calculated',
-  source_type: 'datasource' as 'datasource' | 'manual', source_id: '', fn: 'sum', field: '',
+  source_type: 'datasource' as 'datasource' | 'manual' | 'combined', source_id: '', fn: 'sum', field: '',
   filters: [] as any[], expression: '',
 };
 
 export default function MetricsPanel() {
-  const { metrics, datasources, manualDatasets, loadMetrics, loadDatasources, loadManual } = useBiStore();
+  const { metrics, datasources, manualDatasets, combined, loadMetrics, loadDatasources, loadManual, loadCombined } = useBiStore();
   const [values, setValues] = useState<Record<string, number | null>>({});
   const [form, setForm] = useState({ ...blank });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
-  useEffect(() => { loadMetrics(); loadDatasources(); loadManual(); refreshValues(); }, []);
+  useEffect(() => { loadMetrics(); loadDatasources(); loadManual(); loadCombined(); refreshValues(); }, []);
   const refreshValues = () => biApi.metricValues().then(setValues).catch(() => {});
 
   const set = (patch: any) => setForm((f) => ({ ...f, ...patch }));
 
+  const datasetsFor = (t: string) => (t === 'datasource' ? datasources : t === 'combined' ? combined : manualDatasets);
   const columns: BiColumn[] = useMemo(() => {
     if (form.source_type === 'datasource') return datasources.find((d) => d.id === form.source_id)?.column_meta || [];
+    if (form.source_type === 'combined') return (combined.find((d) => d.id === form.source_id)?.columns || []) as BiColumn[];
     return manualDatasets.find((d) => d.id === form.source_id)?.columns || [];
-  }, [form.source_type, form.source_id, datasources, manualDatasets]);
+  }, [form.source_type, form.source_id, datasources, manualDatasets, combined]);
 
   const reset = () => { setForm({ ...blank }); setEditingId(null); };
 
@@ -65,7 +67,7 @@ export default function MetricsPanel() {
   const remove = async (id: string) => { await biApi.deleteMetric(id); if (editingId === id) reset(); await loadMetrics(); refreshValues(); };
 
   const datasetName = (m: BiMetric) =>
-    (m.source_type === 'manual' ? manualDatasets : datasources).find((d) => d.id === m.source_id)?.name || '—';
+    (datasetsFor(m.source_type || 'datasource') as any[]).find((d) => d.id === m.source_id)?.name || '—';
 
   const inp = 'w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm';
   const lbl = 'block text-xs font-medium text-gray-500 mb-1';
@@ -105,13 +107,13 @@ export default function MetricsPanel() {
             <div className="grid grid-cols-4 gap-3">
               <div><label className={lbl}>Dataset type</label>
                 <select className={inp} value={form.source_type} onChange={(e) => set({ source_type: e.target.value, source_id: '', field: '' })}>
-                  <option value="datasource">Google / Drive</option><option value="manual">Manual / uploaded</option>
+                  <option value="datasource">Google / Drive</option><option value="manual">Manual / uploaded</option><option value="combined">Combined (joined)</option>
                 </select>
               </div>
               <div><label className={lbl}>Dataset</label>
                 <select className={inp} value={form.source_id} onChange={(e) => set({ source_id: e.target.value, field: '' })}>
                   <option value="">— select —</option>
-                  {(form.source_type === 'datasource' ? datasources : manualDatasets).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  {datasetsFor(form.source_type).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </div>
               <div><label className={lbl}>Function</label>
