@@ -158,6 +158,10 @@ try {
       ON instagram_actions(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_created
       ON instagram_actions(user_id, type, created_at);
+    -- Accelerates the /stats funnel's correlated EXISTS (match outbound actions to
+    -- later inbound actions by username) — without this it full-scans per row.
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_username_type
+      ON instagram_actions(user_id, username, type, created_at);
     CREATE TABLE IF NOT EXISTS instagram_automations (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -420,7 +424,9 @@ router.get("/stats", authenticateFlexible, (req, res) => {
     filtersBase.push(`date(created_at) BETWEEN ? AND ?`);
     baseParams.push(from, to);
   } else {
-    filtersBase.push(`datetime(created_at) >= datetime('now', '-${days} days')`);
+    // Compare the raw column (not datetime(created_at)) so the (user_id, created_at)
+    // index is usable — created_at is already stored in sortable datetime format.
+    filtersBase.push(`created_at >= datetime('now', '-${days} days')`);
   }
 
   if (req.query.profiles) {
