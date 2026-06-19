@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect, lazy, Suspense, Component } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import { useWorkspaceStore } from './store/workspaceStore';
@@ -34,6 +34,38 @@ function PageLoader() {
   );
 }
 
+// Each lazy route gets its OWN Suspense boundary. A single shared boundary near
+// the root throws React error #426 ("suspended while responding to synchronous
+// input") when an auth/navigation update reveals a lazy route, because the
+// already-mounted boundary can't show its fallback. A fresh per-route boundary
+// mounts clean on every navigation, so suspending always shows the loader.
+const S = (el: React.ReactNode) => <Suspense fallback={<PageLoader />}>{el}</Suspense>;
+
+// Catches render errors (incl. a failed lazy-chunk fetch after a redeploy) so the
+// app shows a reload prompt instead of a blank white screen.
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: boolean }> {
+  state = { error: false };
+  static getDerivedStateFromError() { return { error: true }; }
+  componentDidCatch(err: unknown) {
+    const msg = String((err as { message?: string })?.message || err);
+    if (/Loading chunk|dynamically imported module|Failed to fetch/i.test(msg)) {
+      window.location.reload();
+    }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-gray-600">
+          <p>Something went wrong loading the app.</p>
+          <button onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-monday-blue text-white rounded-lg">Reload</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuthStore();
   if (loading) return (
@@ -60,31 +92,31 @@ export default function App() {
   useEffect(() => { if (user) loadWorkspaces(); }, [user?.id]);
 
   return (
-    <Suspense fallback={<PageLoader />}>
+    <ErrorBoundary>
     <Routes>
-      <Route path="/schedule/:userId" element={<BookingPage />} />
-      <Route path="/form/:formId" element={<PublicFormPage />} />
+      <Route path="/schedule/:userId" element={S(<BookingPage />)} />
+      <Route path="/form/:formId" element={S(<PublicFormPage />)} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Navigate to="/login" replace />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Home />} />
-        <Route path="board/:boardId" element={<BoardPage />} />
-        <Route path="search" element={<SearchPage />} />
-        <Route path="notifications" element={<NotificationsPanel />} />
-        <Route path="calendar" element={<ModuleRoute module="calendar"><CalendarPage /></ModuleRoute>} />
-        <Route path="bibixbot" element={<ModuleRoute module="bibixbot"><BibixBotPage /></ModuleRoute>} />
-        <Route path="scheduling" element={<ModuleRoute module="scheduling"><SchedulingPage /></ModuleRoute>} />
-        <Route path="crm" element={<ModuleRoute module="crm"><CRMPage /></ModuleRoute>} />
-        <Route path="invoices" element={<InvoicePage />} />
-        <Route path="bi" element={<ModuleRoute module="reports"><ReportsPage /></ModuleRoute>} />
+        <Route path="board/:boardId" element={S(<BoardPage />)} />
+        <Route path="search" element={S(<SearchPage />)} />
+        <Route path="notifications" element={S(<NotificationsPanel />)} />
+        <Route path="calendar" element={<ModuleRoute module="calendar">{S(<CalendarPage />)}</ModuleRoute>} />
+        <Route path="bibixbot" element={<ModuleRoute module="bibixbot">{S(<BibixBotPage />)}</ModuleRoute>} />
+        <Route path="scheduling" element={<ModuleRoute module="scheduling">{S(<SchedulingPage />)}</ModuleRoute>} />
+        <Route path="crm" element={<ModuleRoute module="crm">{S(<CRMPage />)}</ModuleRoute>} />
+        <Route path="invoices" element={S(<InvoicePage />)} />
+        <Route path="bi" element={<ModuleRoute module="reports">{S(<ReportsPage />)}</ModuleRoute>} />
         <Route path="instagram" element={<Navigate to="/marketing/instagram" replace />} />
-        <Route path="marketing/instagram" element={<ModuleRoute module="instagram"><InstagramPage /></ModuleRoute>} />
-        <Route path="marketing/linkedin"  element={<ModuleRoute module="linkedin"><LinkedInPage /></ModuleRoute>} />
-        <Route path="backups" element={<BackupsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="admin" element={<AdminPage />} />
+        <Route path="marketing/instagram" element={<ModuleRoute module="instagram">{S(<InstagramPage />)}</ModuleRoute>} />
+        <Route path="marketing/linkedin"  element={<ModuleRoute module="linkedin">{S(<LinkedInPage />)}</ModuleRoute>} />
+        <Route path="backups" element={S(<BackupsPage />)} />
+        <Route path="settings" element={S(<SettingsPage />)} />
+        <Route path="admin" element={S(<AdminPage />)} />
       </Route>
     </Routes>
-    </Suspense>
+    </ErrorBoundary>
   );
 }
