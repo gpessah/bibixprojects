@@ -1235,6 +1235,10 @@ export default function InstagramPage() {
     await api.post(`/instagram/action-campaigns/${id}/cancel${qs}`);
     await loadActionCampaigns();
   }
+  async function pauseActionCampaign(id: string) {
+    await api.post(`/instagram/action-campaigns/${id}/pause${qs}`);
+    await loadActionCampaigns();
+  }
   async function resumeActionCampaign(id: string) {
     await api.post(`/instagram/action-campaigns/${id}/resume${qs}`);
     await loadActionCampaigns();
@@ -3441,6 +3445,10 @@ export default function InstagramPage() {
                               {c.status === 'draft' && (
                                 <button onClick={() => sendCampaign(c.id)}
                                   className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Send</button>
+                              )}
+                              {(c.status === 'running' || c.status === 'pending') && (
+                                <button onClick={() => pauseActionCampaign(c.id)}
+                                  className="text-xs text-yellow-700 hover:text-yellow-900">Pause</button>
                               )}
                               {(c.status === 'running' || c.status === 'pending') && (
                                 <button onClick={() => cancelActionCampaign(c.id)}

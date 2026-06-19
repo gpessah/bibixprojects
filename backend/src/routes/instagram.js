@@ -1715,6 +1715,20 @@ router.post('/action-campaigns/:id/cancel', authenticateFlexible, (req, res) => 
   res.json({ ok: true });
 });
 
+// Monday: pause a running/pending campaign. The /action-queue/pending feed only
+// serves campaigns whose status is pending|running, so flipping to 'paused' stops
+// new actions from being handed out. Queued items stay 'pending' (untouched), so
+// Resume below picks up exactly where it left off. In-flight 'claimed' items finish.
+router.post('/action-campaigns/:id/pause', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  db.prepare(`
+    UPDATE instagram_action_campaigns
+    SET status = 'paused'
+    WHERE id = ? AND user_id = ? AND status IN ('pending', 'running')
+  `).run(req.params.id, uid);
+  res.json({ ok: true });
+});
+
 // Monday: resume paused campaign
 router.post('/action-campaigns/:id/resume', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
