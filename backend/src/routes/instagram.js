@@ -194,6 +194,42 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_ig_automations_due
       ON instagram_automations(enabled, next_run_at);
+
+    -- ─── Per-username profile enrichment ────────────────────────────────────
+    -- The "About this account" panel on IG profiles exposes Date Joined +
+    -- Account Based In (country). We capture it asynchronously after batches
+    -- run (Phase 2 — extension scraper) so the dashboard / History can show
+    -- the country of users we engaged with.
+    --
+    -- Keyed on (user_id, username) so different admin accounts can have
+    -- their own enrichment timeline; we never want one user's stale data
+    -- to satisfy another's pending request.
+    --
+    -- last_enriched_at lets the queue prefer never-seen-before usernames
+    -- first, then refresh stale ones (>30d) on a slower cadence.
+    CREATE TABLE IF NOT EXISTS instagram_user_profiles (
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      country TEXT,
+      country_code TEXT,
+      joined_month TEXT,
+      full_name TEXT,
+      followers INTEGER,
+      bio TEXT,
+      verified INTEGER,
+      private INTEGER,
+      enrichment_error TEXT,
+      last_enriched_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, username)
+    );
+    -- Discovery hot path: find usernames in instagram_actions not yet in
+    -- instagram_user_profiles. Index on (user_id, username) for the
+    -- LEFT JOIN, plus on last_enriched_at for the stale-refresh pass.
+    CREATE INDEX IF NOT EXISTS idx_ig_user_profiles_user
+      ON instagram_user_profiles(user_id, username);
+    CREATE INDEX IF NOT EXISTS idx_ig_user_profiles_stale
+      ON instagram_user_profiles(user_id, last_enriched_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
 
@@ -351,14 +387,28 @@ router.post('/actions/bulk', authenticateFlexible, (req, res) => {
 router.get("/actions", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const { type, type_like, limit = 200, offset = 0 } = req.query;
-  let q = 'SELECT * FROM instagram_actions WHERE user_id = ?';
+  // LEFT JOIN instagram_user_profiles so each row carries the target user's
+  // enriched country (when known). p.country is NULL for un-enriched
+  // usernames — the frontend renders "—" in that case. Joining on
+  // LOWER(a.username) because profiles are stored lowercase but
+  // instagram_actions might preserve mixed-case usernames.
+  let q = `
+    SELECT a.*,
+           p.country     AS user_country,
+           p.country_code AS user_country_code,
+           p.joined_month AS user_joined_month
+    FROM instagram_actions a
+    LEFT JOIN instagram_user_profiles p
+      ON p.user_id = a.user_id AND p.username = LOWER(a.username)
+    WHERE a.user_id = ?
+  `;
   const params = [uid];
-  if (type) { q += ' AND type = ?'; params.push(type); }
+  if (type) { q += ' AND a.type = ?'; params.push(type); }
   // type_like='received_%' lets the extension fetch all received_* rows
   // in one call for notification-dedup. SQLite LIKE is case-insensitive
   // by default for ASCII, which is what we want here.
-  if (type_like) { q += ' AND type LIKE ?'; params.push(String(type_like)); }
-  q += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  if (type_like) { q += ' AND a.type LIKE ?'; params.push(String(type_like)); }
+  q += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
   params.push(Number(limit), Number(offset));
   res.json(db.prepare(q).all(...params));
 });
@@ -1306,6 +1356,90 @@ router.get('/accounts', authenticateFlexible, (req, res) => {
       WHERE user_id = ? AND my_profile IS NOT NULL AND my_profile != ''
   `).all(uid, uid, uid).map(r => r.my_profile);
   res.json([...new Set([...scanned, ...seen])].sort());
+});
+
+// ── User Profile Enrichment (country + joined month + bio) ──────────────────
+// Phase 1: backend foundation. Phase 2 (extension scraper) lands tomorrow.
+//
+// The extension visits each engaged user's profile, clicks "About this
+// account", and reads back the country + date joined. It UPSERTs here.
+// History queries LEFT JOIN this table so country shows in the UI without
+// blocking the main batch flow.
+//
+// POST /user-profiles  — UPSERT enrichment data for one username
+// Body: { username, country, country_code, joined_month, full_name,
+//         followers, bio, verified, private, error }
+// Idempotent — extension can re-POST safely (e.g., after a refresh).
+router.post('/user-profiles', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const b = req.body || {};
+  const username = String(b.username || '').trim().replace(/^@/, '').toLowerCase();
+  if (!username) return res.status(400).json({ error: 'username required' });
+  db.prepare(`
+    INSERT INTO instagram_user_profiles
+      (user_id, username, country, country_code, joined_month, full_name,
+       followers, bio, verified, private, enrichment_error, last_enriched_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id, username) DO UPDATE SET
+      country = COALESCE(excluded.country, instagram_user_profiles.country),
+      country_code = COALESCE(excluded.country_code, instagram_user_profiles.country_code),
+      joined_month = COALESCE(excluded.joined_month, instagram_user_profiles.joined_month),
+      full_name = COALESCE(excluded.full_name, instagram_user_profiles.full_name),
+      followers = COALESCE(excluded.followers, instagram_user_profiles.followers),
+      bio = COALESCE(excluded.bio, instagram_user_profiles.bio),
+      verified = COALESCE(excluded.verified, instagram_user_profiles.verified),
+      private = COALESCE(excluded.private, instagram_user_profiles.private),
+      enrichment_error = excluded.enrichment_error,
+      last_enriched_at = CURRENT_TIMESTAMP
+  `).run(
+    uid, username,
+    b.country || null,
+    b.country_code || null,
+    b.joined_month || null,
+    b.full_name || null,
+    Number.isFinite(b.followers) ? b.followers : null,
+    b.bio || null,
+    b.verified === true ? 1 : (b.verified === false ? 0 : null),
+    b.private === true ? 1 : (b.private === false ? 0 : null),
+    b.error || null
+  );
+  res.json({ ok: true });
+});
+
+// GET /user-profiles/pending?limit=20
+// Returns up to N usernames that need enrichment — usernames we've engaged
+// with (appear in instagram_actions) but have no row in
+// instagram_user_profiles, OR have a row older than 30 days.
+// Used by the extension's background poller to pace the enrichment queue.
+router.get('/user-profiles/pending', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 20));
+  const rows = db.prepare(`
+    SELECT DISTINCT a.username
+    FROM instagram_actions a
+    LEFT JOIN instagram_user_profiles p
+      ON p.user_id = a.user_id AND p.username = LOWER(a.username)
+    WHERE a.user_id = ?
+      AND a.username IS NOT NULL AND a.username != ''
+      AND a.type IN ('like', 'reply', 'follow', 'comment', 'comment_reply')
+      AND (p.username IS NULL OR datetime(p.last_enriched_at) < datetime('now', '-30 days'))
+    ORDER BY a.created_at DESC
+    LIMIT ?
+  `).all(uid, limit).map(r => r.username);
+  res.json(rows);
+});
+
+// GET /user-profiles/:username — read a single enriched profile
+// Used by the History UI to fetch country on-demand if the LEFT JOIN
+// isn't enough (e.g., re-enrich button in the future).
+router.get('/user-profiles/:username', authenticateFlexible, (req, res) => {
+  const uid = targetUser(req);
+  const username = String(req.params.username || '').trim().replace(/^@/, '').toLowerCase();
+  if (!username) return res.status(400).json({ error: 'username required' });
+  const row = db.prepare(`
+    SELECT * FROM instagram_user_profiles WHERE user_id = ? AND username = ?
+  `).get(uid, username);
+  res.json(row || null);
 });
 
 // ── Follower Snapshots ───────────────────────────────────────────────────────

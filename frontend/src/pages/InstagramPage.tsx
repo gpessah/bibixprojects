@@ -116,6 +116,11 @@ interface Action {
   full_name: string | null;
   post_owner: string | null;
   action_date: string | null;
+  // ─── Phase 1 country enrichment (Phase 2 extension scraper lands tomorrow) ───
+  // LEFT JOINed from instagram_user_profiles. NULL = not yet enriched.
+  user_country?: string | null;
+  user_country_code?: string | null;
+  user_joined_month?: string | null;
 }
 
 interface Campaign {
@@ -286,9 +291,21 @@ function displayUsername(u: string | null) {
   return u;
 }
 
+// Convert an ISO 3166-1 alpha-2 country code (e.g. "GB", "US") to the
+// regional-indicator flag emoji (🇬🇧, 🇺🇸). Each letter maps to its
+// Regional Indicator Symbol via Unicode codepoint offset.
+// Returns '' for unknown / invalid input — the caller falls back to text.
+function countryFlag(code: string | null | undefined): string {
+  if (!code || code.length !== 2) return '';
+  const cc = code.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return '';
+  const base = 0x1F1E6 - 'A'.charCodeAt(0);
+  return String.fromCodePoint(base + cc.charCodeAt(0)) + String.fromCodePoint(base + cc.charCodeAt(1));
+}
+
 // ── Export CSV ────────────────────────────────────────────────────────────────
 function exportCSV(rows: Action[]) {
-  const headers = ['Date', 'My Profile', 'Action', 'Target Username', 'Full Name', 'Followers', 'Reply', 'Post Owner', 'Post URL'];
+  const headers = ['Date', 'My Profile', 'Action', 'Target Username', 'Full Name', 'Followers', 'Country', 'Reply', 'Post Owner', 'Post URL'];
   const lines = rows.map(r => [
     fmt(r.action_date || r.created_at),
     r.my_profile || '',
@@ -296,6 +313,7 @@ function exportCSV(rows: Action[]) {
     displayUsername(r.username) || '',
     r.full_name || '',
     r.follower_count != null ? r.follower_count : '',
+    r.user_country || '',
     r.reply_text || r.comment_text || '',
     r.post_owner || '',
     r.post_url || '',
@@ -2265,6 +2283,7 @@ export default function InstagramPage() {
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Target User</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Full Name</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Followers</th>
+                    <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap" title="Country scraped from the target user's IG profile (About this account). Populates asynchronously after batches run.">Country</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Reply</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Post Owner</th>
                     <th className="px-4 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide whitespace-nowrap">Post URL</th>
@@ -2296,6 +2315,12 @@ export default function InstagramPage() {
                         <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
                           {a.follower_count != null ? Number(a.follower_count).toLocaleString() : '—'}
                         </td>
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs"
+                          title={a.user_joined_month ? `Joined IG ${a.user_joined_month}` : ''}>
+                          {a.user_country
+                            ? <span>{a.user_country_code ? `${countryFlag(a.user_country_code)} ` : ''}{a.user_country}</span>
+                            : <span className="text-gray-300">—</span>}
+                        </td>
                         <td className="px-4 py-3 text-gray-500 max-w-[180px] truncate"
                           title={a.reply_text || a.comment_text || ''}>
                           {a.reply_text || a.comment_text || '—'}
@@ -2317,7 +2342,7 @@ export default function InstagramPage() {
                   })}
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="px-4 py-16 text-center text-gray-400">
+                      <td colSpan={10} className="px-4 py-16 text-center text-gray-400">
                         {actions.length === 0 ? 'No actions recorded yet. Run the extension to start tracking.' : 'No records match your filters.'}
                       </td>
                     </tr>
