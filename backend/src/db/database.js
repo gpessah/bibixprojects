@@ -68,6 +68,55 @@ try { fs.rmSync(LOCK_PATH, { recursive: true, force: true }); } catch {}
 
 const rawDb = new WasmDatabase(DB_PATH);
 rawDb.exec('PRAGMA foreign_keys = ON');
+
+// Crash-resilient pragmas — drastically reduce the "database disk image is
+// malformed" recurrences we've been hitting from process kills mid-write.
+//
+//   journal_mode=WAL    — uses a separate write-ahead log instead of
+//                          rollback-journal. Writers don't block readers.
+//                          Crashes mid-write recover by replaying the WAL
+//                          at startup, leaving the main DB intact instead
+//                          of partially-written pages that fail
+//                          integrity_check.
+//   synchronous=NORMAL  — WAL's recommended sync level. Forces flush at
+//                          checkpoints (not every write), so we keep most
+//                          of WAL's perf gains while still being durable
+//                          across crashes.
+//   wal_autocheckpoint  — checkpoint the WAL back into main DB every
+//                          1000 pages of writes (default). Caps WAL file
+//                          growth without manual intervention.
+try {
+  rawDb.exec('PRAGMA journal_mode = WAL');
+  rawDb.exec('PRAGMA synchronous = NORMAL');
+  rawDb.exec('PRAGMA wal_autocheckpoint = 1000');
+  console.log('[DB] WAL mode enabled (journal_mode=WAL, synchronous=NORMAL)');
+} catch (e) {
+  console.warn('[DB] Failed to enable WAL mode (continuing in default mode):', e.message);
+}
+
+// Graceful shutdown — when the process receives SIGTERM/SIGINT (graceful
+// kill, Passenger respawn, Ctrl+C), CLOSE the SQLite database properly
+// before the process exits. Without this trap, an in-flight write can
+// leave torn pages in the main DB file, which then fails integrity_check
+// on next startup and corrupts the whole file.
+//
+// node-sqlite3-wasm's Database.close() flushes WAL + releases locks.
+// We give it a short window (2s) then force-exit so Passenger doesn't
+// wait forever if close hangs.
+function shutdown(signal) {
+  console.log(`[DB] Received ${signal} — flushing SQLite and exiting cleanly`);
+  try {
+    rawDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    rawDb.close();
+    console.log('[DB] SQLite closed cleanly');
+  } catch (e) {
+    console.warn('[DB] Error during shutdown:', e.message);
+  }
+  setTimeout(() => process.exit(0), 200);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
+
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
 rawDb.exec(schema);
 
