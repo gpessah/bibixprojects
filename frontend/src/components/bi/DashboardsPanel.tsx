@@ -20,6 +20,14 @@ export default function DashboardsPanel({ onOpen }: { onOpen: (id: string) => vo
 
   return (
     <div className="p-6">
+      <div className="mb-5 text-xs text-gray-500 bg-blue-50/50 border border-blue-100 rounded-lg px-4 py-2.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-semibold text-gray-700">How it works:</span>
+        <span><span className="font-medium">1.</span> Add data (<strong>Data Sources</strong>: Google/Drive or upload; or <strong>Manual Data</strong>)</span>
+        <span className="text-gray-300">→</span>
+        <span><span className="font-medium">2.</span> optionally <strong>join</strong> tables or define <strong>measures</strong> (Metrics)</span>
+        <span className="text-gray-300">→</span>
+        <span><span className="font-medium">3.</span> create a dashboard, <strong>Edit</strong>, add widgets and pick a source.</span>
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         <button onClick={() => { loadAll(); setShowGallery(true); }}
           className="flex flex-col items-center justify-center gap-2 h-40 rounded-xl border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50/40">

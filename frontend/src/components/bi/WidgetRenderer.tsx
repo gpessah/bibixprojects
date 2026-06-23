@@ -108,49 +108,72 @@ function ChartBody({ widget, rows, colors, cfg, columns }: { widget: BiWidget; r
   const series: { field: string; name?: string; kind?: string }[] =
     (cfg.series && cfg.series.length ? cfg.series : []).filter((s: any) => s.field);
 
-  // Pivot / heatmap compute a matrix client-side from raw rows.
+  // Pivot / heatmap compute a matrix client-side from raw rows. Supports multiple
+  // row fields and multiple column fields, plus a chosen value aggregation.
   const pivot = useMemo(() => {
     if (widget.type !== 'pivot' && widget.type !== 'heatmap') return null;
-    const rowField = cfg.rowField || xField;
-    const colField = cfg.colField;
-    const valField = cfg.valueField;
-    if (!rowField || !colField || !valField) return null;
-    const colKeys = Array.from(new Set(rows.map((r) => String(r[colField] ?? ''))));
-    const byRow = new Map<string, any>();
+    const rowFields: string[] = (cfg.rowFields && cfg.rowFields.length ? cfg.rowFields : [cfg.rowField || xField]).filter(Boolean);
+    const colFields: string[] = (cfg.colFields && cfg.colFields.length ? cfg.colFields : (cfg.colField ? [cfg.colField] : [])).filter(Boolean);
+    const valField: string = cfg.valueField;
+    const valFn: string = cfg.valueFn || 'sum';
+    if (!rowFields.length || !valField) return null;
+
+    const sep = ' / ';
+    const num = (v: any) => { const n = Number(String(v ?? '').replace(/[%$€£,\s]/g, '')); return isFinite(n) ? n : null; };
+    const agg = (vals: any[]) => {
+      const ns = vals.map(num).filter((n): n is number => n !== null);
+      switch (valFn) {
+        case 'count': return vals.filter((v) => v !== '' && v != null).length;
+        case 'count_distinct': return new Set(vals.filter((v) => v !== '' && v != null).map(String)).size;
+        case 'avg': return ns.length ? ns.reduce((a, b) => a + b, 0) / ns.length : 0;
+        case 'min': return ns.length ? Math.min(...ns) : 0;
+        case 'max': return ns.length ? Math.max(...ns) : 0;
+        default: return ns.reduce((a, b) => a + b, 0);
+      }
+    };
+
+    const colKeySet = new Set<string>();
+    const byRow = new Map<string, { vals: string[]; cells: Map<string, any[]> }>();
     for (const r of rows) {
-      const rk = String(r[rowField] ?? '');
-      if (!byRow.has(rk)) byRow.set(rk, { [rowField]: rk });
-      const obj = byRow.get(rk);
-      const ck = String(r[colField] ?? '');
-      const num = Number(String(r[valField] ?? '').replace(/[%$€£,\s]/g, ''));
-      obj[ck] = (obj[ck] || 0) + (isFinite(num) ? num : 0);
+      const rk = rowFields.map((f) => String(r[f] ?? '')).join(sep);
+      if (!byRow.has(rk)) byRow.set(rk, { vals: rowFields.map((f) => String(r[f] ?? '')), cells: new Map() });
+      const ck = colFields.length ? colFields.map((f) => String(r[f] ?? '')).join(sep) : valField;
+      colKeySet.add(ck);
+      const cells = byRow.get(rk)!.cells;
+      if (!cells.has(ck)) cells.set(ck, []);
+      cells.get(ck)!.push(r[valField]);
     }
-    return { rowField, colKeys, data: Array.from(byRow.values()) };
+    const colKeys = Array.from(colKeySet).sort();
+    const data = Array.from(byRow.values()).map((rw) => ({
+      vals: rw.vals,
+      cells: colKeys.map((ck) => (rw.cells.has(ck) ? agg(rw.cells.get(ck)!) : null)),
+    }));
+    return { rowFields, colKeys, data };
   }, [widget.type, rows, cfg, xField]);
 
   if ((widget.type === 'pivot' || widget.type === 'heatmap') && pivot) {
-    const all = pivot.data.flatMap((d) => pivot.colKeys.map((k) => Number(d[k]) || 0));
-    const max = Math.max(1, ...all);
+    const flat = pivot.data.flatMap((d) => d.cells.map((v) => Number(v) || 0));
+    const max = Math.max(1, ...flat);
     return (
       <div className="h-full overflow-auto">
         <table className="w-full text-sm border-collapse">
           <thead className="sticky top-0 bg-gray-50">
             <tr>
-              <th className="text-left px-3 py-1.5 font-semibold text-gray-600 border-b">{pivot.rowField}</th>
+              {pivot.rowFields.map((f) => <th key={f} className="text-left px-3 py-1.5 font-semibold text-gray-600 border-b whitespace-nowrap">{f}</th>)}
               {pivot.colKeys.map((k) => <th key={k} className="text-right px-3 py-1.5 font-semibold text-gray-600 border-b whitespace-nowrap">{k}</th>)}
             </tr>
           </thead>
           <tbody>
             {pivot.data.map((d, i) => (
               <tr key={i}>
-                <td className="px-3 py-1.5 border-b border-gray-100 font-medium text-gray-700">{d[pivot.rowField]}</td>
-                {pivot.colKeys.map((k) => {
-                  const val = Number(d[k]) || 0;
-                  const intensity = widget.type === 'heatmap' ? val / max : 0;
+                {d.vals.map((v, j) => <td key={j} className="px-3 py-1.5 border-b border-gray-100 font-medium text-gray-700 whitespace-nowrap">{v}</td>)}
+                {d.cells.map((val, k) => {
+                  const n = Number(val) || 0;
+                  const intensity = widget.type === 'heatmap' ? n / max : 0;
                   return (
                     <td key={k} className="px-3 py-1.5 border-b border-gray-100 text-right text-gray-700"
                       style={widget.type === 'heatmap' ? { backgroundColor: `rgba(37,99,235,${intensity.toFixed(2)})`, color: intensity > 0.5 ? '#fff' : undefined } : undefined}>
-                      {val ? formatNumber(val) : ''}
+                      {val == null ? '' : formatNumber(val)}
                     </td>
                   );
                 })}

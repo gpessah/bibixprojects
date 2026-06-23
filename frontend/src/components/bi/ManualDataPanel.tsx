@@ -27,7 +27,9 @@ export default function ManualDataPanel() {
             <Table2 size={15} /> <span className="truncate">{d.name}</span>
           </button>
         ))}
-        {!manualDatasets.length && <p className="text-xs text-gray-400 px-1">Create a dataset to enter numbers by hand (budgets, targets, assumptions) that feed your calculations.</p>}
+        <p className="text-xs text-gray-400 px-1 mt-2 leading-relaxed">
+          These datasets are <strong>fully editable</strong> — click one to add rows/columns and type values (budgets, targets, assumptions) that feed your calculations. <strong>Files you upload</strong> (CSV/Excel) also appear here and can be edited. Google-synced sheets stay read-only (they refresh from the source).
+        </p>
       </div>
       <div className="flex-1 overflow-hidden">
         {selected

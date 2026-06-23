@@ -11,6 +11,28 @@ interface Props { widget: BiWidget; onClose: () => void; onSaved: (w: BiWidget) 
 const lbl = 'block text-xs font-medium text-gray-500 mb-1';
 const inp = 'w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm';
 
+// Chip-based multi-field selector (for pivot rows/columns).
+function MultiField({ label, selected, columns, onChange }: { label: string; selected: string[]; columns: { name: string }[]; onChange: (v: string[]) => void }) {
+  const avail = columns.filter((c) => !selected.includes(c.name));
+  return (
+    <div>
+      <label className={lbl}>{label}</label>
+      <div className="flex flex-wrap gap-1 mb-1">
+        {selected.map((f) => (
+          <span key={f} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
+            {f}<button onClick={() => onChange(selected.filter((x) => x !== f))} className="hover:text-red-500"><Trash2 size={11} /></button>
+          </span>
+        ))}
+        {!selected.length && <span className="text-xs text-gray-400">none</span>}
+      </div>
+      <select className={inp} value="" onChange={(e) => { if (e.target.value) onChange([...selected, e.target.value]); }}>
+        <option value="">+ add field…</option>
+        {avail.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+      </select>
+    </div>
+  );
+}
+
 export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
   const { datasources, manualDatasets, combined, metrics } = useBiStore();
   const [type, setType] = useState(widget.type);
@@ -180,10 +202,23 @@ export default function WidgetEditor({ widget, onClose, onSaved }: Props) {
 
         {/* Pivot / heatmap */}
         {isPivot && (
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className={lbl}>Rows</label>{colSelect(cfg.rowField, (v) => setC({ rowField: v }), columns)}</div>
-            <div><label className={lbl}>Columns</label>{colSelect(cfg.colField, (v) => setC({ colField: v }), columns)}</div>
-            <div><label className={lbl}>Value (summed)</label>{colSelect(cfg.valueField, (v) => setC({ valueField: v }), columns)}</div>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <MultiField label="Row fields" selected={cfg.rowFields || (cfg.rowField ? [cfg.rowField] : [])} columns={columns} onChange={(v) => setC({ rowFields: v, rowField: undefined })} />
+              <MultiField label="Column fields" selected={cfg.colFields || (cfg.colField ? [cfg.colField] : [])} columns={columns} onChange={(v) => setC({ colFields: v, colField: undefined })} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={lbl}>Value field</label>{colSelect(cfg.valueField, (v) => setC({ valueField: v }), columns)}</div>
+              <div><label className={lbl}>Value aggregation</label>
+                <select className={inp} value={cfg.valueFn || 'sum'} onChange={(e) => setC({ valueFn: e.target.value })}>
+                  {AGG_FUNCTIONS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              Each cell shows the <strong>{AGG_FUNCTIONS.find((f) => f.value === (cfg.valueFn || 'sum'))?.label}</strong> of <strong>{cfg.valueField || '(value field)'}</strong> for that row×column combination.
+              Add multiple row/column fields to break it down further (e.g. rows = Region + Salesperson, columns = Year).
+            </p>
           </div>
         )}
 
