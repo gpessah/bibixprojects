@@ -89,33 +89,25 @@ try {
   rawDb.exec('PRAGMA journal_mode = WAL');
   rawDb.exec('PRAGMA synchronous = NORMAL');
   rawDb.exec('PRAGMA wal_autocheckpoint = 1000');
-  console.log('[DB] WAL mode enabled (journal_mode=WAL, synchronous=NORMAL)');
+  // busy_timeout makes concurrent writers wait up to 5s for a lock
+  // instead of failing immediately. Critical for Passenger multi-worker
+  // setups where 2+ processes may try to write the same moment.
+  rawDb.exec('PRAGMA busy_timeout = 5000');
+  console.log('[DB] WAL mode enabled (journal_mode=WAL, synchronous=NORMAL, busy_timeout=5000ms)');
 } catch (e) {
   console.warn('[DB] Failed to enable WAL mode (continuing in default mode):', e.message);
 }
 
-// Graceful shutdown — when the process receives SIGTERM/SIGINT (graceful
-// kill, Passenger respawn, Ctrl+C), CLOSE the SQLite database properly
-// before the process exits. Without this trap, an in-flight write can
-// leave torn pages in the main DB file, which then fails integrity_check
-// on next startup and corrupts the whole file.
+// NOTE: No SIGTERM/SIGINT handler.
+// We tried that earlier and it caused "database table is locked" errors —
+// when one worker received SIGTERM and tried to close() the DB, another
+// worker's in-flight write held the lock and our close attempt corrupted
+// the journal.
 //
-// node-sqlite3-wasm's Database.close() flushes WAL + releases locks.
-// We give it a short window (2s) then force-exit so Passenger doesn't
-// wait forever if close hangs.
-function shutdown(signal) {
-  console.log(`[DB] Received ${signal} — flushing SQLite and exiting cleanly`);
-  try {
-    rawDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    rawDb.close();
-    console.log('[DB] SQLite closed cleanly');
-  } catch (e) {
-    console.warn('[DB] Error during shutdown:', e.message);
-  }
-  setTimeout(() => process.exit(0), 200);
-}
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+// Instead, we rely on WAL's natural crash recovery: if a process is killed
+// mid-write, the WAL file holds the uncommitted transaction. On next
+// startup, SQLite replays the WAL automatically, leaving the main DB file
+// intact. This is exactly what WAL was designed for. No cleanup needed.
 
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
 rawDb.exec(schema);
