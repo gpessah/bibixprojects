@@ -237,6 +237,13 @@ try {
 ['my_profile TEXT', 'full_name TEXT', 'post_owner TEXT', 'action_date DATETIME'].forEach(col => {
   try { db.exec(`ALTER TABLE instagram_actions ADD COLUMN ${col}`); } catch (_) {}
 });
+// Manual sessions need the requested count and primary post URL so the UI
+// can show "X / Y actions performed" and a direct link to the post. The
+// extension already sends `requested` and `postUrl` in the START_CAMPAIGN
+// payload; we just weren't storing them.
+['total_requested INTEGER', 'post_url TEXT'].forEach(col => {
+  try { db.exec(`ALTER TABLE instagram_campaigns ADD COLUMN ${col}`); } catch (_) {}
+});
 // Per-user list of detected Instagram accounts (scanned by the extension from
 // IG's "Switch accounts" modal). Stored as a JSON array on the users row.
 try { db.exec('ALTER TABLE users ADD COLUMN instagram_accounts TEXT'); } catch (_) {}
@@ -415,16 +422,25 @@ router.get("/actions", authenticateFlexible, (req, res) => {
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 router.post("/campaigns", authenticateFlexible, (req, res) => {
-  const { id: providedId, type, notes, parent_queue_id } = req.body;
+  const b = req.body || {};
+  const { id: providedId, type, notes, parent_queue_id } = b;
   if (!type) return res.status(400).json({ error: 'type required' });
   // Same idempotency as /actions — accept client-provided id so dual-write
   // to prod+staging produces matching rows on both backends.
   // parent_queue_id tags a campaign as a sub-session of an action-queue
   // batch item, so the unified activity feed can dedupe (the parent
   // action-campaign row already represents this work).
+  //
+  // total_requested + post_url come from the extension's START_CAMPAIGN —
+  // they let the Manual sessions UI render "X / Y actions" + a direct link.
   const id = providedId || uuidv4();
-  db.prepare(`INSERT OR IGNORE INTO instagram_campaigns (id,user_id,type,notes,parent_queue_id) VALUES (?,?,?,?,?)`)
-    .run(id, req.user.id, type, notes||null, parent_queue_id || null);
+  const requested = Number.isFinite(b.requested) ? b.requested : null;
+  const postUrl = b.postUrl || b.post_url || null;
+  db.prepare(`
+    INSERT OR IGNORE INTO instagram_campaigns
+      (id, user_id, type, notes, parent_queue_id, total_requested, post_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, req.user.id, type, notes || null, parent_queue_id || null, requested, postUrl);
   res.json(db.prepare('SELECT * FROM instagram_campaigns WHERE id = ?').get(id));
 });
 

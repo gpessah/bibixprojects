@@ -127,6 +127,8 @@ interface Campaign {
   id: string; type: string; status: string; actions_count: number;
   new_followers: number; started_at: string; ended_at: string | null; notes: string | null;
   post_urls?: string[]; my_profile?: string | null;
+  total_requested?: number | null;  // From extension's START_CAMPAIGN — used to show X/Y
+  post_url?: string | null;           // Primary post URL stored directly on the campaign row
   followers_back?: number;             // attribution-based: distinct users we engaged
                                        // who later followed us. Use this for display.
   engagement_back?: number;            // received_* events from users we engaged
@@ -4036,7 +4038,13 @@ export default function InstagramPage() {
                       const m = u.match(/\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
                       return m ? m[1] : u;
                     };
+                    // Prefer the column we now store on the campaign row directly
+                    // (post_url, set by the extension's START_CAMPAIGN). Fall
+                    // back to the enriched post_urls array for legacy rows
+                    // created before the migration.
                     const posts = c.post_urls || [];
+                    const primaryPost = c.post_url || posts[0] || null;
+                    const totalReq = c.total_requested;
                     return (
                       <div key={c.id} className="border border-gray-200 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
@@ -4049,20 +4057,28 @@ export default function InstagramPage() {
                             {c.my_profile && (
                               <span className="text-xs text-gray-600">👤 @{c.my_profile}</span>
                             )}
-                            {posts.length === 1 && (
-                              <a href={posts[0]} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline font-mono">
-                                📍 {shortcode(posts[0])}
+                            {primaryPost && posts.length <= 1 && (
+                              <a href={primaryPost} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline font-mono">
+                                📍 {shortcode(primaryPost)}
                               </a>
                             )}
                             {posts.length > 1 && (
-                              <span className="text-xs text-gray-600">📍 {posts.length} posts</span>
+                              <span className="text-xs text-gray-600" title={posts.join('\n')}>📍 {posts.length} posts</span>
                             )}
                           </div>
                           <span className="text-xs text-gray-400">{fmt(c.started_at)}</span>
                         </div>
 
                         <div className="flex flex-wrap gap-4 text-xs text-gray-600 pl-1">
-                          <span><b className="text-gray-900">{c.actions_count}</b> performed</span>
+                          {/* X performed / Y requested — when extension passed requested.
+                              Legacy rows (pre-migration) only show "X performed". */}
+                          <span>
+                            <b className="text-gray-900">{c.actions_count}</b>
+                            {Number.isFinite(totalReq) && totalReq != null && totalReq > 0 && (
+                              <span className="text-gray-400"> / {totalReq}</span>
+                            )}
+                            <span className="ml-1">performed</span>
+                          </span>
                           <span className="text-green-600" title="Distinct users from this session who later followed @${c.my_profile} back (attribution-based, not snapshot-delta)">
                             💚 +{c.followers_back ?? 0} followers back
                           </span>
