@@ -28,6 +28,7 @@ const extensionCors = cors({
 app.use('/api/auth',      extensionCors);
 app.use('/api/instagram', extensionCors);
 app.use('/api/linkedin',  extensionCors);
+app.use('/api/tiktok',    extensionCors);
 app.use('/api/contacts',  extensionCors);
 
 app.use(express.json({ limit: '20mb' }));
@@ -61,6 +62,7 @@ app.use('/api/invoices',    require('./routes/invoices'));
 const instagramRouter = require('./routes/instagram');
 app.use('/api/instagram',      instagramRouter);
 app.use('/api/linkedin',       require('./routes/linkedin'));
+app.use('/api/tiktok',         require('./routes/tiktok'));
 app.use('/api/contacts',       require('./routes/contacts'));
 app.use('/api/ai',             require('./routes/ai'));
 
