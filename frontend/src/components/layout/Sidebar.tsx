@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Linkedin, Database, Pencil, Check, X } from 'lucide-react';
+import { Plus, ChevronDown, ChevronRight, LayoutGrid, Bell, Search, Settings, LogOut, Home, Trash2, Users, Shield, Calendar, Bot, CalendarDays, ContactRound, FileText, Megaphone, Instagram, Linkedin, Music2, Database, Pencil, Check, X } from 'lucide-react';
 import { useWorkspaceStore } from '../../store/workspaceStore';
 import { useAuthStore } from '../../store/authStore';
 import Avatar from '../ui/Avatar';
@@ -113,6 +113,9 @@ export default function Sidebar() {
                     </Link>
                     <Link to="/marketing/linkedin" className="flex items-center gap-3 px-4 py-2 text-white/50 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
                       <Linkedin size={13} /> LinkedIn
+                    </Link>
+                    <Link to="/marketing/tiktok" className="flex items-center gap-3 px-4 py-2 text-white/50 hover:text-white hover:bg-monday-sidebar-hover rounded-lg mx-2 text-sm">
+                      <Music2 size={13} /> TikTok
                     </Link>
                   </div>
                 )}
