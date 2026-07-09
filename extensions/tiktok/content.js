@@ -84,26 +84,34 @@ function humanClick(el) {
   }
 }
 
-// Read the current "liked" state of a like button. Uses multiple heuristics
-// because TikTok changes markup often:
-//   • aria-pressed="true"
-//   • class contains "liked" / "active"
-//   • the inner SVG has a fill color close to TikTok's red (#fe2c55 family)
+// Read the current "liked" state of a like button.
+//
+// v1.4: strict word-boundary matching. v1.3 matched "active" as a substring,
+// which caused false positives on unrelated class names like "activated" or
+// "active-state" — the state check returned true even before the click, so
+// every attempt looked successful even when nothing happened.
+//
+// Signals for "liked", in order of reliability:
+//   1. aria-pressed="true" on the button
+//   2. SVG heart's fill is TikTok red (#fe2c55 family) — the strongest
+//      DOM signal, since TikTok always changes fill on toggle
+//   3. Class list contains a whole token "liked" — falls back for markup
+//      we haven't seen. NO plain "active" match — too broad.
 function isLikeButtonActive(btn) {
   if (!btn) return false;
   if (btn.getAttribute('aria-pressed') === 'true') return true;
-  const cls = (btn.className || '').toString().toLowerCase();
-  if (/(^|\s)liked(\s|$)|active/.test(cls)) return true;
+  // SVG fill check — the reliable signal.
   const svg = btn.querySelector('svg');
   if (svg) {
-    const fill = (svg.getAttribute('fill') || svg.style.fill || '').toLowerCase();
-    if (/^#?(fe2c55|ff0050|ff004[0-9a-f]|e91e63)/.test(fill.replace('#', ''))) return true;
+    const readFill = (el) => (el && (el.getAttribute('fill') || (el.style && el.style.fill) || '')).toString().toLowerCase().replace('#', '').trim();
+    const isRed = (f) => /^(fe2c55|ff0050|ff004[0-9a-f]|e91e63)/.test(f);
+    if (isRed(readFill(svg))) return true;
     const path = svg.querySelector('path[fill]');
-    if (path) {
-      const pf = (path.getAttribute('fill') || '').toLowerCase().replace('#', '');
-      if (/^(fe2c55|ff0050|ff004[0-9a-f]|e91e63)/.test(pf)) return true;
-    }
+    if (path && isRed(readFill(path))) return true;
   }
+  // Whole-token class match — reject substring false positives.
+  const cls = ' ' + ((btn.className || '').toString().toLowerCase()) + ' ';
+  if (/[\s\-_](liked)[\s\-_]/.test(cls)) return true;
   return false;
 }
 
@@ -243,6 +251,11 @@ function pressKey(key, keyCode) {
 async function handleLike(count) {
   STOP = false;
   progress(`Liking up to ${count} videos…`);
+  progress(`  · URL: ${location.pathname}`);
+  if (!/\/foryou|\/explore|\/following|\/@[^\/]+$/.test(location.pathname)) {
+    progress(`  ⚠ Not on a feed URL — advance-video probably won't work.`);
+    progress(`  ⚠ Try https://www.tiktok.com/foryou for best results.`);
+  }
 
   let liked = 0;
   let skipped = 0;
@@ -284,53 +297,57 @@ async function handleLike(count) {
       continue;
     }
 
-    // First try: press "L" — TikTok's built-in shortcut for like. Untrusted
-    // key events sometimes get through where untrusted clicks don't.
+    // Capture the pre-action state so we can require a real transition
+    // (was-false → is-true) rather than just "is-true now" — otherwise a
+    // false positive on state check makes us record fake likes.
+    const wasActive = isLikeButtonActive(btn);
+    if (wasActive) {
+      progress(`↷ Already liked (per state check) — skipping.`);
+      alreadyLiked++;
+      await advanceToNextVideo();
+      continue;
+    }
+
+    // Helper: wait up to ~1.5s for the state to flip to true.
+    const waitForFlip = async () => {
+      for (let j = 0; j < 6; j++) {
+        await sleep(250);
+        const btnNow = findLikeButton();
+        if (btnNow && isLikeButtonActive(btnNow)) return true;
+      }
+      return false;
+    };
+
+    // Attempt 1: press "L".
     btn.scrollIntoView({ block: 'center' });
     await sleep(200);
     progress(`  · pressing L…`);
     pressKey('l', 76);
+    let confirmed = await waitForFlip();
 
-    // Verify the like stuck within ~1.5s.
-    let confirmed = false;
-    for (let j = 0; j < 6; j++) {
-      await sleep(250);
-      const btnNow = findLikeButton();
-      if (btnNow && isLikeButtonActive(btnNow)) { confirmed = true; break; }
-    }
-
-    // Second try: full pointer/click sequence on the button element.
+    // Attempt 2: full pointer click on the button.
     if (!confirmed) {
-      progress(`  · L didn't work, trying button click…`);
+      progress(`  · L didn't flip state — trying button click…`);
       humanClick(btn);
-      for (let j = 0; j < 6; j++) {
-        await sleep(250);
-        const btnNow = findLikeButton();
-        if (btnNow && isLikeButtonActive(btnNow)) { confirmed = true; break; }
-      }
+      confirmed = await waitForFlip();
     }
 
-    // Third try: double-tap the video (TikTok's mobile like gesture) —
-    // implemented as two rapid touchend events on the video element.
+    // Attempt 3: double-tap the video element.
     if (!confirmed) {
       const vid = document.querySelector('video');
       if (vid) {
         progress(`  · trying double-tap on video…`);
         const rect = vid.getBoundingClientRect();
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
-        const touchOpts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy };
+        const touchOpts = { bubbles: true, cancelable: true,
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2 };
         for (let k = 0; k < 2; k++) {
           vid.dispatchEvent(new MouseEvent('mousedown', touchOpts));
           vid.dispatchEvent(new MouseEvent('mouseup', touchOpts));
           vid.dispatchEvent(new MouseEvent('click', touchOpts));
           await sleep(120);
         }
-        for (let j = 0; j < 6; j++) {
-          await sleep(250);
-          const btnNow = findLikeButton();
-          if (btnNow && isLikeButtonActive(btnNow)) { confirmed = true; break; }
-        }
+        confirmed = await waitForFlip();
       }
     }
 
