@@ -144,7 +144,13 @@ function getCurrentVideoUrl() {
 }
 
 function getCurrentVideoAuthor() {
-  // The @username link on the video sidebar.
+  // On a video page (/@user/video/ID) the URL is authoritative — parse it
+  // first. This avoids picking up a sidebar recommendation's author link
+  // (which is the first a[href^="/@"] match on that page layout).
+  const urlMatch = window.location.pathname.match(/^\/@([\w.]+)\/video\//);
+  if (urlMatch) return urlMatch[1];
+  // On /foryou (and similar feeds) the URL doesn't include the author, so
+  // fall back to the first @-link visible.
   const link = document.querySelector('a[href^="/@"]');
   if (!link) return null;
   const m = link.href.match(/\/@([\w.]+)/);
