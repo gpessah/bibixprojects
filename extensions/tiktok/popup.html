@@ -100,10 +100,13 @@
     <button class="secondary" id="saveToken" style="width: auto;">Save token</button>
   </div>
 
-  <label>Count</label>
+  <label>Count of comments to engage on the current video</label>
   <input type="number" id="count" value="10" min="1" max="100" />
+  <p style="font-size: 11px; color: #888; margin: 6px 0 0;">
+    Open a TikTok video first (any /@user/video/id URL). This extension acts on that video's comments.
+  </p>
 
-  <button id="btnLike">❤️ Like N videos</button>
+  <button id="btnLike">❤️ Like N comments</button>
 
   <label>Reply text (one per line, random pick — ignored if AI is on)</label>
   <textarea id="replies" rows="3" placeholder="🔥&#10;Love this&#10;Amazing"></textarea>
@@ -111,7 +114,7 @@
     <input type="checkbox" id="useAI" style="width: auto; margin: 0;" />
     <span style="text-transform: none; letter-spacing: 0; color: #ddd; font-size: 12px;">🤖 Use AI (config in Monday → Settings → AI providers)</span>
   </label>
-  <button id="btnReply">💬 Reply N videos</button>
+  <button id="btnReply">💬 Reply to N comments</button>
 
   <button class="secondary" id="btnStop" style="margin-top: 6px;">⛔ Stop</button>
 
