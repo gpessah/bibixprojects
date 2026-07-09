@@ -210,21 +210,35 @@ async function handleLike(count) {
 
     const item = targets[0];
     const author = findCommentAuthor(item);
-    const text = findCommentText(item);
     seenAuthors.add(author);
 
-    // Try pressing the heart.
     const btn = findCommentLikeBtn(item);
     if (!btn) { progress(`  · No like button on comment by @${author} — skip.`); continue; }
     btn.scrollIntoView({ block: 'center' });
-    await sleep(200);
+    await sleep(150);
     humanClick(btn);
 
-    // Confirm the state flipped.
-    let confirmed = false;
-    for (let j = 0; j < 6; j++) {
-      await sleep(250);
-      if (isCommentLiked(item)) { confirmed = true; break; }
+    // Verification note: TikTok re-renders comment items after a like,
+    // which invalidates the `item` reference. Rather than trying to
+    // chase the re-render (fragile), we do a brief "did state change on
+    // the CURRENT element for this author?" check by finding the comment
+    // item afresh by author + looking at its heart. If we can't find it
+    // (it scrolled off / got recycled), we optimistically count success
+    // since the click didn't throw.
+    await sleep(400);
+    let confirmed = true; // optimistic default
+    const freshItems = findCommentItems();
+    const stillUnliked = freshItems.find(it => findCommentAuthor(it) === author && !isCommentLiked(it));
+    if (stillUnliked) {
+      // We can still see the un-liked state after 400ms — the click likely
+      // didn't take. Try once more.
+      const btn2 = findCommentLikeBtn(stillUnliked);
+      if (btn2) {
+        humanClick(btn2);
+        await sleep(400);
+        const check = findCommentItems().find(it => findCommentAuthor(it) === author && !isCommentLiked(it));
+        confirmed = !check; // if we can't find the un-liked comment now, it flipped
+      }
     }
 
     if (confirmed) {
@@ -239,7 +253,8 @@ async function handleLike(count) {
     } else {
       progress(`⚠ Heart didn't flip for @${author} — skipping.`);
     }
-    await sleep(800 + rand(400));
+    // Shorter pacing than v2.0.0 — each like was ~2s before, now ~1s.
+    await sleep(500 + rand(300));
   }
 
   done(`liked=${liked}`);
