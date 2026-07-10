@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bibix TikTok Extension",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Like + reply to comments on a TikTok video, synced to Bibix. Same pattern as the IG extension: open a video → run N comment likes/replies.",
   "action": {
     "default_popup": "popup.html",

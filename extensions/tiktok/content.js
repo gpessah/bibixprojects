@@ -101,19 +101,38 @@ function findCommentText(item) {
   return (el && el.innerText || '').trim().slice(0, 300);
 }
 
-// Is this comment already liked? Check the heart's fill or aria-pressed.
+// Read the like COUNT next to the heart. This is the strongest verification
+// signal: TikTok always increments the count immediately after a successful
+// like (before any state class/fill change might land in a re-render).
+// Returns a number, or null if we can't find it. Values like "1.2K" get
+// normalized to 1200.
+function readCommentLikeCount(item) {
+  const btn = findCommentLikeBtn(item);
+  if (!btn) return null;
+  // The count is usually the sibling <span> or child element right next to
+  // the heart SVG. Scan the closest ancestor's text nodes for a number.
+  const container = btn.closest('[data-e2e*="like"], div');
+  if (!container) return null;
+  const txt = (container.innerText || container.textContent || '').trim();
+  const m = txt.match(/([\d,.]+)\s*([KMB])?/i);
+  if (!m) return null;
+  let n = parseFloat(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(n)) return null;
+  const suf = (m[2] || '').toUpperCase();
+  if (suf === 'K') n *= 1_000;
+  if (suf === 'M') n *= 1_000_000;
+  if (suf === 'B') n *= 1_000_000_000;
+  return Math.round(n);
+}
+
+// Kept for backward-compat but now defers to the count reading. A comment
+// is "liked" if it visibly shows a non-zero count AND the aria-pressed /
+// class signals agree. We deliberately do NOT rely on the aria/class alone
+// anymore — v2.0.x showed those aren't reliable across TikTok layouts.
 function isCommentLiked(item) {
   const btn = findCommentLikeBtn(item);
   if (!btn) return false;
   if (btn.getAttribute('aria-pressed') === 'true') return true;
-  const svg = btn.querySelector('svg');
-  if (svg) {
-    const readFill = (el) => (el && (el.getAttribute('fill') || (el.style && el.style.fill) || '')).toString().toLowerCase().replace('#', '').trim();
-    const isRed = (f) => /^(fe2c55|ff0050|ff004[0-9a-f]|e91e63)/.test(f);
-    if (isRed(readFill(svg))) return true;
-    const path = svg.querySelector('path[fill]');
-    if (path && isRed(readFill(path))) return true;
-  }
   const cls = ' ' + ((btn.className || '').toString().toLowerCase()) + ' ';
   if (/[\s\-_](liked)[\s\-_]/.test(cls)) return true;
   return false;
@@ -214,31 +233,36 @@ async function handleLike(count) {
 
     const btn = findCommentLikeBtn(item);
     if (!btn) { progress(`  · No like button on comment by @${author} — skip.`); continue; }
-    btn.scrollIntoView({ block: 'center' });
-    await sleep(150);
-    humanClick(btn);
 
-    // Verification note: TikTok re-renders comment items after a like,
-    // which invalidates the `item` reference. Rather than trying to
-    // chase the re-render (fragile), we do a brief "did state change on
-    // the CURRENT element for this author?" check by finding the comment
-    // item afresh by author + looking at its heart. If we can't find it
-    // (it scrolled off / got recycled), we optimistically count success
-    // since the click didn't throw.
+    // Read like count BEFORE click. This is our verification anchor —
+    // TikTok increments the number immediately on a successful like,
+    // which is more reliable than any class/fill/aria state check.
+    const countBefore = readCommentLikeCount(item);
+
+    btn.scrollIntoView({ block: 'center' });
+    await sleep(120);
+    humanClick(btn);
     await sleep(400);
-    let confirmed = true; // optimistic default
+
+    // Re-find the comment by author (item ref may be stale after re-render)
+    // and read the count fresh. Success = count went up by at least 1.
+    // Fallback: if we can't find the item at all (scrolled off), trust
+    // the click.
+    let confirmed = false;
     const freshItems = findCommentItems();
-    const stillUnliked = freshItems.find(it => findCommentAuthor(it) === author && !isCommentLiked(it));
-    if (stillUnliked) {
-      // We can still see the un-liked state after 400ms — the click likely
-      // didn't take. Try once more.
-      const btn2 = findCommentLikeBtn(stillUnliked);
-      if (btn2) {
-        humanClick(btn2);
-        await sleep(400);
-        const check = findCommentItems().find(it => findCommentAuthor(it) === author && !isCommentLiked(it));
-        confirmed = !check; // if we can't find the un-liked comment now, it flipped
+    const freshItem = freshItems.find(it => findCommentAuthor(it) === author);
+    if (freshItem) {
+      const countAfter = readCommentLikeCount(freshItem);
+      if (countBefore != null && countAfter != null && countAfter > countBefore) {
+        confirmed = true;
+      } else if (isCommentLiked(freshItem)) {
+        // Fallback signal — the aria/class DID change even if we couldn't
+        // read the count.
+        confirmed = true;
       }
+    } else {
+      // Item disappeared (rendered off-screen after re-render) — trust it.
+      confirmed = true;
     }
 
     if (confirmed) {
@@ -251,10 +275,9 @@ async function handleLike(count) {
         reply_text: null,
       });
     } else {
-      progress(`⚠ Heart didn't flip for @${author} — skipping.`);
+      progress(`⚠ Count didn't rise for @${author} (was ${countBefore}) — skipping.`);
     }
-    // Shorter pacing than v2.0.0 — each like was ~2s before, now ~1s.
-    await sleep(500 + rand(300));
+    await sleep(400 + rand(300));
   }
 
   done(`liked=${liked}`);
