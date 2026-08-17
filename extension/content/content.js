@@ -1212,7 +1212,39 @@
     return result;
   }
 
+  function isBulkConnectPage() {
+    // Pages where LinkedIn shows lots of Connect buttons in a list format.
+    return /^\/(search|mynetwork)\//.test(location.pathname);
+  }
+
   function injectFindContactButton() {
+    // Manage the Bulk Connect floating button independently.
+    if (isBulkConnectPage()) {
+      if (!document.getElementById('bibix-floating-connect')) {
+        const connectBtn = el('button', {
+          id: 'bibix-floating-connect',
+          className: FIND_BTN_CLASS,
+          type: 'button',
+          title: 'Bulk-send connection requests to results on this page',
+          style: {
+            position: 'fixed',
+            top: '90px',
+            right: '24px',
+            zIndex: '2147483646',
+            padding: '12px 18px',
+            fontSize: '14px',
+            background: 'linear-gradient(135deg, #0a66c2, #0059b3)',
+            boxShadow: '0 2px 6px rgba(10, 102, 194, 0.35)',
+          },
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); openBulkConnectDialog(); },
+        }, [el('span', { className: 'bibix-spark' }, '🤝'), 'Bulk Connect']);
+        document.body.appendChild(connectBtn);
+      }
+    } else {
+      const conn = document.getElementById('bibix-floating-connect');
+      if (conn) conn.remove();
+    }
+
     if (!isProfilePage()) {
       // Navigating away — remove any floating buttons we injected.
       const find = document.getElementById('bibix-floating-find');
@@ -1455,6 +1487,203 @@
     });
   }
 
+  // ── Bulk Connect ──────────────────────────────────────────────────────────
+  function findConnectButtons() {
+    return Array.from(document.querySelectorAll('button')).filter((b) => {
+      if (b.disabled) return false;
+      const label = (b.getAttribute('aria-label') || '').toLowerCase();
+      const text = (b.innerText || '').trim().toLowerCase();
+      // Common LinkedIn patterns across locales:
+      //   aria-label="Invite Alexander Lubchenko to connect"
+      //   aria-label="Connect with Alexander"
+      //   text === "Connect"
+      if (/invite.*to connect/i.test(label)) return true;
+      if (/^connect(\s+with)?/i.test(label)) return true;
+      if (text === 'connect') return true;
+      return false;
+    }).filter((b) => b.offsetHeight > 0);
+  }
+
+  function extractPersonNearConnect(btn) {
+    let card = btn;
+    for (let i = 0; i < 12 && card && card !== document.body; i++) {
+      const link = card.querySelector('a[href*="/in/"]');
+      if (link) {
+        const name = (link.innerText || '').trim().split('\n')[0].trim()
+          .replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\s*(?:degree|connection)?.*$/i, '')
+          .trim();
+        const url = link.href.split('?')[0];
+        // Headline — walk text lines of the card, take the one after the name.
+        const lines = (card.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+        let headline = '';
+        const nameIdx = lines.findIndex((l) => l.startsWith(name));
+        if (nameIdx >= 0) {
+          for (let j = nameIdx + 1; j < Math.min(nameIdx + 5, lines.length); j++) {
+            const l = lines[j];
+            if (/(1st|2nd|3rd|degree|connection|mutual|follower)/i.test(l)) continue;
+            if (l.length < 5) continue;
+            headline = l;
+            break;
+          }
+        }
+        return { name, url, headline };
+      }
+      card = card.parentElement;
+    }
+    return null;
+  }
+
+  async function findButton(timeoutMs, predicate) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const btns = document.querySelectorAll('button');
+      for (const b of btns) {
+        try { if (predicate(b)) return b; } catch (_) {}
+      }
+      await wait(150);
+    }
+    return null;
+  }
+
+  function openBulkConnectDialog() {
+    closePopover();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '460px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#0a66c2,#0059b3);-webkit-background-clip:text;background-clip:text;color:transparent">
+        🤝 Bulk Connect
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        Sends connection requests to people on this page, with random 5–15s delays.
+        Saves each to your Candidates list automatically.
+      </div>
+      <div style="margin-bottom:10px;padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:11px;color:#9a3412">
+        ⚠️ LinkedIn caps connection requests at ~100/week (free) or ~200/week (Premium).
+        Keep sessions small.
+      </div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <input id="bc-count" type="number" min="1" max="20" value="5" style="width:70px;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        <span style="font-size:12px;color:#64748b">people (max 20)</span>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:#64748b;margin-bottom:14px">
+        <input id="bc-showall" type="checkbox" checked />
+        Click "Show all" first to load full people-results page
+      </label>
+      <div id="bc-status" style="font-size:12px;min-height:36px;margin-bottom:10px;color:#475569"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bc-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
+        <button id="bc-go" style="background:linear-gradient(135deg,#0a66c2,#0059b3);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Start connecting</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const status = pop.querySelector('#bc-status');
+    const setStatus = (s) => { if (status) status.textContent = s; };
+
+    pop.querySelector('#bc-close').addEventListener('click', () => { bulkAborted = true; closePopover(); });
+    pop.addEventListener('click', (e) => { if (e.target === pop) { bulkAborted = true; closePopover(); } });
+    pop.querySelector('#bc-go').addEventListener('click', async () => {
+      bulkAborted = false;
+      const n = Math.max(1, Math.min(20, Number(pop.querySelector('#bc-count').value) || 5));
+      const goShowAll = pop.querySelector('#bc-showall').checked;
+      await runBulkConnect(n, goShowAll, setStatus);
+    });
+  }
+
+  async function runBulkConnect(count, clickShowAll, setStatus) {
+    // Step 1 — if on a mixed /search/results/all page and user requested it,
+    // navigate to the People-specific results.
+    if (clickShowAll && /\/search\/results\/all\//.test(location.pathname)) {
+      const showAll = Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim();
+        return /^Show all(\s+results)?$/i.test(t) || /^See all/i.test(t);
+      });
+      if (showAll) {
+        setStatus('Opening full people results…');
+        showAll.click();
+        await wait(3000);
+      }
+    }
+
+    // Step 2 — scroll to load more results (LinkedIn lazy-loads on scroll).
+    let btns = findConnectButtons();
+    for (let i = 0; i < 4 && btns.length < count; i++) {
+      window.scrollTo(0, document.body.scrollHeight);
+      await wait(rand(1200, 2000));
+      btns = findConnectButtons();
+    }
+
+    if (btns.length === 0) {
+      setStatus('No Connect buttons found. Are you on a search-results / My Network page?');
+      return;
+    }
+
+    // Randomize order so we don't always start from the top of the page.
+    btns = shuffle(btns).slice(0, count);
+    setStatus(`Sending ${btns.length} connection requests…`);
+
+    let done = 0, errors = 0;
+    for (let i = 0; i < btns.length; i++) {
+      if (bulkAborted) { setStatus(`Stopped after ${done}/${btns.length}.`); return; }
+      const btn = btns[i];
+      const person = extractPersonNearConnect(btn);
+      const label = person ? person.name : `#${i + 1}`;
+      setStatus(`${i + 1}/${btns.length} — ${label}…`);
+
+      try {
+        btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+        await wait(rand(300, 700));
+        btn.click();
+        // If LinkedIn shows the "Add a note?" dialog, click Send/Send-without.
+        const sendBtn = await findButton(4000, (b) => {
+          if (b.disabled) return false;
+          const l = (b.getAttribute('aria-label') || '').toLowerCase();
+          const t = (b.innerText || '').trim().toLowerCase();
+          return /send.*(invitation|now|without)/i.test(l)
+            || /send without a note/i.test(t)
+            || t === 'send now'
+            || t === 'send';
+        });
+        if (sendBtn) {
+          await wait(rand(200, 500));
+          sendBtn.click();
+        }
+        // Persist to backend (fails silently if not logged in).
+        if (person && person.url) {
+          try {
+            await send('saveCandidate', {
+              fullName: person.name || 'Unknown',
+              firstName: (person.name || '').split(' ')[0] || '',
+              lastName: (person.name || '').split(' ').slice(1).join(' '),
+              headline: person.headline || '',
+              linkedinUrl: person.url,
+            });
+          } catch (_) { /* ignore save errors — connection still went out */ }
+        }
+        done++;
+      } catch (e) {
+        errors++;
+        console.warn('[Bibix Connect] error:', e.message);
+      }
+
+      // Random human-like delay
+      if (i < btns.length - 1) await wait(rand(5000, 15000));
+    }
+
+    setStatus(`Done. ${done} requests sent, ${errors} skipped. Saved to Candidates.`);
+  }
+
   function openFindContactDialog() {
     closePopover();
     const info = extractProfileInfo();
@@ -1574,7 +1803,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.4.0)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.0)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
