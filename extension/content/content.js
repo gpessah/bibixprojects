@@ -1668,6 +1668,7 @@
               lastName: (person.name || '').split(' ').slice(1).join(' '),
               headline: person.headline || '',
               linkedinUrl: person.url,
+              source: 'bulk_connect',
             });
           } catch (_) { /* ignore save errors — connection still went out */ }
         }

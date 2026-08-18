@@ -42,6 +42,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS linkedin_contacts (
 )`);
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_lc_user ON linkedin_contacts(user_id)`); } catch (_) {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_lc_url ON linkedin_contacts(user_id, linkedin_url)`); } catch (_) {}
+// Migration: source column ("manual", "bulk_connect", "find_email").
+try { db.exec(`ALTER TABLE linkedin_contacts ADD COLUMN source TEXT DEFAULT 'manual'`); } catch (_) {}
 
 // ── Find email via Hunter.io ──────────────────────────────────────────────────
 router.post('/find-email', authenticate, async (req, res) => {
@@ -116,7 +118,7 @@ router.post('/find-email', authenticate, async (req, res) => {
 
 // ── Save a candidate (no email lookup needed) ─────────────────────────────────
 router.post('/save-candidate', authenticate, (req, res) => {
-  const { firstName, lastName, fullName, company, position, headline, linkedinUrl, email, phone } = req.body || {};
+  const { firstName, lastName, fullName, company, position, headline, linkedinUrl, email, phone, source } = req.body || {};
   const name = (fullName || `${firstName || ''} ${lastName || ''}`).trim();
   if (!name) return res.status(400).json({ error: 'Full name required' });
   if (!linkedinUrl) return res.status(400).json({ error: 'LinkedIn URL required' });
@@ -144,21 +146,50 @@ router.post('/save-candidate', authenticate, (req, res) => {
   }
 
   const info = db.prepare(`INSERT INTO linkedin_contacts
-    (user_id, linkedin_url, first_name, last_name, full_name, company, position, headline, email, phone)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    (user_id, linkedin_url, first_name, last_name, full_name, company, position, headline, email, phone, source)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
     req.user.id, linkedinUrl,
     firstName || null, lastName || null, name,
     company || null, position || null, headline || null,
-    email || null, phone || null
+    email || null, phone || null, source || 'manual'
   );
   res.json({ ok: true, data: { id: info.lastInsertRowid, created: true } });
+});
+
+// ── Stats: counts by source, today / this week / all-time ────────────────────
+router.get('/stats', authenticate, (req, res) => {
+  const uid = req.user.id;
+  const totals = db.prepare(
+    `SELECT source, COUNT(*) AS n FROM linkedin_contacts WHERE user_id = ? GROUP BY source`
+  ).all(uid);
+  const today = db.prepare(
+    `SELECT source, COUNT(*) AS n FROM linkedin_contacts WHERE user_id = ? AND created_at >= date('now', 'start of day') GROUP BY source`
+  ).all(uid);
+  const week = db.prepare(
+    `SELECT source, COUNT(*) AS n FROM linkedin_contacts WHERE user_id = ? AND created_at >= datetime('now', '-7 days') GROUP BY source`
+  ).all(uid);
+  function bucket(rows) {
+    const out = { manual: 0, bulk_connect: 0, find_email: 0, total: 0 };
+    for (const r of rows) {
+      const key = r.source || 'manual';
+      if (out[key] !== undefined) out[key] += r.n;
+      out.total += r.n;
+    }
+    return out;
+  }
+  res.json({ ok: true, data: {
+    today: bucket(today),
+    week: bucket(week),
+    total: bucket(totals),
+  }});
 });
 
 // ── List saved contacts ───────────────────────────────────────────────────────
 router.get('/', authenticate, (req, res) => {
   const rows = db.prepare(
     `SELECT id, linkedin_url, first_name, last_name, full_name, headline, company,
-            company_domain, email, email_confidence, phone, position, saved_to_crm, crm_contact_id, created_at
+            company_domain, email, email_confidence, phone, position, source,
+            saved_to_crm, crm_contact_id, created_at
        FROM linkedin_contacts
       WHERE user_id = ?
       ORDER BY created_at DESC LIMIT 500`
