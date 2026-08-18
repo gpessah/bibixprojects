@@ -1601,6 +1601,24 @@
     });
   }
 
+  // Listener for messages from the extension popup.
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg && msg.type === 'bibix-start-bulk-connect') {
+        bulkAborted = false;
+        const count = Math.max(1, Math.min(20, Number(msg.count) || 5));
+        const push = (text, opts = {}) => {
+          try { chrome.runtime.sendMessage({ type: 'bibix-bulk-connect-progress', text, ...opts }); } catch (_) {}
+        };
+        runBulkConnect(count, true, (s) => push(s))
+          .then(() => push('Done.', { done: true }))
+          .catch((e) => push('Error: ' + (e && e.message), { error: true }));
+        sendResponse({ ok: true });
+        return true;
+      }
+    });
+  } catch (_) {}
+
   async function runBulkConnect(count, clickShowAll, setStatus) {
     // Step 1 — if on a mixed /search/results/all page and user requested it,
     // navigate to the People-specific results.
@@ -1804,7 +1822,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.0)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.1)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
