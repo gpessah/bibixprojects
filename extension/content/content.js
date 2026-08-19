@@ -1488,58 +1488,76 @@
   }
 
   // ── Bulk Connect ──────────────────────────────────────────────────────────
+  //
+  // LinkedIn's current DOM (mid-2026) renders the "Connect" action as an
+  // <a> element, not a <button>. Class names are fully obfuscated but the
+  // aria-label is always "Invite <Full Name> to connect". Query both tags.
   function findConnectButtons() {
     const out = [];
-    document.querySelectorAll('button').forEach((b) => {
-      if (b.disabled) return;
-      if (b.offsetHeight === 0) return;
-      const label = (b.getAttribute('aria-label') || '').trim();
-      const text  = (b.innerText || b.textContent || '').trim().replace(/\s+/g, ' ');
+    document.querySelectorAll('button, a').forEach((el) => {
+      if (el.disabled) return;
+      if (el.offsetHeight === 0) return;
+      const label = (el.getAttribute('aria-label') || '').trim();
+      const text  = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
       const combined = (label + ' | ' + text).toLowerCase();
 
-      // Positive: must include the word "connect" or "invite ... to connect".
-      const isConnect = /\binvite\b.+\bto connect\b/i.test(label)
-        || /\bconnect\b/i.test(text)
-        || /\bconnect\b/i.test(label);
+      // Positive: canonical "Invite X to connect" aria-label pattern,
+      // OR the visible text is exactly "Connect".
+      const isConnect =
+        /\binvite\b.+\bto connect\b/i.test(label)
+        || /^connect$/i.test(text)
+        || /^\+?\s*connect$/i.test(text);
       if (!isConnect) return;
 
-      // Negative — exclude other button types that also mention "connect"
-      // (e.g. "Pending, cancel invite", "Following", messaging shortcuts).
+      // Negative — pending / withdraw / follow / message / cancel / remove
+      // all use different aria-labels so a Pending anchor won't slip through
+      // the positive match; guard anyway.
       if (/\bpending\b|\bwithdraw\b|\bfollowing\b|\bmessage(?:d)?\b|\bremove\b|\bcancel\b/i.test(combined)) return;
       if (text.toLowerCase() === 'follow') return;
 
-      out.push(b);
+      out.push(el);
     });
     return out;
   }
 
   function extractPersonNearConnect(btn) {
+    // Primary — pull the name straight out of the aria-label:
+    // "Invite Constantinos Hadjiandreou to connect" → "Constantinos Hadjiandreou"
+    let name = '';
+    const label = btn.getAttribute && btn.getAttribute('aria-label');
+    if (label) {
+      const m = label.match(/^invite\s+(.+?)\s+to connect\b/i);
+      if (m) name = m[1].trim();
+    }
+    // Walk up looking for a search-result card that has a profile link.
     let card = btn;
-    for (let i = 0; i < 12 && card && card !== document.body; i++) {
+    let url = '';
+    let headline = '';
+    for (let i = 0; i < 15 && card && card !== document.body; i++) {
       const link = card.querySelector('a[href*="/in/"]');
       if (link) {
-        const name = (link.innerText || '').trim().split('\n')[0].trim()
-          .replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\s*(?:degree|connection)?.*$/i, '')
-          .trim();
-        const url = link.href.split('?')[0];
-        // Headline — walk text lines of the card, take the one after the name.
-        const lines = (card.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
-        let headline = '';
-        const nameIdx = lines.findIndex((l) => l.startsWith(name));
-        if (nameIdx >= 0) {
-          for (let j = nameIdx + 1; j < Math.min(nameIdx + 5, lines.length); j++) {
-            const l = lines[j];
-            if (/(1st|2nd|3rd|degree|connection|mutual|follower)/i.test(l)) continue;
-            if (l.length < 5) continue;
-            headline = l;
-            break;
-          }
+        url = link.href.split('?')[0];
+        if (!name) {
+          name = (link.innerText || '').trim().split('\n')[0].trim()
+            .replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\s*(?:degree|connection)?.*$/i, '')
+            .trim();
         }
-        return { name, url, headline };
+        const lines = (card.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+        const nameIdx = name ? lines.findIndex((l) => l.startsWith(name)) : -1;
+        const start = nameIdx >= 0 ? nameIdx + 1 : 0;
+        for (let j = start; j < Math.min(start + 5, lines.length); j++) {
+          const l = lines[j];
+          if (/(1st|2nd|3rd|degree|connection|mutual|follower)/i.test(l)) continue;
+          if (l.length < 5) continue;
+          headline = l;
+          break;
+        }
+        break;
       }
       card = card.parentElement;
     }
-    return null;
+    if (!name && !url) return null;
+    return { name: name || 'Unknown', url, headline };
   }
 
   async function findButton(timeoutMs, predicate) {
@@ -2003,7 +2021,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.4)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.5)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
