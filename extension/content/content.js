@@ -1494,23 +1494,21 @@
       if (b.disabled) return;
       if (b.offsetHeight === 0) return;
       const label = (b.getAttribute('aria-label') || '').trim();
-      const text  = (b.innerText || b.textContent || '').trim();
-      const lLow  = label.toLowerCase();
-      const tLow  = text.toLowerCase();
-      // Skip already-pending / withdraw / message / follow buttons.
-      if (/pending|withdraw|message|following|following back|following ?back/i.test(lLow + ' ' + tLow)) return;
-      // Skip "Follow" buttons (some non-connectable rows).
-      if (tLow === 'follow' || /^follow$/i.test(lLow)) return;
+      const text  = (b.innerText || b.textContent || '').trim().replace(/\s+/g, ' ');
+      const combined = (label + ' | ' + text).toLowerCase();
 
-      // English aria-labels:
-      if (/invite\b.+\bto connect/i.test(label)) { out.push(b); return; }
-      if (/^connect\b/i.test(label))              { out.push(b); return; }
-      // Multilingual aria-label patterns:
-      if (/^conectar|se connecter|verbinden|לצור קשר|connettiti|conectate/i.test(label)) { out.push(b); return; }
-      // Text patterns:
-      if (/^\+?\s*connect$/i.test(text))    { out.push(b); return; }
-      if (tLow === 'connect')               { out.push(b); return; }
-      // Some LinkedIn variants render as an icon-only button — use aria-label as the sole signal.
+      // Positive: must include the word "connect" or "invite ... to connect".
+      const isConnect = /\binvite\b.+\bto connect\b/i.test(label)
+        || /\bconnect\b/i.test(text)
+        || /\bconnect\b/i.test(label);
+      if (!isConnect) return;
+
+      // Negative — exclude other button types that also mention "connect"
+      // (e.g. "Pending, cancel invite", "Following", messaging shortcuts).
+      if (/\bpending\b|\bwithdraw\b|\bfollowing\b|\bmessage(?:d)?\b|\bremove\b|\bcancel\b/i.test(combined)) return;
+      if (text.toLowerCase() === 'follow') return;
+
+      out.push(b);
     });
     return out;
   }
@@ -1690,9 +1688,17 @@
         btns = findConnectButtons();
       }
       console.log(P, `page ${pageNum}: ${btns.length} Connect buttons visible`);
+      setStatus(`Page ${pageNum}: found ${btns.length} Connect buttons.`);
 
       if (btns.length === 0) {
-        setStatus(`Page ${pageNum}: no Connect buttons found — moving on.`);
+        // Detection failed on this page. Don't blindly paginate — that just
+        // navigates without ever clicking Connect and the user sees "the
+        // page keeps refreshing".
+        const msg = pageNum === 1
+          ? 'No Connect buttons found. Are you on a People search results page?'
+          : `Page ${pageNum} has no Connect buttons — stopping.`;
+        setStatus(msg);
+        return msg;
       } else {
         // Randomise + trim to remaining need.
         btns = shuffle(btns).slice(0, target - done);
@@ -1884,7 +1890,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.2)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.3)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
