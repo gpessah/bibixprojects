@@ -1657,7 +1657,120 @@
     });
   }
 
-  async function runBulkConnect(count, clickShowAll, setStatus) {
+  function highlightBriefly(el, color = '#dc2626') {
+    if (!el) return;
+    const origOutline = el.style.outline;
+    const origOffset  = el.style.outlineOffset;
+    const origBoxShadow = el.style.boxShadow;
+    el.style.outline = `3px solid ${color}`;
+    el.style.outlineOffset = '2px';
+    el.style.boxShadow = `0 0 20px ${color}`;
+    setTimeout(() => {
+      el.style.outline = origOutline;
+      el.style.outlineOffset = origOffset;
+      el.style.boxShadow = origBoxShadow;
+    }, 900);
+  }
+
+  async function runBulkConnect(count, _clickShowAll, setStatus) {
+    const P = '[Bibix Connect]';
+    // Simple: find all visible Connect buttons on this page, click each with
+    // a red highlight, handle the "Send" modal, wait 5–10s between clicks.
+    // No pagination, no navigation.
+
+    setStatus('Scanning for Connect buttons…');
+    let btns = findConnectButtons();
+    // Small scroll to trigger any lazy-loading of results.
+    if (btns.length === 0) {
+      window.scrollTo(0, 400);
+      await wait(600);
+      btns = findConnectButtons();
+    }
+    console.log(P, `page: ${btns.length} Connect buttons visible`);
+
+    if (btns.length === 0) {
+      const msg = 'No Connect buttons found. Open a "People" search results page (e.g. linkedin.com/search/results/people/?keywords=…) and reload the tab.';
+      setStatus(msg);
+      return msg;
+    }
+
+    const targets = btns.slice(0, count);
+    setStatus(`Found ${btns.length} Connect buttons. Will click ${targets.length}.`);
+    await wait(800);
+
+    let done = 0, errors = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (bulkAborted) {
+        const msg = `Stopped. Sent ${done}/${targets.length}.`;
+        setStatus(msg);
+        return msg;
+      }
+      const btn = targets[i];
+      const person = extractPersonNearConnect(btn);
+      const label = person ? person.name : `#${i + 1}`;
+
+      try {
+        // 1. Scroll button into view so the user actually sees it.
+        btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        await wait(rand(600, 900));
+        // 2. Flash a red outline so the user sees exactly which button we're clicking.
+        highlightBriefly(btn, '#dc2626');
+        setStatus(`${i + 1}/${targets.length} — clicking Connect on ${label}…`);
+        await wait(400);
+        // 3. Fire the click.
+        realisticClick(btn);
+        console.log(P, `clicked Connect for ${label}`);
+        // 4. If the "Add a note?" dialog appears, click Send.
+        const sendBtn = await findButton(4000, (b) => {
+          if (b.disabled) return false;
+          const l = (b.getAttribute('aria-label') || '').toLowerCase();
+          const t = (b.innerText || '').trim().toLowerCase();
+          return /send.*(invitation|now|without)/i.test(l)
+            || /send without a note/i.test(t)
+            || t === 'send now'
+            || t === 'send';
+        });
+        if (sendBtn) {
+          highlightBriefly(sendBtn, '#0a66c2');
+          setStatus(`${i + 1}/${targets.length} — sending invitation…`);
+          await wait(rand(400, 800));
+          realisticClick(sendBtn);
+          console.log(P, `sent invitation for ${label}`);
+        }
+        // 5. Save to backend.
+        if (person && person.url) {
+          try {
+            await send('saveCandidate', {
+              fullName: person.name || 'Unknown',
+              firstName: (person.name || '').split(' ')[0] || '',
+              lastName: (person.name || '').split(' ').slice(1).join(' '),
+              headline: person.headline || '',
+              linkedinUrl: person.url,
+              source: 'bulk_connect',
+            });
+          } catch (_) {}
+        }
+        done++;
+      } catch (e) {
+        errors++;
+        console.warn(P, 'error on', label, ':', e.message);
+      }
+
+      // 5–10s pause between clicks (humanlike).
+      if (i < targets.length - 1) {
+        const pause = rand(5000, 10000);
+        setStatus(`✓ Sent ${done}/${targets.length}. Waiting ${Math.round(pause/1000)}s…`);
+        await wait(pause);
+      }
+    }
+
+    const finalMsg = `Done. ${done} connection requests sent${errors ? `, ${errors} skipped` : ''}.`;
+    setStatus(finalMsg);
+    return finalMsg;
+  }
+
+  // Retained for interface compatibility with older callers.
+  async function _oldRunBulkConnect(count, clickShowAll, setStatus) {
     const P = '[Bibix Connect]';
     // Step 1 — if on a mixed /search/results/all page and user requested it,
     // navigate to the People-specific results.
@@ -1890,7 +2003,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.3)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.4)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
