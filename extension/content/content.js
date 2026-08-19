@@ -1563,9 +1563,13 @@
   async function findButton(timeoutMs, predicate) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const btns = document.querySelectorAll('button');
+      // Query button AND a — LinkedIn renders many action controls as <a>.
+      const btns = document.querySelectorAll('button, a, [role="button"]');
       for (const b of btns) {
-        try { if (predicate(b)) return b; } catch (_) {}
+        try {
+          if (b.offsetHeight === 0) continue;
+          if (predicate(b)) return b;
+        } catch (_) {}
       }
       await wait(150);
     }
@@ -1738,15 +1742,18 @@
         // 3. Fire the click.
         realisticClick(btn);
         console.log(P, `clicked Connect for ${label}`);
-        // 4. If the "Add a note?" dialog appears, click Send.
-        const sendBtn = await findButton(4000, (b) => {
+        // 4. If the "Add a note?" dialog appears, click Send without a note.
+        const sendBtn = await findButton(5000, (b) => {
           if (b.disabled) return false;
-          const l = (b.getAttribute('aria-label') || '').toLowerCase();
-          const t = (b.innerText || '').trim().toLowerCase();
-          return /send.*(invitation|now|without)/i.test(l)
-            || /send without a note/i.test(t)
-            || t === 'send now'
-            || t === 'send';
+          const l = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+          const t = (b.innerText || b.textContent || '').toLowerCase().trim();
+          // Skip the "Add a note" option — we always want to send without one.
+          if (t === 'add a note' || l === 'add a note') return false;
+          if (/^send without a note$/i.test(t)) return true;
+          if (/^send without a note$/i.test(l)) return true;
+          if (t === 'send now' || t === 'send') return true;
+          if (/send.*invitation/i.test(l)) return true;
+          return false;
         });
         if (sendBtn) {
           highlightBriefly(sendBtn, '#0a66c2');
@@ -2021,7 +2028,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.5)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.6)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;
