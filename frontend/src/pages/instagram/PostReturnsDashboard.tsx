@@ -128,7 +128,7 @@ export default function PostReturnsDashboard({ asUser, refreshTick, onRefresh }:
   const toggle = (postUrl: string) => {
     if (openPost === postUrl) { setOpenPost(null); return; }
     setOpenPost(postUrl);
-    if (users[postUrl]) return;
+    if (users[postUrl] && users[postUrl] !== 'error') return;   // re-opening after an error retries
     setUsers(u => ({ ...u, [postUrl]: 'loading' }));
     const p = baseParams();
     p.set('post_url', postUrl);
