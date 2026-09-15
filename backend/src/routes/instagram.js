@@ -158,6 +158,10 @@ try {
       ON instagram_actions(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_ig_actions_user_type_created
       ON instagram_actions(user_id, type, created_at);
+    -- /stats funnel + attribution match outbound→inbound rows by username and
+    -- walk created_at; without this the correlated subqueries scan per row.
+    CREATE INDEX IF NOT EXISTS idx_ig_actions_user_username_created
+      ON instagram_actions(user_id, username, created_at);
     CREATE TABLE IF NOT EXISTS instagram_automations (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -180,6 +184,14 @@ try {
       ON instagram_automations(enabled, next_run_at);
   `);
 } catch (e) { console.error('Instagram table init error (non-fatal):', e.message); }
+
+// Without planner statistics SQLite may ignore the username index for the
+// /stats attribution subquery and sort per row. Runs once per database.
+try {
+  let analyzed = false;
+  try { analyzed = !!db.prepare("SELECT 1 FROM sqlite_stat1 WHERE idx = 'idx_ig_actions_user_username_created'").get(); } catch { /* no stats table yet */ }
+  if (!analyzed) db.exec('ANALYZE instagram_actions');
+} catch (e) { console.error('Instagram ANALYZE skipped:', e.message); }
 
 // Migrate existing DBs — ignore errors if columns already exist
 ['my_profile TEXT', 'full_name TEXT', 'post_owner TEXT', 'action_date DATETIME'].forEach(col => {
@@ -404,24 +416,57 @@ const INBOUND_TYPE_ALIASES = {
 // "any-engagement-back" check.
 const ALL_INBOUND_TYPES = Object.values(INBOUND_TYPE_ALIASES).flat();
 
+// Short-lived cache for /stats: the dashboard re-requests it on every filter
+// change and React re-render, and one stats build is dozens of queries.
+// ?bust=<anything> (the Refresh button) skips the cache.
+const STATS_CACHE = new Map(); // key → { body, ts }
+const STATS_CACHE_TTL_MS = 10 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - STATS_CACHE_TTL_MS * 5;
+  for (const [k, v] of STATS_CACHE) if (v.ts < cutoff) STATS_CACHE.delete(k);
+}, STATS_CACHE_TTL_MS).unref?.();
+
+// 'YYYY-MM-DD HH:MM:SS' UTC — the format CURRENT_TIMESTAMP writes into
+// created_at, so a plain string comparison is exact and index-friendly.
+const sqlTs = (ms) => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+
 router.get("/stats", authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const days = parseInt(req.query.days, 10) || 30;
 
-  // ── Build a reusable WHERE clause + param list based on the query filters
-  // (profiles[], action_types[], batch_id, and a date range that can be
-  // either custom from/to or a relative `days` window).
-  const filtersBase = ['user_id = ?'];
-  const baseParams = [uid];
-
-  if (req.query.from && req.query.to) {
-    const from = String(req.query.from).slice(0, 10);
-    const to = String(req.query.to).slice(0, 10);
-    filtersBase.push(`date(created_at) BETWEEN ? AND ?`);
-    baseParams.push(from, to);
-  } else {
-    filtersBase.push(`datetime(created_at) >= datetime('now', '-${days} days')`);
+  const cacheKey = JSON.stringify({
+    uid, days,
+    from: req.query.from || null, to: req.query.to || null,
+    profiles: req.query.profiles || null,
+    action_types: req.query.action_types || null,
+    batch_id: req.query.batch_id || null,
+  });
+  if (!req.query.bust) {
+    const cached = STATS_CACHE.get(cacheKey);
+    if (cached && Date.now() - cached.ts < STATS_CACHE_TTL_MS) return res.json(cached.body);
   }
+  const origJson = res.json.bind(res);
+  res.json = (body) => { STATS_CACHE.set(cacheKey, { body, ts: Date.now() }); return origJson(body); };
+
+  // ── Time window on a raw datetime column — never wrapped in datetime()/date(),
+  // which would stop the (user_id, …, created_at) indexes from serving the
+  // range. Either the custom from/to range (inclusive days) or `days` back.
+  let window;
+  const fromDay = req.query.from && req.query.to ? String(req.query.from).slice(0, 10) : null;
+  const toDay   = req.query.from && req.query.to ? String(req.query.to).slice(0, 10) : null;
+  if (fromDay && toDay && !isNaN(Date.parse(fromDay + 'T00:00:00Z')) && !isNaN(Date.parse(toDay + 'T00:00:00Z'))) {
+    const start = `${fromDay} 00:00:00`;
+    const end = sqlTs(Date.parse(toDay + 'T00:00:00Z') + 86400000); // exclusive: the day after `to`
+    window = { sql: (col) => `${col} >= ? AND ${col} < ?`, params: [start, end], start };
+  } else {
+    const start = sqlTs(Date.now() - days * 86400000);
+    window = { sql: (col) => `${col} >= ?`, params: [start], start };
+  }
+
+  // ── Build a reusable WHERE clause + param list based on the query filters
+  // (profiles[], action_types[], batch_id, and the time window).
+  const filtersBase = ['user_id = ?', window.sql('created_at')];
+  const baseParams = [uid, ...window.params];
 
   if (req.query.profiles) {
     const profiles = String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean);
@@ -500,9 +545,11 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       SELECT COUNT(DISTINCT username) AS n FROM instagram_actions
       WHERE ${baseWhere} AND type = ? AND username IS NOT NULL
     `).get(...baseParams, row.sent)?.n || 0;
+    // Same filters + window as `sent` (it used to scan the user's whole
+    // history per request, and the ratio could exceed 100%).
     const returned = db.prepare(`
       SELECT COUNT(DISTINCT a.username) AS n FROM instagram_actions a
-      WHERE a.user_id = ? AND a.type = ? AND a.username IS NOT NULL
+      WHERE ${baseWhere} AND a.type = ? AND a.username IS NOT NULL
         AND EXISTS (
           SELECT 1 FROM instagram_actions b
           WHERE b.user_id = a.user_id
@@ -510,7 +557,7 @@ router.get("/stats", authenticateFlexible, (req, res) => {
             AND b.type IN (${inboundPlaceholders})
             AND b.created_at >= a.created_at
         )
-    `).get(uid, row.sent, ...ALL_INBOUND_TYPES)?.n || 0;
+    `).get(...baseParams, row.sent, ...ALL_INBOUND_TYPES)?.n || 0;
     funnel.push({
       action_type: row.sent,
       paired_with: 'any_inbound',
@@ -521,15 +568,10 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   }
 
   // ── Follower growth — same logic as before, respecting profile filter ──
-  const sinceIso = (req.query.from && req.query.to)
-    ? `datetime('${String(req.query.to).slice(0, 10)}', '+1 day')`
-    : `datetime('now', '-${days} days')`;
-  // We don't filter follower-counts by date in the cur/prev queries — we
+  // We don't filter follower-counts by end date in the cur/prev queries — we
   // want the latest snapshot inside the period and the latest snapshot
   // before the period started.
-  const periodStart = (req.query.from && req.query.to)
-    ? `datetime('${String(req.query.from).slice(0, 10)}')`
-    : `datetime('now', '-${days} days')`;
+  const periodStart = window.start;
 
   let profilesInPeriod = db.prepare(`
     SELECT DISTINCT my_profile FROM instagram_follower_counts WHERE user_id = ?
@@ -545,14 +587,14 @@ router.get("/stats", authenticateFlexible, (req, res) => {
   for (const profile of profilesInPeriod) {
     const cur = db.prepare(`
       SELECT follower_count FROM instagram_follower_counts
-      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) >= ${periodStart}
+      WHERE user_id = ? AND my_profile = ? AND captured_at >= ?
       ORDER BY captured_at DESC LIMIT 1
-    `).get(uid, profile);
+    `).get(uid, profile, periodStart);
     const prev = db.prepare(`
       SELECT follower_count FROM instagram_follower_counts
-      WHERE user_id = ? AND my_profile = ? AND datetime(captured_at) < ${periodStart}
+      WHERE user_id = ? AND my_profile = ? AND captured_at < ?
       ORDER BY captured_at DESC LIMIT 1
-    `).get(uid, profile);
+    `).get(uid, profile, periodStart);
     const curN  = cur?.follower_count  ?? null;
     const prevN = prev?.follower_count ?? null;
     if (curN  != null) curTotal  += curN;
@@ -561,9 +603,9 @@ router.get("/stats", authenticateFlexible, (req, res) => {
       SELECT date(captured_at) AS day, follower_count
       FROM instagram_follower_counts
       WHERE user_id = ? AND my_profile = ?
-        AND datetime(captured_at) >= ${periodStart}
+        AND captured_at >= ?
       ORDER BY captured_at ASC
-    `).all(uid, profile);
+    `).all(uid, profile, periodStart);
     const byDay = {};
     for (const r of series) byDay[r.day] = r.follower_count;
     perAccount.push({
@@ -626,21 +668,19 @@ router.get("/stats", authenticateFlexible, (req, res) => {
           OR nf.my_profile IS NULL
         )
         AND inner_a.type IN ('like', 'comment', 'comment_reply', 'reply', 'follow')
-        AND datetime(inner_a.created_at) <= datetime(nf.created_at)
+        AND inner_a.created_at <= nf.created_at
       ORDER BY inner_a.created_at DESC
       LIMIT 1
     )
     WHERE nf.user_id = ?
       AND (nf.type = 'new_follower' OR nf.type LIKE 'received_%')
-      ${(req.query.from && req.query.to)
-        ? `AND date(nf.created_at) BETWEEN ? AND ?`
-        : `AND datetime(nf.created_at) >= datetime('now', '-${days} days')`}
+      AND ${window.sql('nf.created_at')}
       ${req.query.profiles ? `AND LOWER(nf.my_profile) IN (${String(req.query.profiles).split(',').map(() => '?').join(',')})` : ''}
     ORDER BY nf.created_at DESC
     LIMIT 500
   `).all(
     uid,
-    ...(req.query.from && req.query.to ? [String(req.query.from).slice(0,10), String(req.query.to).slice(0,10)] : []),
+    ...window.params,
     ...(req.query.profiles ? String(req.query.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean) : [])
   );
 
