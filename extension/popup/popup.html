@@ -31,6 +31,7 @@
     <nav class="tabs">
       <button class="tab" data-tab="comment">Comment</button>
       <button class="tab" data-tab="reply">Reply</button>
+      <button class="tab" data-tab="actions">Actions</button>
       <button class="tab" data-tab="candidates">Candidates</button>
       <button class="tab" data-tab="account">Account</button>
     </nav>
@@ -75,6 +76,27 @@
       <label class="row"><input type="checkbox" id="reply-open" /> Open Ended <span class="info">ⓘ</span></label>
       <label class="row"><input type="checkbox" id="reply-ack" /> On My Own Posts — Acknowledge Only <span class="info">ⓘ</span></label>
       <p class="hint">Your reply settings are also used when generating contributions for Top-Voice badges.</p>
+    </div>
+
+    <!-- ACTIONS TAB (bulk connect from the current LinkedIn page) -->
+    <div class="tab-panel" data-panel="actions" hidden>
+      <div id="act-page-status" class="page-status">Checking current tab…</div>
+
+      <div class="act-section">
+        <div class="act-title">🤝 Bulk Connect</div>
+        <div class="act-hint">
+          Sends connection requests to people on the current LinkedIn search / My Network page. 5–15s random delays between each.
+        </div>
+        <div class="act-row">
+          <input type="number" id="act-connect-count" min="1" max="20" value="10" />
+          <button id="act-connect-go" class="primary small">Start Connecting</button>
+        </div>
+        <div id="act-progress" class="act-progress" hidden></div>
+      </div>
+
+      <div class="act-hint" style="margin-top:12px;color:#94a3b8;font-size:11px">
+        Tip: LinkedIn caps free accounts at ~100 requests/week. Keep sessions small.
+      </div>
     </div>
 
     <!-- CANDIDATES TAB -->

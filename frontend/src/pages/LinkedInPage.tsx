@@ -19,7 +19,9 @@ interface Candidate {
   company_domain: string | null;
   email: string | null;
   email_confidence: number | null;
+  phone: string | null;
   position: string | null;
+  source: string | null;
   saved_to_crm: number;
   crm_contact_id: string | null;
   created_at: string;
@@ -119,14 +121,23 @@ export default function LinkedInPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [candSearch, setCandSearch] = useState('');
   const [candLoading, setCandLoading] = useState(false);
+  const [candStats, setCandStats] = useState<{
+    today: { manual: number; bulk_connect: number; find_email: number; total: number };
+    week: { manual: number; bulk_connect: number; find_email: number; total: number };
+    total: { manual: number; bulk_connect: number; find_email: number; total: number };
+  } | null>(null);
 
   const qs = asUser ? `?as_user=${asUser}` : '';
 
   async function loadCandidates() {
     setCandLoading(true);
     try {
-      const r = await api.get('/contacts');
-      setCandidates(r.data.data || []);
+      const [rowsRes, statsRes] = await Promise.all([
+        api.get('/contacts'),
+        api.get('/contacts/stats'),
+      ]);
+      setCandidates(rowsRes.data.data || []);
+      setCandStats(statsRes.data.data || null);
     } finally { setCandLoading(false); }
   }
 
@@ -159,9 +170,9 @@ export default function LinkedInPage() {
   }, [candidates, candSearch]);
 
   function exportCandidatesCsv() {
-    const headers = ['Full Name', 'Position', 'Company', 'Email', 'LinkedIn URL', 'Saved At'];
+    const headers = ['Full Name', 'Position', 'Company', 'Email', 'Phone', 'LinkedIn URL', 'Saved At'];
     const rows = filteredCandidates.map(c => [
-      c.full_name || '', c.position || '', c.company || '', c.email || '',
+      c.full_name || '', c.position || '', c.company || '', c.email || '', c.phone || '',
       c.linkedin_url || '', c.created_at || '',
     ]);
     const csv = [headers, ...rows]
@@ -417,6 +428,38 @@ export default function LinkedInPage() {
         {/* CANDIDATES */}
         {tab === 'candidates' && (
           <div className="space-y-4">
+            {/* Stats cards */}
+            {candStats && (
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="text-xs text-gray-500 mb-1">Connection requests this week</div>
+                  <div className="flex items-baseline gap-2">
+                    <div className="text-2xl font-bold text-gray-900">{candStats.week.bulk_connect}</div>
+                    <div className="text-sm text-gray-400">/ 100 free · 200 premium</div>
+                  </div>
+                  <div className="mt-2 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${candStats.week.bulk_connect >= 90 ? 'bg-red-500' : candStats.week.bulk_connect >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${Math.min(100, candStats.week.bulk_connect)}%` }} />
+                  </div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="text-xs text-gray-500 mb-1">Requests sent today</div>
+                  <div className="text-2xl font-bold text-gray-900">{candStats.today.bulk_connect}</div>
+                  <div className="text-xs text-gray-400 mt-2">Keep ≤ 30/day to stay safe</div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="text-xs text-gray-500 mb-1">Emails found (Hunter)</div>
+                  <div className="text-2xl font-bold text-gray-900">{candStats.total.find_email}</div>
+                  <div className="text-xs text-gray-400 mt-2">{candStats.today.find_email} today</div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="text-xs text-gray-500 mb-1">Total candidates saved</div>
+                  <div className="text-2xl font-bold text-gray-900">{candStats.total.total}</div>
+                  <div className="text-xs text-gray-400 mt-2">{candStats.today.total} added today</div>
+                </div>
+              </div>
+            )}
             <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap gap-3 items-center">
               <div className="relative flex-1 min-w-[200px]">
                 <Search size={14} className="absolute left-3 top-3 text-gray-400" />
@@ -457,6 +500,8 @@ export default function LinkedInPage() {
                       <th className="py-2.5 px-4">Position</th>
                       <th className="py-2.5 px-4">Company</th>
                       <th className="py-2.5 px-4">Email</th>
+                      <th className="py-2.5 px-4">Phone</th>
+                      <th className="py-2.5 px-4">Source</th>
                       <th className="py-2.5 px-4">Saved</th>
                       <th className="py-2.5 px-4 text-right">Actions</th>
                     </tr>
@@ -471,6 +516,18 @@ export default function LinkedInPage() {
                           {c.email ? (
                             <span className="text-emerald-700">{c.email}{c.email_confidence ? <span className="text-gray-400 ml-1 text-xs">({c.email_confidence}%)</span> : null}</span>
                           ) : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          {c.phone ? <span className="text-blue-700">{c.phone}</span> : <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          {c.source === 'bulk_connect' ? (
+                            <span className="px-2 py-1 rounded-full bg-sky-100 text-sky-700 text-xs font-medium">🤝 Bulk Connect</span>
+                          ) : c.source === 'find_email' ? (
+                            <span className="px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">✨ Find Email</span>
+                          ) : (
+                            <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">💾 Manual</span>
+                          )}
                         </td>
                         <td className="py-2.5 px-4 text-xs text-gray-500">{c.created_at ? fmt(c.created_at) : '—'}</td>
                         <td className="py-2.5 px-4">

@@ -1212,7 +1212,39 @@
     return result;
   }
 
+  function isBulkConnectPage() {
+    // Pages where LinkedIn shows lots of Connect buttons in a list format.
+    return /^\/(search|mynetwork)\//.test(location.pathname);
+  }
+
   function injectFindContactButton() {
+    // Manage the Bulk Connect floating button independently.
+    if (isBulkConnectPage()) {
+      if (!document.getElementById('bibix-floating-connect')) {
+        const connectBtn = el('button', {
+          id: 'bibix-floating-connect',
+          className: FIND_BTN_CLASS,
+          type: 'button',
+          title: 'Bulk-send connection requests to results on this page',
+          style: {
+            position: 'fixed',
+            top: '90px',
+            right: '24px',
+            zIndex: '2147483646',
+            padding: '12px 18px',
+            fontSize: '14px',
+            background: 'linear-gradient(135deg, #0a66c2, #0059b3)',
+            boxShadow: '0 2px 6px rgba(10, 102, 194, 0.35)',
+          },
+          onClick: (e) => { e.preventDefault(); e.stopPropagation(); openBulkConnectDialog(); },
+        }, [el('span', { className: 'bibix-spark' }, '🤝'), 'Bulk Connect']);
+        document.body.appendChild(connectBtn);
+      }
+    } else {
+      const conn = document.getElementById('bibix-floating-connect');
+      if (conn) conn.remove();
+    }
+
     if (!isProfilePage()) {
       // Navigating away — remove any floating buttons we injected.
       const find = document.getElementById('bibix-floating-find');
@@ -1262,6 +1294,89 @@
     }
   }
 
+  // ── LinkedIn's own Contact-Info modal — phone, email, website, etc. that
+  // the person chose to publish. Free, unlimited, no third-party API.
+  async function scrapeContactInfo() {
+    const out = { email: '', phone: '', website: '', twitter: '', address: '' };
+    // Strategy 1 — if the contact-info section is already in the DOM
+    // (sometimes pre-rendered), parse it directly.
+    let modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"]');
+
+    if (!modal) {
+      // Strategy 2 — click the "Contact info" link on the profile to open
+      // the modal, then read it. Restore the URL when done.
+      const startUrl = location.href;
+      const link = Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim().toLowerCase();
+        const h = (el.getAttribute('href') || '').toLowerCase();
+        return t === 'contact info' || /overlay\/contact-info/.test(h)
+          || /contact info/i.test(el.getAttribute('aria-label') || '');
+      });
+      if (!link) return out;
+      link.click();
+      // Wait for the modal to mount.
+      for (let i = 0; i < 25; i++) {
+        modal = document.querySelector('#contact-info, [aria-label*="Contact info" i], section[class*="pv-contact-info"], div[role="dialog"]:has(h2)');
+        if (modal && (modal.innerText || '').toLowerCase().includes('contact info')) break;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      if (!modal) {
+        // Restore url just in case it changed
+        try { history.replaceState(null, '', startUrl); } catch (_) {}
+        return out;
+      }
+    }
+
+    // Parse the modal's innerText. Format usually looks like:
+    //   Contact Info
+    //   <linkedin-url>
+    //   Email
+    //   foo@bar.com
+    //   Phone
+    //   +1 555 123 4567 (Work)
+    //   Website
+    //   https://...
+    const text = (modal.innerText || '').replace(/\r/g, '');
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+    function valueAfterLabel(label) {
+      const idx = lines.findIndex((l) => l.toLowerCase() === label.toLowerCase());
+      if (idx < 0 || idx + 1 >= lines.length) return '';
+      // The next non-empty line is the value; sometimes followed by a "(Type)" line.
+      return lines[idx + 1].replace(/\s*\((Work|Home|Mobile|Personal)\)\s*$/i, '').trim();
+    }
+
+    out.email = valueAfterLabel('Email');
+    out.phone = valueAfterLabel('Phone');
+    out.website = valueAfterLabel('Website');
+    out.twitter = valueAfterLabel('Twitter');
+    out.address = valueAfterLabel('Address');
+
+    // Even if the labels are localized, fall back to regex match across the
+    // whole text for phone (digits + format) and email (@).
+    if (!out.email) {
+      const m = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+      if (m) out.email = m[0];
+    }
+    if (!out.phone) {
+      const m = text.match(/(\+?\d[\d\s\-().]{7,}\d)/);
+      if (m) out.phone = m[1].trim();
+    }
+
+    // Close the modal: press Escape or click the close button.
+    try {
+      const closeBtn = modal.querySelector('button[aria-label*="Dismiss" i], button[aria-label*="Close" i]');
+      if (closeBtn) closeBtn.click();
+      else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    } catch (_) {}
+    // Restore URL if it changed (the contact-info modal sometimes navigates).
+    if (location.href !== location.href.split('?')[0]) {
+      try { history.replaceState(null, '', location.href.split('?')[0]); } catch (_) {}
+    }
+
+    return out;
+  }
+
   function openSaveCandidateDialog() {
     closePopover();
     const info = extractProfileInfo();
@@ -1294,6 +1409,20 @@
         <div style="font-size:11px;color:#64748b;margin-bottom:3px">Current position</div>
         <input id="bsc-position" value="${(info.position || '').replace(/"/g, '&quot;')}" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Email</div>
+          <input id="bsc-email" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#64748b;margin-bottom:3px">Phone</div>
+          <input id="bsc-phone" value="" placeholder="auto-filled from LinkedIn if shared" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+        <button id="bsc-pull-li" type="button" style="background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">📞 Pull phone/email from LinkedIn Contact Info</button>
+        <span id="bsc-pull-status" style="font-size:11px;color:#94a3b8"></span>
+      </div>
       <div style="margin-bottom:14px;font-size:11px;color:#94a3b8">
         LinkedIn URL: <span style="color:#475569">${info.linkedinUrl}</span>
       </div>
@@ -1309,12 +1438,34 @@
     activePopover = pop;
 
     const status = pop.querySelector('#bsc-status');
+    const pullStatus = pop.querySelector('#bsc-pull-status');
     pop.querySelector('#bsc-close').addEventListener('click', () => closePopover());
     pop.addEventListener('click', (e) => { if (e.target === pop) closePopover(); });
+
+    pop.querySelector('#bsc-pull-li').addEventListener('click', async () => {
+      pullStatus.textContent = 'opening contact info…';
+      try {
+        const ci = await scrapeContactInfo();
+        if (ci.email && !pop.querySelector('#bsc-email').value) pop.querySelector('#bsc-email').value = ci.email;
+        if (ci.phone && !pop.querySelector('#bsc-phone').value) pop.querySelector('#bsc-phone').value = ci.phone;
+        const filled = [];
+        if (ci.email) filled.push('email');
+        if (ci.phone) filled.push('phone');
+        if (ci.website) filled.push('website');
+        pullStatus.textContent = filled.length
+          ? `✓ Filled ${filled.join(' + ')}`
+          : 'No public phone/email on this profile.';
+      } catch (e) {
+        pullStatus.textContent = 'Could not open contact info.';
+      }
+    });
+
     pop.querySelector('#bsc-save').addEventListener('click', async () => {
       const fullName = pop.querySelector('#bsc-name').value.trim();
       const company = pop.querySelector('#bsc-company').value.trim();
       const position = pop.querySelector('#bsc-position').value.trim();
+      const email = pop.querySelector('#bsc-email').value.trim();
+      const phone = pop.querySelector('#bsc-phone').value.trim();
       if (!fullName) { status.innerHTML = '<span style="color:#ef4444">Full name required</span>'; return; }
       status.innerHTML = '<span style="color:#64748b">Saving…</span>';
       const parts = fullName.split(/\s+/);
@@ -1323,6 +1474,7 @@
         firstName: parts[0] || '',
         lastName: parts.slice(1).join(' '),
         company, position,
+        email, phone,
         headline: info.headline,
         linkedinUrl: info.linkedinUrl,
       });
@@ -1333,6 +1485,428 @@
         status.innerHTML = `<span style="color:#ef4444">${res.error || 'save failed'}</span>`;
       }
     });
+  }
+
+  // ── Bulk Connect ──────────────────────────────────────────────────────────
+  //
+  // LinkedIn's current DOM (mid-2026) renders the "Connect" action as an
+  // <a> element, not a <button>. Class names are fully obfuscated but the
+  // aria-label is always "Invite <Full Name> to connect". Query both tags.
+  function findConnectButtons() {
+    const out = [];
+    document.querySelectorAll('button, a').forEach((el) => {
+      if (el.disabled) return;
+      if (el.offsetHeight === 0) return;
+      const label = (el.getAttribute('aria-label') || '').trim();
+      const text  = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+      const combined = (label + ' | ' + text).toLowerCase();
+
+      // Positive: canonical "Invite X to connect" aria-label pattern,
+      // OR the visible text is exactly "Connect".
+      const isConnect =
+        /\binvite\b.+\bto connect\b/i.test(label)
+        || /^connect$/i.test(text)
+        || /^\+?\s*connect$/i.test(text);
+      if (!isConnect) return;
+
+      // Negative — pending / withdraw / follow / message / cancel / remove
+      // all use different aria-labels so a Pending anchor won't slip through
+      // the positive match; guard anyway.
+      if (/\bpending\b|\bwithdraw\b|\bfollowing\b|\bmessage(?:d)?\b|\bremove\b|\bcancel\b/i.test(combined)) return;
+      if (text.toLowerCase() === 'follow') return;
+
+      out.push(el);
+    });
+    return out;
+  }
+
+  function extractPersonNearConnect(btn) {
+    // Primary — pull the name straight out of the aria-label:
+    // "Invite Constantinos Hadjiandreou to connect" → "Constantinos Hadjiandreou"
+    let name = '';
+    const label = btn.getAttribute && btn.getAttribute('aria-label');
+    if (label) {
+      const m = label.match(/^invite\s+(.+?)\s+to connect\b/i);
+      if (m) name = m[1].trim();
+    }
+    // Walk up looking for a search-result card that has a profile link.
+    let card = btn;
+    let url = '';
+    let headline = '';
+    for (let i = 0; i < 15 && card && card !== document.body; i++) {
+      const link = card.querySelector('a[href*="/in/"]');
+      if (link) {
+        url = link.href.split('?')[0];
+        if (!name) {
+          name = (link.innerText || '').trim().split('\n')[0].trim()
+            .replace(/\s*[·•]\s*\d+(?:st|nd|rd|th)?\s*(?:degree|connection)?.*$/i, '')
+            .trim();
+        }
+        const lines = (card.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean);
+        const nameIdx = name ? lines.findIndex((l) => l.startsWith(name)) : -1;
+        const start = nameIdx >= 0 ? nameIdx + 1 : 0;
+        for (let j = start; j < Math.min(start + 5, lines.length); j++) {
+          const l = lines[j];
+          if (/(1st|2nd|3rd|degree|connection|mutual|follower)/i.test(l)) continue;
+          if (l.length < 5) continue;
+          headline = l;
+          break;
+        }
+        break;
+      }
+      card = card.parentElement;
+    }
+    if (!name && !url) return null;
+    return { name: name || 'Unknown', url, headline };
+  }
+
+  async function findButton(timeoutMs, predicate) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      // Query button AND a — LinkedIn renders many action controls as <a>.
+      const btns = document.querySelectorAll('button, a, [role="button"]');
+      for (const b of btns) {
+        try {
+          if (b.offsetHeight === 0) continue;
+          if (predicate(b)) return b;
+        } catch (_) {}
+      }
+      await wait(150);
+    }
+    return null;
+  }
+
+  function openBulkConnectDialog() {
+    closePopover();
+    const pop = document.createElement('dialog');
+    pop.className = 'bibix-popover';
+    Object.assign(pop.style, {
+      position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+      margin: '0', padding: '20px', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '14px', boxShadow: '0 20px 50px rgba(0,0,0,0.25)',
+      width: '460px', maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100vh - 48px)',
+      overflow: 'auto', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '13px', color: '#1f2937', zIndex: '2147483647',
+    });
+    pop.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;background:linear-gradient(135deg,#0a66c2,#0059b3);-webkit-background-clip:text;background-clip:text;color:transparent">
+        🤝 Bulk Connect
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:14px">
+        Sends connection requests to people on this page, with random 5–15s delays.
+        Saves each to your Candidates list automatically.
+      </div>
+      <div style="margin-bottom:10px;padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:11px;color:#9a3412">
+        ⚠️ LinkedIn caps connection requests at ~100/week (free) or ~200/week (Premium).
+        Keep sessions small.
+      </div>
+      <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+        <input id="bc-count" type="number" min="1" max="20" value="5" style="width:70px;padding:8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+        <span style="font-size:12px;color:#64748b">people (max 20)</span>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:#64748b;margin-bottom:14px">
+        <input id="bc-showall" type="checkbox" checked />
+        Click "Show all" first to load full people-results page
+      </label>
+      <div id="bc-status" style="font-size:12px;min-height:36px;margin-bottom:10px;color:#475569"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="bc-close" style="background:#f1f5f9;border:1px solid #e2e8f0;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
+        <button id="bc-go" style="background:linear-gradient(135deg,#0a66c2,#0059b3);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">Start connecting</button>
+      </div>
+    `;
+    document.documentElement.appendChild(pop);
+    try { pop.showModal(); } catch (_) {}
+    activeDialog = pop;
+    activePopover = pop;
+
+    const status = pop.querySelector('#bc-status');
+    const setStatus = (s) => { if (status) status.textContent = s; };
+
+    pop.querySelector('#bc-close').addEventListener('click', () => { bulkAborted = true; closePopover(); });
+    pop.addEventListener('click', (e) => { if (e.target === pop) { bulkAborted = true; closePopover(); } });
+    pop.querySelector('#bc-go').addEventListener('click', async () => {
+      bulkAborted = false;
+      const n = Math.max(1, Math.min(20, Number(pop.querySelector('#bc-count').value) || 5));
+      const goShowAll = pop.querySelector('#bc-showall').checked;
+      await runBulkConnect(n, goShowAll, setStatus);
+    });
+  }
+
+  // Listener for messages from the extension popup.
+  try {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (msg && msg.type === 'bibix-start-bulk-connect') {
+        bulkAborted = false;
+        const count = Math.max(1, Math.min(20, Number(msg.count) || 5));
+        const push = (text, opts = {}) => {
+          try { chrome.runtime.sendMessage({ type: 'bibix-bulk-connect-progress', text, ...opts }); } catch (_) {}
+        };
+        runBulkConnect(count, true, (s) => push(s))
+          .then((final) => push(final || 'Done.', { done: true }))
+          .catch((e) => push('Error: ' + (e && e.message), { error: true }));
+        sendResponse({ ok: true });
+        return true;
+      }
+    });
+  } catch (_) {}
+
+  function realisticClick(btn) {
+    // Some LinkedIn buttons need a full mousedown/mouseup/click sequence.
+    try {
+      btn.scrollIntoView({ block: 'center' });
+      const rect = btn.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+      btn.dispatchEvent(new MouseEvent('pointerdown', opts));
+      btn.dispatchEvent(new MouseEvent('mousedown', opts));
+      btn.dispatchEvent(new MouseEvent('pointerup', opts));
+      btn.dispatchEvent(new MouseEvent('mouseup', opts));
+      btn.dispatchEvent(new MouseEvent('click', opts));
+    } catch (_) {
+      try { btn.click(); } catch (_) {}
+    }
+  }
+
+  function findNextPageButton() {
+    const buttons = Array.from(document.querySelectorAll('button, a'));
+    return buttons.find((b) => {
+      const label = (b.getAttribute('aria-label') || '').toLowerCase();
+      const text  = (b.innerText || '').trim().toLowerCase();
+      if (b.disabled) return false;
+      return label === 'next' || text === 'next'
+        || /^next\b/i.test(label) || /^next\s*(page|→|›)$/i.test(text);
+    });
+  }
+
+  function highlightBriefly(el, color = '#dc2626') {
+    if (!el) return;
+    const origOutline = el.style.outline;
+    const origOffset  = el.style.outlineOffset;
+    const origBoxShadow = el.style.boxShadow;
+    el.style.outline = `3px solid ${color}`;
+    el.style.outlineOffset = '2px';
+    el.style.boxShadow = `0 0 20px ${color}`;
+    setTimeout(() => {
+      el.style.outline = origOutline;
+      el.style.outlineOffset = origOffset;
+      el.style.boxShadow = origBoxShadow;
+    }, 900);
+  }
+
+  async function runBulkConnect(count, _clickShowAll, setStatus) {
+    const P = '[Bibix Connect]';
+    // Simple: find all visible Connect buttons on this page, click each with
+    // a red highlight, handle the "Send" modal, wait 5–10s between clicks.
+    // No pagination, no navigation.
+
+    setStatus('Scanning for Connect buttons…');
+    let btns = findConnectButtons();
+    // Small scroll to trigger any lazy-loading of results.
+    if (btns.length === 0) {
+      window.scrollTo(0, 400);
+      await wait(600);
+      btns = findConnectButtons();
+    }
+    console.log(P, `page: ${btns.length} Connect buttons visible`);
+
+    if (btns.length === 0) {
+      const msg = 'No Connect buttons found. Open a "People" search results page (e.g. linkedin.com/search/results/people/?keywords=…) and reload the tab.';
+      setStatus(msg);
+      return msg;
+    }
+
+    const targets = btns.slice(0, count);
+    setStatus(`Found ${btns.length} Connect buttons. Will click ${targets.length}.`);
+    await wait(800);
+
+    let done = 0, errors = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (bulkAborted) {
+        const msg = `Stopped. Sent ${done}/${targets.length}.`;
+        setStatus(msg);
+        return msg;
+      }
+      const btn = targets[i];
+      const person = extractPersonNearConnect(btn);
+      const label = person ? person.name : `#${i + 1}`;
+
+      try {
+        // 1. Scroll button into view so the user actually sees it.
+        btn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        await wait(rand(600, 900));
+        // 2. Flash a red outline so the user sees exactly which button we're clicking.
+        highlightBriefly(btn, '#dc2626');
+        setStatus(`${i + 1}/${targets.length} — clicking Connect on ${label}…`);
+        await wait(400);
+        // 3. Fire the click.
+        realisticClick(btn);
+        console.log(P, `clicked Connect for ${label}`);
+        // 4. If the "Add a note?" dialog appears, click Send without a note.
+        const sendBtn = await findButton(5000, (b) => {
+          if (b.disabled) return false;
+          const l = (b.getAttribute('aria-label') || '').toLowerCase().trim();
+          const t = (b.innerText || b.textContent || '').toLowerCase().trim();
+          // Skip the "Add a note" option — we always want to send without one.
+          if (t === 'add a note' || l === 'add a note') return false;
+          if (/^send without a note$/i.test(t)) return true;
+          if (/^send without a note$/i.test(l)) return true;
+          if (t === 'send now' || t === 'send') return true;
+          if (/send.*invitation/i.test(l)) return true;
+          return false;
+        });
+        if (sendBtn) {
+          highlightBriefly(sendBtn, '#0a66c2');
+          setStatus(`${i + 1}/${targets.length} — sending invitation…`);
+          await wait(rand(400, 800));
+          realisticClick(sendBtn);
+          console.log(P, `sent invitation for ${label}`);
+        }
+        // 5. Save to backend.
+        if (person && person.url) {
+          try {
+            await send('saveCandidate', {
+              fullName: person.name || 'Unknown',
+              firstName: (person.name || '').split(' ')[0] || '',
+              lastName: (person.name || '').split(' ').slice(1).join(' '),
+              headline: person.headline || '',
+              linkedinUrl: person.url,
+              source: 'bulk_connect',
+            });
+          } catch (_) {}
+        }
+        done++;
+      } catch (e) {
+        errors++;
+        console.warn(P, 'error on', label, ':', e.message);
+      }
+
+      // 5–10s pause between clicks (humanlike).
+      if (i < targets.length - 1) {
+        const pause = rand(5000, 10000);
+        setStatus(`✓ Sent ${done}/${targets.length}. Waiting ${Math.round(pause/1000)}s…`);
+        await wait(pause);
+      }
+    }
+
+    const finalMsg = `Done. ${done} connection requests sent${errors ? `, ${errors} skipped` : ''}.`;
+    setStatus(finalMsg);
+    return finalMsg;
+  }
+
+  // Retained for interface compatibility with older callers.
+  async function _oldRunBulkConnect(count, clickShowAll, setStatus) {
+    const P = '[Bibix Connect]';
+    // Step 1 — if on a mixed /search/results/all page and user requested it,
+    // navigate to the People-specific results.
+    if (clickShowAll && /\/search\/results\/all\//.test(location.pathname)) {
+      const showAll = Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim();
+        return /^Show all(\s+results)?$/i.test(t) || /^See all/i.test(t);
+      });
+      if (showAll) {
+        setStatus('Opening full people results…');
+        showAll.click();
+        await wait(3000);
+      }
+    }
+
+    let done = 0, errors = 0, pageNum = 1;
+    const target = count;
+
+    // Loop over pages until we hit the target or run out.
+    while (done < target && pageNum <= 10) {
+      setStatus(`Page ${pageNum} — scanning for Connect buttons…`);
+
+      // Scroll to load lazy-rendered results on this page.
+      let btns = findConnectButtons();
+      for (let i = 0; i < 4 && btns.length < (target - done); i++) {
+        window.scrollTo(0, document.body.scrollHeight);
+        await wait(rand(1000, 1800));
+        btns = findConnectButtons();
+      }
+      console.log(P, `page ${pageNum}: ${btns.length} Connect buttons visible`);
+      setStatus(`Page ${pageNum}: found ${btns.length} Connect buttons.`);
+
+      if (btns.length === 0) {
+        // Detection failed on this page. Don't blindly paginate — that just
+        // navigates without ever clicking Connect and the user sees "the
+        // page keeps refreshing".
+        const msg = pageNum === 1
+          ? 'No Connect buttons found. Are you on a People search results page?'
+          : `Page ${pageNum} has no Connect buttons — stopping.`;
+        setStatus(msg);
+        return msg;
+      } else {
+        // Randomise + trim to remaining need.
+        btns = shuffle(btns).slice(0, target - done);
+        setStatus(`Page ${pageNum}: connecting to ${btns.length} people…`);
+
+        for (let i = 0; i < btns.length; i++) {
+          if (bulkAborted) { setStatus(`Stopped. Sent ${done}, skipped ${errors}.`); return `Stopped. ${done} sent.`; }
+          const btn = btns[i];
+          const person = extractPersonNearConnect(btn);
+          const label = person ? person.name : `#${i + 1}`;
+          setStatus(`Page ${pageNum} · ${done + 1}/${target} — ${label}…`);
+
+          try {
+            realisticClick(btn);
+            // If LinkedIn shows the "Add a note?" dialog, click Send/Send-without.
+            const sendBtn = await findButton(4500, (b) => {
+              if (b.disabled) return false;
+              const l = (b.getAttribute('aria-label') || '').toLowerCase();
+              const t = (b.innerText || '').trim().toLowerCase();
+              return /send.*(invitation|now|without)/i.test(l)
+                || /send without a note/i.test(t)
+                || t === 'send now'
+                || t === 'send';
+            });
+            if (sendBtn) {
+              await wait(rand(200, 500));
+              realisticClick(sendBtn);
+            }
+            if (person && person.url) {
+              try {
+                await send('saveCandidate', {
+                  fullName: person.name || 'Unknown',
+                  firstName: (person.name || '').split(' ')[0] || '',
+                  lastName: (person.name || '').split(' ').slice(1).join(' '),
+                  headline: person.headline || '',
+                  linkedinUrl: person.url,
+                  source: 'bulk_connect',
+                });
+              } catch (_) {}
+            }
+            done++;
+          } catch (e) {
+            errors++;
+            console.warn(P, 'error:', e.message);
+          }
+
+          if (done < target && i < btns.length - 1) await wait(rand(5000, 15000));
+        }
+      }
+
+      if (done >= target) break;
+
+      // Try to advance to the next page.
+      const nextBtn = findNextPageButton();
+      if (!nextBtn) {
+        setStatus(`No "Next" page found. Sent ${done}/${target}.`);
+        break;
+      }
+      setStatus(`Loading page ${pageNum + 1}…`);
+      realisticClick(nextBtn);
+      pageNum++;
+      // Wait for the new page's results to mount + delay to look human.
+      await wait(rand(3500, 6000));
+      window.scrollTo(0, 0);
+      await wait(500);
+    }
+
+    const finalMsg = `Done. ${done} requests sent${errors ? `, ${errors} skipped` : ''}. Saved to Candidates.`;
+    setStatus(finalMsg);
+    return finalMsg;
   }
 
   function openFindContactDialog() {
@@ -1454,7 +2028,7 @@
   setTimeout(scheduleScan, 1500);
   setTimeout(scheduleScan, 3500);
 
-  console.log('[Bibix LinkedIn AI] content script loaded (v0.3.11)');
+  console.log('[Bibix LinkedIn AI] content script loaded (v0.5.6)');
   // Periodic count log to aid debugging in production.
   setInterval(() => {
     const n = document.querySelectorAll('.' + BTN_CLASS).length;

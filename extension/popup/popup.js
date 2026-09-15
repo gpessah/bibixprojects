@@ -88,6 +88,78 @@ function bindReplyTab() {
   $('#reply-ack').addEventListener('change',   e => queueSave({ reply_ack_only_own_posts: e.target.checked ? 1 : 0 }));
 }
 
+// ── Actions tab ─────────────────────────────────────────────────────────────
+async function getActiveLinkedInTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const t = tabs && tabs[0];
+      if (!t || !/^https?:\/\/(?:[a-z0-9-]+\.)*linkedin\.com/i.test(t.url || '')) {
+        return resolve(null);
+      }
+      resolve(t);
+    });
+  });
+}
+
+async function refreshActionsStatus() {
+  const el = $('#act-page-status');
+  const btn = $('#act-connect-go');
+  const t = await getActiveLinkedInTab();
+  if (!t) {
+    el.className = 'page-status err';
+    el.textContent = 'Open a LinkedIn search or My Network page in this tab, then try again.';
+    btn.disabled = true;
+    return;
+  }
+  const url = t.url || '';
+  const isConnectable = /\/(?:search|mynetwork)\//.test(url);
+  if (!isConnectable) {
+    el.className = 'page-status warn';
+    el.textContent = 'Not on a search/network page. Open linkedin.com/search/results/people/ or /mynetwork/ first.';
+    btn.disabled = true;
+    return;
+  }
+  el.className = 'page-status ok';
+  el.textContent = '✓ Ready on: ' + url.replace(/^https?:\/\//, '').slice(0, 60);
+  btn.disabled = false;
+}
+
+function bindActionsTab() {
+  $('#act-connect-go').addEventListener('click', async () => {
+    const count = Math.max(1, Math.min(20, Number($('#act-connect-count').value) || 10));
+    const t = await getActiveLinkedInTab();
+    if (!t) { refreshActionsStatus(); return; }
+    const prog = $('#act-progress');
+    prog.hidden = false;
+    prog.className = 'act-progress';
+    prog.textContent = 'Starting…';
+    $('#act-connect-go').disabled = true;
+    chrome.tabs.sendMessage(t.id, { type: 'bibix-start-bulk-connect', count }, (res) => {
+      if (chrome.runtime.lastError) {
+        prog.className = 'act-progress err';
+        prog.textContent = 'Reload the LinkedIn tab (Cmd+R) so the content script picks up this popup.';
+        $('#act-connect-go').disabled = false;
+      }
+    });
+  });
+}
+
+// Progress messages from the content script arrive here.
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.type !== 'bibix-bulk-connect-progress') return;
+  const prog = $('#act-progress');
+  if (!prog) return;
+  prog.hidden = false;
+  prog.textContent = msg.text || '';
+  if (msg.done) {
+    prog.className = 'act-progress ok';
+    $('#act-connect-go').disabled = false;
+  } else if (msg.error) {
+    prog.className = 'act-progress err';
+    $('#act-connect-go').disabled = false;
+  }
+});
+
 // ── Candidates tab ──────────────────────────────────────────────────────────
 let candidatesCache = [];
 
@@ -229,6 +301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   populateTones();
   bindCommentTab();
   bindReplyTab();
+  bindActionsTab();
   bindCandidatesTab();
   bindAccountTab();
   bindLogin();
@@ -236,6 +309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => {
     setActiveTab(b.dataset.tab);
     if (b.dataset.tab === 'candidates') loadCandidates();
+    if (b.dataset.tab === 'actions') refreshActionsStatus();
   }));
   setActiveTab('comment');
 
