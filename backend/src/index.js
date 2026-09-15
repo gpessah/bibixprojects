@@ -80,7 +80,7 @@ if (tgBot.enabled && process.env.TELEGRAM_WEBHOOK_URL && process.env.TELEGRAM_BO
 const fetch = require('node-fetch');
 const SETUP_SECRET = process.env.SETUP_SECRET || 'bibix-setup-2026';
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', pid: process.pid, v: 5 }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', pid: process.pid, v: 6 }));
 
 app.get('/api/ping', (req, res) => res.json({ ok: true, pid: process.pid }));
 
