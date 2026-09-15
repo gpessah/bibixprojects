@@ -86,6 +86,19 @@ const shortPost = (url: string) => {
 };
 const pct = (n: number | null) => (n == null ? '—' : `${n}%`);
 
+// Collapse repeated events of one type into "type ×N · first → last".
+function summarize<T extends { type: string; at: string }>(items: T[]) {
+  const groups = new Map<string, { type: string; count: number; first: string; last: string; sample: T }>();
+  for (const it of items) {
+    const g = groups.get(it.type);
+    if (!g) groups.set(it.type, { type: it.type, count: 1, first: it.at, last: it.at, sample: it });
+    else { g.count++; if (it.at < g.first) g.first = it.at; if (it.at > g.last) g.last = it.at; }
+  }
+  return [...groups.values()].sort((a, b) => (a.first < b.first ? -1 : 1));
+}
+const spanLabel = (g: { count: number; first: string; last: string }) =>
+  g.count > 1 && g.first.slice(0, 16) !== g.last.slice(0, 16) ? `${fmtDate(g.first)} → ${fmtDate(g.last)}` : fmtDate(g.first);
+
 export default function PostReturnsDashboard({ asUser, refreshTick, onRefresh }: Props) {
   const [days, setDays] = useState(90);
   const [from, setFrom] = useState('');
@@ -332,18 +345,20 @@ function UserList({ users, showAll, onShowAll }: { users: ReturnUser[]; showAll:
                 {u.follower_count != null && <span className="text-gray-400 ml-1.5">· {u.follower_count.toLocaleString()} followers</span>}
               </td>
               <td className="py-2 pr-4 text-gray-600">
-                {u.my_actions.slice(0, 3).map((a, i) => (
-                  <span key={i} className="mr-2 whitespace-nowrap">{ACTION_LABEL[a.type] || a.type} <span className="text-gray-400">{fmtDate(a.at)}</span></span>
+                {summarize(u.my_actions).map(g => (
+                  <div key={g.type} className="whitespace-nowrap">
+                    {ACTION_LABEL[g.type] || g.type}{g.count > 1 && <b className="font-semibold"> ×{g.count}</b>}
+                    <span className="text-gray-400"> · {spanLabel(g)}</span>
+                  </div>
                 ))}
-                {u.my_actions.length > 3 && <span className="text-gray-400">+{u.my_actions.length - 3} more</span>}
               </td>
               <td className="py-2 pr-4">
-                {u.returns.length === 0 ? <span className="text-gray-300">—</span> : u.returns.slice(0, 4).map((r, i) => (
-                  <span key={i} className={`mr-2 whitespace-nowrap ${r.group === 'followed' ? 'text-purple-700' : r.group === 'liked' ? 'text-pink-700' : 'text-blue-700'}`}>
-                    {RETURN_LABEL[r.type] || r.type} <span className="text-gray-400">{fmtDate(r.at)}</span>
-                  </span>
+                {u.returns.length === 0 ? <span className="text-gray-300">—</span> : summarize(u.returns).map(g => (
+                  <div key={g.type} className={`whitespace-nowrap ${g.sample.group === 'followed' ? 'text-purple-700' : g.sample.group === 'liked' ? 'text-pink-700' : 'text-blue-700'}`}>
+                    {RETURN_LABEL[g.type] || g.type}{g.count > 1 && <b className="font-semibold"> ×{g.count}</b>}
+                    <span className="text-gray-400"> · {spanLabel(g)}</span>
+                  </div>
                 ))}
-                {u.returns.length > 4 && <span className="text-gray-400">+{u.returns.length - 4} more</span>}
               </td>
               <td className="py-2 text-right whitespace-nowrap">{u.returns.length ? fmtHours(u.returns[0].hours_after) : ''}</td>
             </tr>
