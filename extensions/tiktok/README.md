@@ -19,7 +19,9 @@ to the Bibix backend.
 2. In Monday (`staging.bibix.ailabstech.com`) → **Settings → Instagram
    Extension** section → copy your API token.
 3. Paste into the popup's "API Token" field → **Save token**.
-4. The popup header should now show `Env: staging  ·  Token: ✓ set`.
+4. The popup header should now show `Env: staging  ·  Connected as <your name> (<email>)`
+   — that is the Bibix user this browser acts as. `❌ Token rejected` means the
+   token was regenerated in Settings; paste the current one and Save again.
 
 ## Updating to a new version
 

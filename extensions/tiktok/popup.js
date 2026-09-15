@@ -16,11 +16,38 @@ function log(msg) {
 }
 
 // ── Config: token + env ─────────────────────────────────────────────────────
+const BIBIX_HOSTS = {
+  staging: 'https://staging.bibix.ailabstech.com',
+  prod:    'https://bibix.ailabstech.com',
+};
+
+// Resolve the token to the Bibix user it belongs to, so the popup shows who
+// this browser is acting as instead of an anonymous "token set".
+async function whoAmI(baseUrl, token) {
+  try {
+    const res = await fetch(`${baseUrl}/api/instagram/auth/verify`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const u = data.user || data;
+    const name = u?.name || '';
+    const email = u?.email || '';
+    if (name && email) return `${name} (${email})`;
+    return name || email || 'user';
+  } catch { return null; }
+}
+
 async function loadConfig() {
   const { bibixToken, bibixEnv } = await chrome.storage.local.get(['bibixToken', 'bibixEnv']);
   el('token').value = bibixToken || '';
   const env = bibixEnv || 'staging';
-  $env.textContent = `Env: ${env}  ·  Token: ${bibixToken ? '✓ set' : 'missing'}`;
+  if (!bibixToken) { $env.textContent = `Env: ${env}  ·  Token: missing`; return; }
+  $env.textContent = `Env: ${env}  ·  Verifying token…`;
+  const who = await whoAmI(BIBIX_HOSTS[env] || BIBIX_HOSTS.staging, bibixToken);
+  $env.textContent = who
+    ? `Env: ${env}  ·  Connected as ${who}`
+    : `Env: ${env}  ·  ❌ Token rejected — paste a current one and Save`;
 }
 loadConfig();
 
