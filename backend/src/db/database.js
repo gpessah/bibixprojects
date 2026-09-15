@@ -78,12 +78,15 @@ function otherWorkersAlive() {
     return out.split('\n').map(s => s.trim()).filter(p => p && Number(p) !== process.pid).length > 0;
   } catch { return false; } // pgrep exits 1 when nothing matches
 }
+// Note: a worker holds this lock for its whole lifetime once it has run a
+// query (statements are never finalized), so the directory's age says
+// nothing about staleness — only the absence of a live worker does.
 try {
   if (fs.existsSync(LOCK_PATH)) {
     const ageSec = (Date.now() - fs.statSync(LOCK_PATH).mtimeMs) / 1000;
-    if (!otherWorkersAlive() || ageSec > 120) {
+    if (!otherWorkersAlive()) {
       fs.rmSync(LOCK_PATH, { recursive: true, force: true });
-      console.warn(`[DB] Removed stale lock dir (age ${ageSec.toFixed(0)}s)`);
+      console.warn(`[DB] Removed stale lock dir (age ${ageSec.toFixed(0)}s, no other worker alive)`);
     } else {
       console.warn(`[DB] Lock dir belongs to a live worker (age ${ageSec.toFixed(0)}s) — leaving it`);
     }
