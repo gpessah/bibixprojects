@@ -61,53 +61,53 @@ try {
   }
 } catch (e) { console.warn('[DB] Startup backup warning:', e.message); }
 
-// node-sqlite3-wasm creates a lock directory; clean it up on startup
-// so crashed/killed processes don't leave a stale lock
+// node-sqlite3-wasm implements SQLite's file lock as a `<db>.lock` directory
+// (mkdir = lock, rmdir = unlock). A worker killed mid-transaction leaves it
+// behind and every later open fails with SQLITE_BUSY, so we remove it at
+// startup — but ONLY when no other worker of this app is running. LiteSpeed
+// spawns extra lsnode workers under load, and deleting a live worker's lock
+// lets two processes write the same file at once; that is how the database
+// kept ending up "disk image is malformed".
 const LOCK_PATH = DB_PATH + '.lock';
-try { fs.rmSync(LOCK_PATH, { recursive: true, force: true }); } catch {}
+function otherWorkersAlive() {
+  try {
+    const { execSync } = require('child_process');
+    const appRoot = path.resolve(__dirname, '../..');
+    // `[l]snode` keeps pgrep from matching the shell running this very command.
+    const out = execSync(`pgrep -f "[l]snode:${appRoot}"`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    return out.split('\n').map(s => s.trim()).filter(p => p && Number(p) !== process.pid).length > 0;
+  } catch { return false; } // pgrep exits 1 when nothing matches
+}
+// Note: a worker holds this lock for its whole lifetime once it has run a
+// query (statements are never finalized), so the directory's age says
+// nothing about staleness — only the absence of a live worker does.
+try {
+  if (fs.existsSync(LOCK_PATH)) {
+    const ageSec = (Date.now() - fs.statSync(LOCK_PATH).mtimeMs) / 1000;
+    if (!otherWorkersAlive()) {
+      fs.rmSync(LOCK_PATH, { recursive: true, force: true });
+      console.warn(`[DB] Removed stale lock dir (age ${ageSec.toFixed(0)}s, no other worker alive)`);
+    } else {
+      console.warn(`[DB] Lock dir belongs to a live worker (age ${ageSec.toFixed(0)}s) — leaving it`);
+    }
+  }
+} catch {}
 
 const rawDb = new WasmDatabase(DB_PATH);
 rawDb.exec('PRAGMA foreign_keys = ON');
-
-// Crash-resilient pragmas — drastically reduce the "database disk image is
-// malformed" recurrences we've been hitting from process kills mid-write.
-//
-//   journal_mode=WAL    — uses a separate write-ahead log instead of
-//                          rollback-journal. Writers don't block readers.
-//                          Crashes mid-write recover by replaying the WAL
-//                          at startup, leaving the main DB intact instead
-//                          of partially-written pages that fail
-//                          integrity_check.
-//   synchronous=NORMAL  — WAL's recommended sync level. Forces flush at
-//                          checkpoints (not every write), so we keep most
-//                          of WAL's perf gains while still being durable
-//                          across crashes.
-//   wal_autocheckpoint  — checkpoint the WAL back into main DB every
-//                          1000 pages of writes (default). Caps WAL file
-//                          growth without manual intervention.
-try {
-  rawDb.exec('PRAGMA journal_mode = WAL');
-  rawDb.exec('PRAGMA synchronous = NORMAL');
-  rawDb.exec('PRAGMA wal_autocheckpoint = 1000');
-  // busy_timeout makes concurrent writers wait up to 5s for a lock
-  // instead of failing immediately. Critical for Passenger multi-worker
-  // setups where 2+ processes may try to write the same moment.
-  rawDb.exec('PRAGMA busy_timeout = 5000');
-  console.log('[DB] WAL mode enabled (journal_mode=WAL, synchronous=NORMAL, busy_timeout=5000ms)');
-} catch (e) {
-  console.warn('[DB] Failed to enable WAL mode (continuing in default mode):', e.message);
-}
+// With the directory lock above, a second worker gets SQLITE_BUSY instead of
+// a real shared lock; wait up to 5s rather than failing the request outright.
+// WAL mode is deliberately not requested: node-sqlite3-wasm's VFS has no
+// shared memory, so the pragma leaves the file in rollback-journal mode
+// anyway (both servers report journal_mode=delete).
+try { rawDb.exec('PRAGMA busy_timeout = 5000'); } catch {}
 
 // NOTE: No SIGTERM/SIGINT handler.
 // We tried that earlier and it caused "database table is locked" errors —
 // when one worker received SIGTERM and tried to close() the DB, another
 // worker's in-flight write held the lock and our close attempt corrupted
-// the journal.
-//
-// Instead, we rely on WAL's natural crash recovery: if a process is killed
-// mid-write, the WAL file holds the uncommitted transaction. On next
-// startup, SQLite replays the WAL automatically, leaving the main DB file
-// intact. This is exactly what WAL was designed for. No cleanup needed.
+// the journal. A killed process simply leaves its rollback journal for
+// SQLite to replay on the next open.
 
 const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
 rawDb.exec(schema);
