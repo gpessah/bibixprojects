@@ -1084,11 +1084,16 @@ router.get("/stats", authenticateFlexible, (req, res) => {
 });
 
 // ── Post returns ─────────────────────────────────────────────────────────────
-// "For the people I engaged on post X, who came back?" One row per post I
-// acted on inside the window. A user counts as returned when any inbound
-// event from them (follow / like / comment / mention) lands within
-// `return_days` after my FIRST action on them for that post.
+// "For the people I engaged on post X with action A, who came back?" One row
+// per (post, action type). Requested = what the extension asked for (from the
+// run records); Performed = what actually ran (rows in instagram_actions); a
+// user counts as returned when any inbound event from them (follow / like /
+// comment / mention) lands within `return_days` after my FIRST action on them.
 const RETURN_OUTBOUND = ['like', 'follow', 'comment', 'comment_reply', 'reply'];
+// Fold comment_reply → reply so replies from every extension version group
+// together; everything else keeps its own name.
+const CANON = `CASE %COL% WHEN 'comment_reply' THEN 'reply' ELSE %COL% END`;
+const canon = (col) => CANON.replaceAll('%COL%', col);
 const RETURN_GROUPS = {
   followed:  ['new_follower'],
   liked:     ['received_like_post', 'got_like_post', 'received_like_reel', 'got_like_reel', 'received_like_comment', 'got_like_comment'],
@@ -1108,36 +1113,35 @@ function actionWindow(q, defaultDays) {
   const days = Math.max(1, Math.min(3650, parseInt(q.days, 10) || defaultDays));
   return { sql: (c) => `${c} >= ?`, params: [sqlTs(Date.now() - days * 86400000)], label: `last ${days} days` };
 }
-
 function profilesFilter(q) {
   const list = q.profiles ? String(q.profiles).split(',').map(p => p.trim().replace(/^@/, '').toLowerCase()).filter(Boolean) : [];
   return list.length ? { sql: ` AND LOWER(my_profile) IN (${inList(list)})`, params: list } : { sql: '', params: [] };
 }
-
-function returnDaysOf(q) {
-  return Math.max(1, Math.min(365, parseInt(q.return_days, 10) || 30));
+const returnDaysOf = (q) => Math.max(1, Math.min(365, parseInt(q.return_days, 10) || 30));
+function actFilter(q) {
+  const a = typeof q.action === 'string' && q.action ? q.action : null;
+  // 'reply' also matches the raw comment_reply rows.
+  if (a === 'reply') return { sql: ` AND type IN ('reply','comment_reply')`, params: [] };
+  if (a) return { sql: ` AND type = ?`, params: [a] };
+  return { sql: '', params: [] };
 }
 
-// One row per (post, my profile, target user) with the time of my first action.
-// postUrl: undefined = all posts, '' = actions without a post (e.g. follows).
-function targetsCte(uid, win, prof, postUrl) {
-  const postSql = postUrl === undefined ? '' : (postUrl === '' ? ' AND post_url IS NULL' : ' AND post_url = ?');
-  const postParams = postUrl ? [postUrl] : [];
+// Distinct (post, act, my_profile, target) with the time of my first action —
+// the base for returns. postUrl: undefined = every post; '' = actions with no
+// post (bare follows). act limits to one canonical action type.
+function targetsCte(uid, win, prof, postUrl, act) {
+  const postSql = postUrl === undefined ? '' : (postUrl === '' ? ` AND post_url IS NULL` : ` AND post_url = ?`);
   return {
     sql: `
-      SELECT post_url, my_profile, username, MIN(created_at) AS first_at, MIN(post_owner) AS post_owner,
-             SUM(type = 'like') AS likes, SUM(type = 'follow') AS follows,
-             SUM(type IN ('comment', 'comment_reply', 'reply')) AS replies
+      SELECT post_url, ${canon('type')} AS act, my_profile, username,
+             MIN(created_at) AS first_at, MIN(post_owner) AS post_owner
       FROM instagram_actions
       WHERE user_id = ? AND type IN (${inList(RETURN_OUTBOUND)}) AND username IS NOT NULL
-        AND ${win.sql('created_at')}${prof.sql}${postSql}
-      GROUP BY post_url, my_profile, username`,
-    params: [uid, ...RETURN_OUTBOUND, ...win.params, ...prof.params, ...postParams],
+        AND ${win.sql('created_at')}${prof.sql}${postSql}${act.sql}
+      GROUP BY post_url, act, my_profile, username`,
+    params: [uid, ...RETURN_OUTBOUND, ...win.params, ...prof.params, ...(postUrl ? [postUrl] : []), ...act.params],
   };
 }
-
-// Inbound events from a target within `returnDays` after my first action,
-// received by the same profile that did the outreach (null-tolerant).
 function returnsJoin(uid, returnDays) {
   return {
     sql: `
@@ -1157,36 +1161,52 @@ router.get('/post-returns', authenticateFlexible, (req, res) => {
   const win = actionWindow(req.query, 90);
   const prof = profilesFilter(req.query);
   const returnDays = returnDaysOf(req.query);
-  const t = targetsCte(uid, win, prof);
+  const noAct = { sql: '', params: [] };
+  const t = targetsCte(uid, win, prof, undefined, noAct);
   const j = returnsJoin(uid, returnDays);
 
-  const posts = db.prepare(`
-    WITH t AS (${t.sql})
-    SELECT COALESCE(post_url, '') AS post_url, MIN(post_owner) AS post_owner,
-           GROUP_CONCAT(DISTINCT my_profile) AS my_profiles,
-           MIN(first_at) AS first_at, MAX(first_at) AS last_at,
-           COUNT(*) AS targets, SUM(likes) AS likes, SUM(follows) AS follows, SUM(replies) AS replies
-    FROM t GROUP BY post_url ORDER BY MAX(first_at) DESC
-  `).all(...t.params);
+  // Performed: actual actions that ran, per (post, act).
+  const performed = db.prepare(`
+    SELECT COALESCE(post_url, '') AS post_url, ${canon('type')} AS act,
+           COUNT(*) AS performed, COUNT(DISTINCT username) AS users,
+           MIN(created_at) AS first_at, MAX(created_at) AS last_at,
+           MIN(post_owner) AS post_owner, GROUP_CONCAT(DISTINCT my_profile) AS my_profiles
+    FROM instagram_actions
+    WHERE user_id = ? AND type IN (${inList(RETURN_OUTBOUND)}) AND username IS NOT NULL
+      AND ${win.sql('created_at')}${prof.sql}
+    GROUP BY post_url, act
+  `).all(uid, ...RETURN_OUTBOUND, ...win.params, ...prof.params);
 
-  const returnedByPost = db.prepare(`
+  // Requested: what the extension asked for, from run records (instagram_campaigns
+  // is the unified per-run table — manual sessions and batch sub-sessions both
+  // land here with total_requested + post_url). Campaigns carry no my_profile,
+  // so requested is not split by account when a profile filter is active.
+  const requested = db.prepare(`
+    SELECT COALESCE(post_url, '') AS post_url, ${canon('type')} AS act,
+           SUM(COALESCE(total_requested, 0)) AS requested,
+           SUM(total_requested IS NOT NULL) AS runs_with_req, COUNT(*) AS runs
+    FROM instagram_campaigns
+    WHERE user_id = ? AND post_url IS NOT NULL AND ${win.sql('started_at')}
+    GROUP BY post_url, act
+  `).all(uid, ...win.params);
+
+  // Returns per (post, act).
+  const returned = db.prepare(`
     WITH t AS (${t.sql}),
     r AS (
-      SELECT t.post_url, t.username,
+      SELECT t.post_url, t.act, t.username,
              ${groupFlag('followed')} AS followed, ${groupFlag('liked')} AS liked, ${groupFlag('commented')} AS commented,
              MIN(b.created_at) AS first_return_at, MIN(t.first_at) AS first_at
       FROM t ${j.sql}
-      GROUP BY t.post_url, t.username
+      GROUP BY t.post_url, t.act, t.username
     )
-    SELECT COALESCE(post_url, '') AS post_url, COUNT(*) AS returned,
+    SELECT COALESCE(post_url, '') AS post_url, act, COUNT(*) AS returned,
            SUM(followed) AS followed, SUM(liked) AS liked, SUM(commented) AS commented,
            AVG((JULIANDAY(first_return_at) - JULIANDAY(first_at)) * 24) AS avg_hours_to_return
-    FROM r GROUP BY post_url
+    FROM r GROUP BY post_url, act
   `).all(...t.params, ...groupParams(), ...j.params);
 
-  const uniqueTargets = db.prepare(`
-    WITH t AS (${t.sql}) SELECT COUNT(DISTINCT username) AS users FROM t
-  `).get(...t.params);
+  const uniqueTargets = db.prepare(`WITH t AS (${t.sql}) SELECT COUNT(DISTINCT username) AS users FROM t`).get(...t.params);
   const uniqueReturned = db.prepare(`
     WITH t AS (${t.sql}),
     r AS (
@@ -1200,65 +1220,66 @@ router.get('/post-returns', authenticateFlexible, (req, res) => {
     SELECT DISTINCT my_profile FROM instagram_actions WHERE user_id = ? AND my_profile IS NOT NULL ORDER BY my_profile
   `).all(uid).map(r => r.my_profile);
 
-  const retByPost = new Map(returnedByPost.map(r => [r.post_url, r]));
-  const rows = posts.map(p => {
-    const r = retByPost.get(p.post_url) || {};
-    const returned = r.returned || 0;
+  const reqBy = new Map(requested.map(r => [r.post_url + ' ' + r.act, r]));
+  const retBy = new Map(returned.map(r => [r.post_url + ' ' + r.act, r]));
+  const rows = performed.map(p => {
+    const key = p.post_url + ' ' + p.act;
+    const req = reqBy.get(key);
+    const ret = retBy.get(key) || {};
+    const followed = ret.followed || 0;
     return {
-      post_url: p.post_url, post_owner: p.post_owner,
+      post_url: p.post_url, action: p.act, post_owner: p.post_owner,
       my_profiles: p.my_profiles ? String(p.my_profiles).split(',') : [],
       first_at: p.first_at, last_at: p.last_at,
-      targets: p.targets, likes: p.likes, follows: p.follows, replies: p.replies,
-      returned, followed: r.followed || 0, liked: r.liked || 0, commented: r.commented || 0,
-      avg_hours_to_return: r.avg_hours_to_return != null ? Math.round(r.avg_hours_to_return * 10) / 10 : null,
-      rate: p.targets ? Math.round((returned / p.targets) * 1000) / 10 : null,
+      requested: req && req.runs_with_req > 0 ? req.requested : null,
+      performed: p.performed, users: p.users,
+      returned: ret.returned || 0, followed, liked: ret.liked || 0, commented: ret.commented || 0,
+      avg_hours_to_return: ret.avg_hours_to_return != null ? Math.round(ret.avg_hours_to_return * 10) / 10 : null,
+      rate: p.performed ? Math.round((followed / p.performed) * 1000) / 10 : null,
     };
-  });
+  }).sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
+
   const sum = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
   const users = uniqueTargets?.users || 0;
-  const returned = uniqueReturned?.returned || 0;
   res.json({
     window: { label: win.label, return_days: returnDays },
     profiles,
     totals: {
-      posts: rows.length, users, returned,
-      rate: users ? Math.round((returned / users) * 1000) / 10 : null,
-      likes: sum('likes'), follows: sum('follows'), replies: sum('replies'),
+      posts: new Set(rows.map(r => r.post_url)).size, rows: rows.length,
+      requested: sum('requested'), performed: sum('performed'), users,
+      returned: uniqueReturned?.returned || 0,
       followed: uniqueReturned?.followed || 0, liked: uniqueReturned?.liked || 0, commented: uniqueReturned?.commented || 0,
+      rate: sum('performed') ? Math.round(((uniqueReturned?.followed || 0) / sum('performed')) * 1000) / 10 : null,
     },
     posts: rows,
   });
 });
 
-// Per-post drill-down: every targeted user, what I did, and what they did back.
+// Per-(post, action) drill-down: every targeted user, what I did, what they did back.
 router.get('/post-returns/users', authenticateFlexible, (req, res) => {
   const uid = targetUser(req);
   const win = actionWindow(req.query, 90);
   const prof = profilesFilter(req.query);
   const returnDays = returnDaysOf(req.query);
+  const act = actFilter(req.query);
   const postUrl = typeof req.query.post_url === 'string' ? req.query.post_url : '';
-  const t = targetsCte(uid, win, prof, postUrl);
+  const postSql = postUrl ? ` AND post_url = ?` : ` AND post_url IS NULL`;
 
-  const targets = db.prepare(`WITH t AS (${t.sql}) SELECT * FROM t ORDER BY first_at ASC LIMIT 2000`).all(...t.params);
   const actionRows = db.prepare(`
-    SELECT username, type, created_at, full_name, follower_count FROM instagram_actions
+    SELECT username, type, created_at, my_profile, full_name, follower_count FROM instagram_actions
     WHERE user_id = ? AND type IN (${inList(RETURN_OUTBOUND)}) AND username IS NOT NULL
-      AND ${win.sql('created_at')}${prof.sql} AND ${postUrl ? 'post_url = ?' : 'post_url IS NULL'}
-    ORDER BY created_at ASC LIMIT 5000
-  `).all(uid, ...RETURN_OUTBOUND, ...win.params, ...prof.params, ...(postUrl ? [postUrl] : []));
+      AND ${win.sql('created_at')}${prof.sql}${postSql}${act.sql}
+    ORDER BY created_at ASC LIMIT 8000
+  `).all(uid, ...RETURN_OUTBOUND, ...win.params, ...prof.params, ...(postUrl ? [postUrl] : []), ...act.params);
 
   const byUser = new Map();
-  for (const r of targets) {
-    const u = byUser.get(r.username) || { username: r.username, my_profile: r.my_profile, first_at: r.first_at, full_name: null, follower_count: null, my_actions: [], returns: [] };
-    if (r.first_at < u.first_at) u.first_at = r.first_at;
-    byUser.set(r.username, u);
-  }
   for (const a of actionRows) {
-    const u = byUser.get(a.username);
-    if (!u) continue;
-    u.my_actions.push({ type: a.type, at: a.created_at });
+    const u = byUser.get(a.username) || { username: a.username, my_profile: a.my_profile, first_at: a.created_at, full_name: null, follower_count: null, my_actions: [], returns: [] };
+    if (a.created_at < u.first_at) u.first_at = a.created_at;
+    u.my_actions.push({ type: a.type === 'comment_reply' ? 'reply' : a.type, at: a.created_at });
     if (a.full_name && !u.full_name) u.full_name = a.full_name;
     if (a.follower_count != null && u.follower_count == null) u.follower_count = a.follower_count;
+    byUser.set(a.username, u);
   }
 
   const usernames = [...byUser.keys()];
@@ -1285,7 +1306,7 @@ router.get('/post-returns/users', authenticateFlexible, (req, res) => {
   const users = [...byUser.values()]
     .map(u => ({ ...u, returned: u.returns.length > 0 }))
     .sort((a, b) => (Number(b.returned) - Number(a.returned)) || (a.first_at < b.first_at ? 1 : -1));
-  res.json({ post_url: postUrl, return_days: returnDays, users, truncated: targets.length >= 2000 });
+  res.json({ post_url: postUrl, action: req.query.action || null, return_days: returnDays, users, truncated: actionRows.length >= 8000 });
 });
 
 // ── Admin: list all users with stats ─────────────────────────────────────────
