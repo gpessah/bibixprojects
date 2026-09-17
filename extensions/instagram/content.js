@@ -139,37 +139,53 @@ function isLoadMoreControl(b) {
   );
 }
 
-async function loadMoreCommentsBatch(maxCycles, label) {
+// Persistently pull more comments into the DOM: click every load-more control
+// and scroll the comments container until EITHER new comments appear (return
+// immediately so the caller likes/replies to them) OR the post is genuinely
+// out — no load-more control present AND no growth for a sustained stretch.
+// Stays incremental: the caller stops the whole run once the target is reached,
+// so we never load far past what the run needs. This has to be patient: on a
+// post with hundreds of comments IG lazy-loads them slowly, a page at a time,
+// and the visible "Load more" button often disappears while scroll-triggered
+// loading is still delivering more — quitting early is exactly the v1.45 bug
+// that capped a 200-like run at 42 on a 286-comment post.
+async function loadMoreComments(label) {
   const before = countLoadedComments();
-  let cycles = 0;
-  for (; cycles < maxCycles; cycles++) {
+  let stall = 0;              // consecutive cycles with NO button AND no growth
+  const MAX_STALL = 18;       // ~40s of true no-progress before we call it done
+  const MAX_CYCLES = 150;     // hard ceiling so a stuck page can't loop forever
+  for (let i = 0; i < MAX_CYCLES; i++) {
     if (STOP) break;
     const buttons = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(isLoadMoreControl);
     for (const b of buttons) {
       if (STOP) break;
-      try {
-        b.scrollIntoView({ behavior: 'auto', block: 'center' });
-        b.click();
-      } catch (_) { /* element may have been removed */ }
-      await sleep(400 + rand(200));
+      try { b.scrollIntoView({ behavior: 'auto', block: 'center' }); b.click(); } catch (_) { /* removed */ }
+      await sleep(350 + rand(200));
     }
-    // Alternate scroll styles — each can wake a different lazy-load sentinel.
-    if (cycles % 2 === 0) scrollCommentsToBottom(); else scrollCommentsBy(1500);
-    await sleep(1100 + rand(300));
+    // Two different scroll motions — each can wake a different lazy-load
+    // sentinel in IG's comments container.
+    scrollCommentsToBottom(); await sleep(600 + rand(300));
+    scrollCommentsBy(1400);   await sleep(600 + rand(300));
     const now = countLoadedComments();
-    progress(`📥 ${label} — loading more comments… ${now} in view`);
+    progress(`📥 ${label} — loading comments… ${now} in view`);
     if (now > before) {
-      console.log(`[BibixCS] loadMoreCommentsBatch: ${before} → ${now} after ${cycles + 1} cycle(s), buttons=${buttons.length}`);
-      return { before, after: now, grew: true, cycles: cycles + 1 };
+      console.log(`[BibixCS] loadMoreComments: ${before} → ${now} after ${i + 1} cycle(s), buttons=${buttons.length}`);
+      return { before, after: now, grew: true, cycles: i + 1 };
     }
+    // A visible load-more button means there's more to get — keep trying and
+    // don't count it against the stall budget. Only a stretch with no button
+    // and no growth means the post is really exhausted.
+    stall = buttons.length ? 0 : stall + 1;
+    if (stall >= MAX_STALL) break;
   }
   const after = countLoadedComments();
-  console.log(`[BibixCS] loadMoreCommentsBatch: no growth (${before} → ${after}) after ${cycles} cycle(s)`);
-  return { before, after, grew: after > before, cycles };
+  console.log(`[BibixCS] loadMoreComments: no growth (${before} → ${after}), stall=${stall}`);
+  return { before, after, grew: after > before, cycles: MAX_CYCLES };
 }
-// Consecutive batches with no new comments before we call the post exhausted
-// (8 × 3 cycles ≈ 40s of no growth — matches the old loader's patience).
-const MAX_DRY_BATCHES = 8;
+// One persistent loadMoreComments() call already waits ~40s before declaring a
+// post exhausted, so a single dry call is enough; a second is cheap insurance
+// against a transient IG stall.
+const MAX_DRY_BATCHES = 2;
 
 // ─── Legacy loader (kept for handleComments and other call-sites) ────────────
 async function loadAllComments(maxClicks = 250, target = 0) {
@@ -554,7 +570,7 @@ async function handleLikes(total, asAccount, queueItemId = null) {
       loading = true;
       let batch;
       try {
-        batch = await loadMoreCommentsBatch(3, `❤️ ${liked}/${total}`);
+        batch = await loadMoreComments(`❤️ ${liked}/${total}`);
       } finally {
         loading = false;
       }
@@ -740,8 +756,8 @@ async function handleComments(total, customReplies, useAI, asAccount, queueItemI
     });
 
     if (!replyBtns.length) {
-      // Out of candidates in what is loaded → fetch one more batch, then retry.
-      const batch = await loadMoreCommentsBatch(3, `💬 ${replied}/${total}`);
+      // Out of candidates in what is loaded → persistently load more, then retry.
+      const batch = await loadMoreComments(`💬 ${replied}/${total}`);
       if (batch.grew) { dryBatches = 0; continue; }
       dryBatches++;
       if (dryBatches >= MAX_DRY_BATCHES) break;

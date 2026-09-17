@@ -47,6 +47,12 @@ The card shows the new version from `manifest.json`. No re-installing.
 
 ## Changelog (recent)
 
+* **1.46.0** — fix likes/replies stopping far short of the request on
+  comment-heavy posts (e.g. 42/200 on a 286-comment post): the incremental
+  loader is now persistent — it keeps clicking "load more" and scrolling until
+  new comments actually appear, and only declares the post exhausted after a
+  sustained stretch with no button and no growth. Still stops the moment the
+  target is reached, so memory stays bounded.
 * **1.45.0** — likes/replies load comments incrementally: act on what is on
   screen, click ⊕ "load more" only when out of candidates, stop loading when
   the target is reached (faster start, far less memory than pre-loading 2×).
