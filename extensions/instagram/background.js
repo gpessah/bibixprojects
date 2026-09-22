@@ -1389,10 +1389,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
         const res = await bibixPost("/ai/reply", {
-          comment_text: msg.comment || "Nice!",
-          post_owner:   msg.postOwner   || null,
-          my_profile:   msg.myProfile   || null,
-          post_url:     msg.postUrl     || null,
+          comment_text:   msg.comment   || "",
+          comment_author: msg.author    || null,
+          post_owner:     msg.postOwner || null,
+          my_profile:     msg.myProfile || null,
+          post_url:       msg.postUrl   || null,
         });
         if (res && res.reply) {
           sendResponse({ reply: res.reply });

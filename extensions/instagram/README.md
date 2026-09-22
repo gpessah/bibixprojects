@@ -47,6 +47,12 @@ The card shows the new version from `manifest.json`. No re-installing.
 
 ## Changelog (recent)
 
+* **1.47.0** — AI replies now actually read each comment: extract just the
+  comment body (not username/timestamp/“Reply”/like-count), pass the
+  commenter's handle, and the backend prompt answers the comment's specific
+  content in its own language instead of a generic line. Turn on the **AI
+  Replies** toggle and set a default provider in Monday → Settings → AI
+  providers.
 * **1.46.0** — fix likes/replies stopping far short of the request on
   comment-heavy posts (e.g. 42/200 on a 286-comment post): the incremental
   loader is now persistent — it keeps clicking "load more" and scrolling until

@@ -200,10 +200,8 @@ router.post('/test', authenticateFlexible, async (req, res) => {
 //         provider?, model? }   (provider/model override the user's default)
 router.post('/reply', authenticateFlexible, async (req, res) => {
   const uid = req.user.id;
-  const { comment_text, post_owner, my_profile, post_url, tone, provider: overrideProvider, model: overrideModel } = req.body || {};
-  if (!comment_text || typeof comment_text !== 'string') {
-    return res.status(400).json({ error: 'comment_text required' });
-  }
+  const { comment_text, comment_author, post_owner, my_profile, post_url, tone, provider: overrideProvider, model: overrideModel } = req.body || {};
+  const comment = (typeof comment_text === 'string' ? comment_text : '').trim();
 
   // Pick the provider: explicit override > user default > nothing.
   let row;
@@ -225,17 +223,24 @@ router.post('/reply', authenticateFlexible, async (req, res) => {
   }
 
   // Build the prompt. Kept short and tightly constrained so providers stay
-  // cheap and replies look like a real IG comment, not a model essay.
+  // cheap and replies look like a real IG comment, not a model essay. The key
+  // goal: the reply must engage with WHAT THE COMMENT ACTUALLY SAYS, in the
+  // comment's own language — not a generic "Nice! 🔥".
+  const ownPost = my_profile && post_owner && my_profile === post_owner;
   const lines = [];
-  lines.push('You are replying to an Instagram comment as the post owner.');
-  if (my_profile) lines.push(`Your IG handle is @${my_profile}.`);
-  if (post_owner && my_profile && post_owner !== my_profile) {
-    lines.push(`The post belongs to @${post_owner}.`);
-  }
+  lines.push(ownPost
+    ? 'You are the creator replying to a comment on your own Instagram post.'
+    : 'You are a warm, genuine Instagram user replying to someone else\'s comment on a post you are engaging with.');
+  if (my_profile) lines.push(`You are @${my_profile}.`);
+  if (comment_author) lines.push(`The comment was written by @${comment_author}.`);
   if (tone) lines.push(`Tone: ${tone}.`);
-  lines.push('Comment to reply to:');
-  lines.push(`"${comment_text.slice(0, 400)}"`);
-  lines.push('Write a single short reply (max 120 chars). No quotes, no preamble, no hashtags, no @mentions. Emoji ok.');
+  if (comment) {
+    lines.push('Read this comment and reply directly to what it says. React to its specific content, and write your reply in the SAME LANGUAGE as the comment:');
+    lines.push(`"""${comment.slice(0, 400)}"""`);
+  } else {
+    lines.push('Write a warm, genuine-sounding reply that fits a positive Instagram comment.');
+  }
+  lines.push('Rules: exactly one short reply, max ~120 characters, sound like a real person, be specific and relevant (never a generic "Nice!"), no quotes, no preamble, no hashtags, no @mentions, at most one emoji.');
   const prompt = lines.join('\n');
 
   try {

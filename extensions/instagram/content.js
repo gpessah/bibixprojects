@@ -790,9 +790,11 @@ async function handleComments(total, customReplies, useAI, asAccount, queueItemI
     if (useAI) {
       progress(`🤖 Generating AI reply ${replied + 1}/${total}…`);
       const commentText = getCommentText(btn);
-      // Pass full context so the backend's prompt can be tailored: which IG
-      // account we're acting as, who the post belongs to, and the post URL.
+      // Pass full context so the backend's prompt can be tailored: whose
+      // comment this is, which IG account we're acting as, who the post
+      // belongs to, and the post URL.
       const aiReply = await getAIReply(commentText, {
+        author:    targetUsername,
         postOwner: postMeta.postOwner,
         myProfile: myUsername,
         postUrl:   postMeta.postUrl,
@@ -1759,15 +1761,36 @@ function getPostOwner() {
 }
 
 // Extract comment text for AI
+// Extract just the comment BODY for a Reply/Like button — not the username,
+// timestamp, like-count, or action-bar chrome around it. The old version
+// joined every span in the row, so the model was fed
+// "carlos 2w All the covers are wonderful Reply 4 likes" and replied vaguely.
+// We drop UI keywords, relative timestamps, like counts and the author's own
+// name, then take the LONGEST remaining leaf-text — the comment is almost
+// always the longest real text in its row.
 function getCommentText(replyBtn) {
+  const author = (getCommentAuthor(replyBtn) || "").replace(/^@/, "").toLowerCase();
+  const isJunk = (t) => {
+    const s = t.trim();
+    if (s.length < 2) return true;
+    if (/^(reply|like|liked|translate|see translation|edited|author|follow|following|verified|pinned|hide replies)$/i.test(s)) return true;
+    if (/^view( all)?( \d[\d,]*)?( replies?)?$/i.test(s)) return true;
+    if (/^\d+\s*[wdhms]$/i.test(s)) return true;                 // "2w", "13h", "45m"
+    if (/^\d[\d,.]*\s*(likes?|replies?)$/i.test(s)) return true; // "4 likes", "2 replies"
+    if (s === "·" || s === "•") return true;
+    if (s.replace(/^@/, "").toLowerCase() === author) return true; // the commenter's handle
+    return false;
+  };
   let el = replyBtn.parentElement;
-  for (let i = 0; i < 8; i++) {
-    if (!el) break;
-    const spans = Array.from(el.querySelectorAll("span")).filter(
-      (s) => s.children.length === 0 && (s.innerText || "").trim().length > 5
-    );
-    if (spans.length) return spans.map((s) => s.innerText.trim()).join(" ").slice(0, 300);
-    el = el.parentElement;
+  for (let i = 0; i < 10 && el; i++, el = el.parentElement) {
+    const texts = Array.from(el.querySelectorAll("span"))
+      .filter((s) => s.children.length === 0)
+      .map((s) => (s.innerText || "").trim())
+      .filter((t) => t && !isJunk(t));
+    if (texts.length) {
+      const body = texts.sort((a, b) => b.length - a.length)[0]; // longest = the comment
+      if (body && body.length >= 2) return body.slice(0, 400);
+    }
   }
   return "";
 }
@@ -1804,7 +1827,8 @@ function getAIReply(commentText, opts = {}) {
     chrome.runtime.sendMessage(
       {
         action: "GET_AI_REPLY",
-        comment: commentText || "Nice!",
+        comment: commentText || "",
+        author:    opts.author    || null,
         postOwner: opts.postOwner || null,
         myProfile: opts.myProfile || null,
         postUrl:   opts.postUrl   || null,
