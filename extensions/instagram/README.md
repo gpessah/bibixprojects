@@ -47,6 +47,15 @@ The card shows the new version from `manifest.json`. No re-installing.
 
 ## Changelog (recent)
 
+* **1.48.0** — likes still capping around ~50 on comment-heavy posts: harden
+  the comment loader (broader "load more" matcher incl. the ⊕ icon and
+  "view/show more" variants; scroll the nested container AND the window AND the
+  last comment into view + a wheel event; treat panel scrollHeight growth as
+  progress). Adds a **version stamp** in the console (`content.js vX.Y.Z
+  loaded`) to end folder/version confusion, and a plain-English end-of-run line
+  in the popup that says whether it ran out of loadable comments or Instagram
+  rejected the likes (rate-limit), plus a `[BibixCS]` DOM snapshot on the
+  console for diagnosis.
 * **1.47.0** — AI replies now actually read each comment: extract just the
   comment body (not username/timestamp/“Reply”/like-count), pass the
   commenter's handle, and the backend prompt answers the comment's specific

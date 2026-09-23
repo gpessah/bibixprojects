@@ -1,4 +1,9 @@
-console.log("✅ Instagram Extension content.js loaded");
+// Bump on every content.js change. Logged on load and echoed on every message
+// response so we can ALWAYS confirm which build is actually running in a given
+// browser tab (folder/version confusion has repeatedly bitten us). Check it in
+// the IG tab's DevTools console: "content.js vX.Y.Z loaded".
+const BIBIX_EXT_VERSION = "1.48.0";
+console.log(`✅ Instagram Extension content.js v${BIBIX_EXT_VERSION} loaded`);
 
 let STOP = false;
 
@@ -9,7 +14,7 @@ const DEFAULT_REPLIES = [
 
 /* ===== MESSAGE HANDLER ===== */
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  sendResponse({ ok: true });
+  sendResponse({ ok: true, version: BIBIX_EXT_VERSION });
   if (msg.action === "STOP_ALL")        { STOP = true; return; }
   if (msg.action === "RANDOM_LIKE")     { STOP = false; handleLikes(parseInt(msg.count, 10) || 1, msg.asAccount || null, msg.queueItemId || null); }
   if (msg.action === "RANDOM_COMMENT")  { STOP = false; handleComments(parseInt(msg.count, 10) || 1, msg.replies || [], msg.useAI || false, msg.asAccount || null, msg.queueItemId || null); }
@@ -102,6 +107,28 @@ function scrollCommentsBy(deltaY) {
   return false;
 }
 
+// Compact snapshot of the comments DOM — logged when the loader can't load
+// more, so we can SEE from a real run why: whether a scroll container was
+// found, how many load-more controls matched, and the most common button /
+// icon labels present (which reveals what IG's real "load more" control is
+// named when our matcher misses it). Purely diagnostic; no side effects.
+function commentsDomSnapshot() {
+  const c = findCommentsScrollable();
+  const matched = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(isLoadMoreControl).length;
+  const freq = {};
+  for (const el of document.querySelectorAll('button, div[role="button"], svg[aria-label]')) {
+    const label = (el.getAttribute && el.getAttribute('aria-label')) || (el.innerText || '').trim();
+    if (label && label.length <= 40) freq[label] = (freq[label] || 0) + 1;
+  }
+  const topLabels = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([t, n]) => `${t}×${n}`);
+  return {
+    comments: countLoadedComments(),
+    container: c ? `${c.tagName}.${String(c.className || '').slice(0, 40)} sh=${c.scrollHeight} ch=${c.clientHeight}` : 'NONE',
+    loadMoreMatched: matched,
+    topLabels,
+  };
+}
+
 // ─── v1.45: INCREMENTAL LOADER ───────────────────────────────────────────────
 // Comments are loaded one batch at a time, and only when the like/reply loop
 // has run out of candidates. The previous two-phase design pre-loaded 2× the
@@ -127,15 +154,21 @@ function countLoadedComments() {
 // "View N more comments/replies" links, and the hidden-comments gates.
 function isLoadMoreControl(b) {
   if (!b) return false;
+  // (a) SVG icon controls — the round ⊕ "Load more comments" and its variants.
   if (b.querySelector && b.querySelector(
-    'svg[aria-label="Load more comments"], svg[aria-label*="more comments" i], svg[aria-label*="View more" i], svg[aria-label*="hidden" i]'
+    'svg[aria-label="Load more comments"], svg[aria-label*="more comment" i], svg[aria-label*="load more" i], svg[aria-label*="View more" i], svg[aria-label*="see more" i], svg[aria-label*="show more" i], svg[aria-label*="hidden" i], svg[aria-label*="more repl" i]'
   )) return true;
+  // The ⊕ button itself sometimes carries the aria-label (not a child svg).
+  const aria = (b.getAttribute && (b.getAttribute('aria-label') || '')).toLowerCase();
+  if (/load more|more comment|view more|see more|show more|more repl|hidden/.test(aria)) return true;
+  // (b) Text-based variants across IG versions and locales.
   const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
   return (
-    /^(load more|view all comments|view more comments|view previous comments|view hidden comments|view \d[\d,]*\s+(more\s+)?(comment|repl|hidden)|view \d[\d,]*\s+repl)/i.test(txt)
+    /^(load more|show more|see more|view all comments|view more comments|view previous comments|view hidden comments|view \d[\d,]*\s+(more\s+)?(comment|repl|hidden)|view \d[\d,]*\s+repl|show \d[\d,]*\s+repl|view replies|show replies)/i.test(txt)
     || /view\s+hidden\s+comments?/i.test(txt)
     || /hidden\s+by\s+instagram/i.test(txt)
     || /\d+\s+hidden\s+comments?/i.test(txt)
+    || /^(more comments?|show more comments?)$/i.test(txt)
   );
 }
 
@@ -149,38 +182,71 @@ function isLoadMoreControl(b) {
 // and the visible "Load more" button often disappears while scroll-triggered
 // loading is still delivering more — quitting early is exactly the v1.45 bug
 // that capped a 200-like run at 42 on a 286-comment post.
+function containerScrollHeight() {
+  const c = findCommentsScrollable();
+  if (c) return c.scrollHeight;
+  const se = document.scrollingElement || document.documentElement;
+  return se ? se.scrollHeight : 0;
+}
+
 async function loadMoreComments(label) {
   const before = countLoadedComments();
-  let stall = 0;              // consecutive cycles with NO button AND no growth
-  const MAX_STALL = 18;       // ~40s of true no-progress before we call it done
-  const MAX_CYCLES = 150;     // hard ceiling so a stuck page can't loop forever
+  let lastCount = before;
+  let lastSH = containerScrollHeight();
+  let stall = 0;              // cycles with NO growth in comments OR scrollHeight
+  let buttonsSeenMax = 0;
+  const MAX_STALL = 20;       // ~30s of true no-progress before we call it done
+  const MAX_CYCLES = 160;     // hard ceiling so a stuck page can't loop forever
   for (let i = 0; i < MAX_CYCLES; i++) {
     if (STOP) break;
+
+    // 1) Click every load-more control we can match.
     const buttons = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(isLoadMoreControl);
+    buttonsSeenMax = Math.max(buttonsSeenMax, buttons.length);
     for (const b of buttons) {
       if (STOP) break;
-      try { b.scrollIntoView({ behavior: 'auto', block: 'center' }); b.click(); } catch (_) { /* removed */ }
-      await sleep(350 + rand(200));
+      try { b.scrollIntoView({ behavior: 'auto', block: 'center' }); b.click(); } catch (_) { /* removed mid-iteration */ }
+      await sleep(300 + rand(200));
     }
-    // Two different scroll motions — each can wake a different lazy-load
-    // sentinel in IG's comments container.
-    scrollCommentsToBottom(); await sleep(600 + rand(300));
-    scrollCommentsBy(1400);   await sleep(600 + rand(300));
+
+    // 2) Several scroll strategies — IG's lazy-loader may observe the nested
+    //    comments container, the window/document, or a sentinel near the last
+    //    comment. Do all of them + a wheel event so we wake whichever it is.
+    const cont = findCommentsScrollable();
+    if (cont) {
+      cont.scrollTop = cont.scrollHeight;
+      try { cont.dispatchEvent(new WheelEvent('wheel', { deltaY: 1500, bubbles: true })); } catch (_) {}
+    }
+    try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
+    const hearts = document.querySelectorAll('svg[aria-label="Like"], svg[aria-label="Unlike"]');
+    const lastHeart = hearts[hearts.length - 1];
+    if (lastHeart) { try { lastHeart.scrollIntoView({ block: 'end' }); } catch (_) {} }
+    await sleep(750 + rand(350));
+
     const now = countLoadedComments();
+    const sh = containerScrollHeight();
     progress(`📥 ${label} — loading comments… ${now} in view`);
+
+    // New comments actually appeared → hand back so the caller acts on them.
     if (now > before) {
-      console.log(`[BibixCS] loadMoreComments: ${before} → ${now} after ${i + 1} cycle(s), buttons=${buttons.length}`);
-      return { before, after: now, grew: true, cycles: i + 1 };
+      console.log(`[BibixCS] loadMoreComments +${now - before} (→${now}) at cycle ${i + 1}, btns=${buttons.length}`);
+      return { before, after: now, grew: true, buttonsSeenMax };
     }
-    // A visible load-more button means there's more to get — keep trying and
-    // don't count it against the stall budget. Only a stretch with no button
-    // and no growth means the post is really exhausted.
-    stall = buttons.length ? 0 : stall + 1;
+
+    // Progress = more comments than last cycle OR the panel got taller (content
+    // is streaming in even if the likeable count hasn't ticked yet). A visible
+    // load-more button that does nothing is NOT progress — otherwise a broken
+    // button would loop forever.
+    const madeProgress = now > lastCount || sh > lastSH + 8;
+    lastCount = now; lastSH = sh;
+    stall = madeProgress ? 0 : stall + 1;
     if (stall >= MAX_STALL) break;
   }
+
   const after = countLoadedComments();
-  console.log(`[BibixCS] loadMoreComments: no growth (${before} → ${after}), stall=${stall}`);
-  return { before, after, grew: after > before, cycles: MAX_CYCLES };
+  const snapshot = commentsDomSnapshot();
+  console.log(`[BibixCS] loadMoreComments EXHAUSTED ${before}→${after} stall=${stall} buttonsSeenMax=${buttonsSeenMax}`, JSON.stringify(snapshot));
+  return { before, after, grew: after > before, buttonsSeenMax, snapshot };
 }
 // One persistent loadMoreComments() call already waits ~40s before declaring a
 // post exhausted, so a single dry call is enough; a second is cheap insurance
@@ -575,7 +641,6 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         loading = false;
       }
       loaderExit.finalCount = batch.after;
-      loaderExit.iterations += batch.cycles;
       if (batch.grew) { dryBatches = 0; return; }   // new comments — like them on the next tick
       dryBatches++;
       if (dryBatches < MAX_DRY_BATCHES) return;
@@ -590,18 +655,32 @@ async function handleLikes(total, asAccount, queueItemId = null) {
           followerStats: computeFollowerStats(followerValues),
         });
         const skipBreakdown = summarizeSkipReasons();
-        // Include rate-limit telemetry so the user knows when IG was the
-        // limit vs the post simply running out.
         skipBreakdown.totalAttempts = totalAttempts;
         skipBreakdown.totalSucceeded = totalSucceeded;
         skipBreakdown.failedClicks = totalAttempts - totalSucceeded;
-        // Loader exit state — surfaces WHERE the comment loader stopped
-        // (target reached / gave up / max iterations) so the user can see
-        // WITHOUT opening DevTools whether the loader was the bottleneck.
         skipBreakdown.loaderFinalCount = loaderExit.finalCount;
-        skipBreakdown.loaderIterations = loaderExit.iterations;
         skipBreakdown.loaderExitReason = loaderExit.reason;
-        console.log(`[BibixCS] handleLikes summary: liked=${liked}, attempts=${totalAttempts}, succeeded=${totalSucceeded}, fails=${totalAttempts - totalSucceeded}, total=${skipBreakdown.total}, alreadyLiked=${skipBreakdown.alreadyLiked}, own=${skipBreakdown.ownComments}, dupAuthors=${skipBreakdown.duplicateAuthors}, noAuthor=${skipBreakdown.noAuthor}, loaderFinal=${loaderExit.finalCount}, loaderIter=${loaderExit.iterations}, loaderReason=${loaderExit.reason}`);
+
+        // Plain-English reason the run stopped short, shown in the popup so the
+        // user can distinguish "IG has no more comments to load" from "IG
+        // stopped accepting my likes" without opening DevTools.
+        const snap = batch.snapshot || {};
+        const fails = totalAttempts - totalSucceeded;
+        let why;
+        if (liked >= total) {
+          why = `✅ Done ${liked}/${total}.`;
+        } else if (fails >= 5 && fails >= Math.max(5, liked * 0.4)) {
+          why = `⚠️ Stopped at ${liked}/${total} — Instagram rejected ${fails} likes (rate-limit). Use a smaller batch or wait before retrying.`;
+        } else {
+          const loaded = snap.comments != null ? snap.comments : loaderExit.finalCount;
+          const btns = batch.buttonsSeenMax || 0;
+          const area = snap.container === 'NONE' ? 'no scroll area found' : 'scroll area ok';
+          why = `⚠️ Stopped at ${liked}/${total} — couldn't load more than ${loaded} comments (load-more buttons seen: ${btns}, ${area}). If the post clearly has more, open this tab's console and send the [BibixCS] lines to Bibix.`;
+        }
+        skipBreakdown.diagnosis = why;
+        skipBreakdown.snapshot = snap;
+        progress(why);
+        console.log(`[BibixCS] handleLikes summary v${BIBIX_EXT_VERSION}: liked=${liked}/${total}, attempts=${totalAttempts}, stuck=${totalSucceeded}, fails=${fails}, loaded=${loaderExit.finalCount}, reason=${loaderExit.reason}`, JSON.stringify(snap));
         done(liked, liked < total
           ? { exhausted: true, requested: total, skipBreakdown }
           : { skipBreakdown });
