@@ -1505,6 +1505,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           status:        msg.updates?.status,
           completed:     msg.updates?.completed,
           followerStats: msg.updates?.followerStats || null,
+          notes:         msg.updates?.notes || null,
         });
       }
       sendResponse({ ok: true });

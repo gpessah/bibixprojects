@@ -47,6 +47,14 @@ The card shows the new version from `manifest.json`. No re-installing.
 
 ## Changelog (recent)
 
+* **1.49.0** — big like-throughput fix: stop hovering each comment's profile
+  before liking. IG's hover card can take up to 6s to appear (or never, in a
+  throttled tab), and that per-like cost — purely to capture a follower number
+  the backend can backfill anyway — was why large like runs died at 30–50
+  before finishing. Also records a compact per-run diagnosis to the campaign
+  (loaded comments, load-more buttons seen, scroll-container found, failed
+  likes, elapsed minutes, stop reason) so the cause of any short run is
+  visible server-side without DevTools.
 * **1.48.0** — likes still capping around ~50 on comment-heavy posts: harden
   the comment loader (broader "load more" matcher incl. the ⊕ icon and
   "view/show more" variants; scroll the nested container AND the window AND the

@@ -2,7 +2,7 @@
 // response so we can ALWAYS confirm which build is actually running in a given
 // browser tab (folder/version confusion has repeatedly bitten us). Check it in
 // the IG tab's DevTools console: "content.js vX.Y.Z loaded".
-const BIBIX_EXT_VERSION = "1.48.0";
+const BIBIX_EXT_VERSION = "1.49.0";
 console.log(`✅ Instagram Extension content.js v${BIBIX_EXT_VERSION} loaded`);
 
 let STOP = false;
@@ -543,6 +543,7 @@ async function handleLikes(total, asAccount, queueItemId = null) {
   let consecutiveFails = 0;
   let totalAttempts    = 0;
   let totalSucceeded   = 0;
+  const runStartMs     = Date.now();
   // Track by comment author (stable across IG's frequent re-renders) instead
   // of by DOM node reference — IG replaces button elements after clicks, so
   // a button-reference set will let the script re-pick the same comment and
@@ -603,9 +604,11 @@ async function handleLikes(total, asAccount, queueItemId = null) {
   const timer = setInterval(async () => {
     if (STOP || liked >= total) {
       clearInterval(timer);
+      const elapsedMin = Math.round((Date.now() - runStartMs) / 60000);
       await finishCampaign(campaignId, {
         completed:     liked,
         status:        STOP ? "stopped" : "done",
+        notes:         `v${BIBIX_EXT_VERSION} perf=${liked}/${total} fails=${totalAttempts - totalSucceeded} min=${elapsedMin} reason=${STOP ? 'stopped_by_user' : 'target_reached'}`,
         followerStats: computeFollowerStats(followerValues),
       });
       done(liked);
@@ -649,11 +652,6 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         // We really did run out. Report partial if we did some, otherwise
         // no_targets. handleActionTabDone in background.js decides.
         clearInterval(timer);
-        await finishCampaign(campaignId, {
-          completed:     liked,
-          status:        "done",
-          followerStats: computeFollowerStats(followerValues),
-        });
         const skipBreakdown = summarizeSkipReasons();
         skipBreakdown.totalAttempts = totalAttempts;
         skipBreakdown.totalSucceeded = totalSucceeded;
@@ -666,21 +664,34 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         // stopped accepting my likes" without opening DevTools.
         const snap = batch.snapshot || {};
         const fails = totalAttempts - totalSucceeded;
+        const loaded = snap.comments != null ? snap.comments : loaderExit.finalCount;
+        const btns = batch.buttonsSeenMax || 0;
+        const elapsedMin = Math.round((Date.now() - runStartMs) / 60000);
         let why;
         if (liked >= total) {
           why = `✅ Done ${liked}/${total}.`;
         } else if (fails >= 5 && fails >= Math.max(5, liked * 0.4)) {
           why = `⚠️ Stopped at ${liked}/${total} — Instagram rejected ${fails} likes (rate-limit). Use a smaller batch or wait before retrying.`;
         } else {
-          const loaded = snap.comments != null ? snap.comments : loaderExit.finalCount;
-          const btns = batch.buttonsSeenMax || 0;
           const area = snap.container === 'NONE' ? 'no scroll area found' : 'scroll area ok';
           why = `⚠️ Stopped at ${liked}/${total} — couldn't load more than ${loaded} comments (load-more buttons seen: ${btns}, ${area}). If the post clearly has more, open this tab's console and send the [BibixCS] lines to Bibix.`;
         }
         skipBreakdown.diagnosis = why;
         skipBreakdown.snapshot = snap;
+
+        // Persist a compact diagnosis to the campaign so we can see server-side
+        // WHY each run stopped short — loaded comments, load-more buttons seen,
+        // scroll-container found, failed likes, elapsed minutes — without
+        // needing the user's DevTools. Queryable via instagram_campaigns.notes.
+        const notes = `v${BIBIX_EXT_VERSION} perf=${liked}/${total} loaded=${loaded} btns=${btns} fails=${fails} cont=${snap.container === 'NONE' ? 'none' : 'ok'} min=${elapsedMin} reason=${loaderExit.reason}`;
+        await finishCampaign(campaignId, {
+          completed:     liked,
+          status:        "done",
+          notes,
+          followerStats: computeFollowerStats(followerValues),
+        });
         progress(why);
-        console.log(`[BibixCS] handleLikes summary v${BIBIX_EXT_VERSION}: liked=${liked}/${total}, attempts=${totalAttempts}, stuck=${totalSucceeded}, fails=${fails}, loaded=${loaderExit.finalCount}, reason=${loaderExit.reason}`, JSON.stringify(snap));
+        console.log(`[BibixCS] handleLikes summary ${notes}`, JSON.stringify(snap));
         done(liked, liked < total
           ? { exhausted: true, requested: total, skipBreakdown }
           : { skipBreakdown });
@@ -697,11 +708,14 @@ async function handleLikes(total, asAccount, queueItemId = null) {
     usedAuthors.add(targetUsername);
     totalAttempts++;
 
-    const usernameLink            = getUsernameLink(btn);
-    const { followers, fullName } = await getProfileInfoByHover(usernameLink);
-
-    const fNum = parseFollowerCount(followers);
-    if (fNum !== null) followerValues.push(fNum);
+    // v1.49: NO per-like profile hover. IG's hover card can take up to 6s to
+    // appear — or never, in a throttled/background tab — and that per-like cost
+    // (purely to capture a follower number for the dashboard) was the real
+    // reason big like runs never finished: at ~1–6s each, a run dies at 30–50
+    // likes before the target. The backend already backfills full_name /
+    // follower_count for a username from earlier scans, so we lose almost
+    // nothing. Replies keep the hover — they're far fewer per run.
+    const followers = null, fullName = null;
 
     btn.scrollIntoView({ behavior: "smooth", block: "center" });
 
