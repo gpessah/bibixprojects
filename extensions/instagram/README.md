@@ -47,6 +47,12 @@ The card shows the new version from `manifest.json`. No re-installing.
 
 ## Changelog (recent)
 
+* **1.50.0** — gentle one-page-at-a-time loading (per request): like every
+  comment on the current page one by one, then click the ⊕ once to load the
+  next page, like those, and so on — no up-front multi-scroll. Clean stop-reason
+  codes (target_reached / not_enough_comments / no_comments_found /
+  rate_limited / stopped_by_user) recorded per run, surfaced as a **Result**
+  column in the dashboard so you can see why a request didn't finish.
 * **1.49.0** — big like-throughput fix: stop hovering each comment's profile
   before liking. IG's hover card can take up to 6s to appear (or never, in a
   throttled tab), and that per-like cost — purely to capture a follower number

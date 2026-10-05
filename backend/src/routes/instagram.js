@@ -1220,22 +1220,48 @@ router.get('/post-returns', authenticateFlexible, (req, res) => {
     SELECT DISTINCT my_profile FROM instagram_actions WHERE user_id = ? AND my_profile IS NOT NULL ORDER BY my_profile
   `).all(uid).map(r => r.my_profile);
 
-  const reqBy = new Map(requested.map(r => [r.post_url + ' ' + r.act, r]));
-  const retBy = new Map(returned.map(r => [r.post_url + ' ' + r.act, r]));
+  // Latest run per (post, act): its status + the reason code the extension
+  // stamped into notes (reason=<code>), so the dashboard can say WHY a request
+  // didn't finish. SQLite returns the MAX(started_at) row's bare columns.
+  const latestRuns = db.prepare(`
+    SELECT COALESCE(post_url, '') AS post_url, ${canon('type')} AS act,
+           status, notes, MAX(started_at) AS started_at
+    FROM instagram_campaigns
+    WHERE user_id = ? AND post_url IS NOT NULL AND ${win.sql('started_at')}
+    GROUP BY post_url, act
+  `).all(uid, ...win.params);
+  const parseReason = (notes) => {
+    const m = /reason=([a-z_]+)/i.exec(notes || '');
+    return m ? m[1] : null;
+  };
+
+  const K = (u, a) => `${u}\u0000${a}`;
+  const reqBy = new Map(requested.map(r => [K(r.post_url, r.act), r]));
+  const retBy = new Map(returned.map(r => [K(r.post_url, r.act), r]));
+  const runBy = new Map(latestRuns.map(r => [K(r.post_url, r.act), r]));
   const rows = performed.map(p => {
-    const key = p.post_url + ' ' + p.act;
+    const key = K(p.post_url, p.act);
     const req = reqBy.get(key);
     const ret = retBy.get(key) || {};
+    const run = runBy.get(key);
     const followed = ret.followed || 0;
+    const requestedN = req && req.runs_with_req > 0 ? req.requested : null;
+    // Reason the request did/didn't finish. Prefer the extension's own code;
+    // otherwise infer from requested vs performed.
+    let reason = parseReason(run && run.notes);
+    if (!reason && requestedN != null) reason = p.performed >= requestedN ? 'target_reached' : 'incomplete';
     return {
       post_url: p.post_url, action: p.act, post_owner: p.post_owner,
       my_profiles: p.my_profiles ? String(p.my_profiles).split(',') : [],
       first_at: p.first_at, last_at: p.last_at,
-      requested: req && req.runs_with_req > 0 ? req.requested : null,
+      requested: requestedN,
       performed: p.performed, users: p.users,
       returned: ret.returned || 0, followed, liked: ret.liked || 0, commented: ret.commented || 0,
       avg_hours_to_return: ret.avg_hours_to_return != null ? Math.round(ret.avg_hours_to_return * 10) / 10 : null,
       rate: p.performed ? Math.round((followed / p.performed) * 1000) / 10 : null,
+      reason,
+      run_status: run ? run.status : null,
+      run_notes: run ? run.notes : null,
     };
   }).sort((a, b) => (a.last_at < b.last_at ? 1 : -1));
 

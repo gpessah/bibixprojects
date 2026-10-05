@@ -2,7 +2,7 @@
 // response so we can ALWAYS confirm which build is actually running in a given
 // browser tab (folder/version confusion has repeatedly bitten us). Check it in
 // the IG tab's DevTools console: "content.js vX.Y.Z loaded".
-const BIBIX_EXT_VERSION = "1.49.0";
+const BIBIX_EXT_VERSION = "1.50.0";
 console.log(`✅ Instagram Extension content.js v${BIBIX_EXT_VERSION} loaded`);
 
 let STOP = false;
@@ -189,64 +189,48 @@ function containerScrollHeight() {
   return se ? se.scrollHeight : 0;
 }
 
+// Load exactly ONE more page of comments, gently. The like/reply loop calls
+// this only when it has run out of comments currently on screen: we click the
+// round (+) "Load more comments" control once (or, if there's no button, do a
+// single scroll to the bottom to trigger IG's lazy-loader), then wait for the
+// next page to appear and hand straight back so liking resumes one-by-one.
+// No multi-strategy scroll-fest — that "opens several scrolls then starts"
+// behavior is exactly what we're removing here.
 async function loadMoreComments(label) {
   const before = countLoadedComments();
-  let lastCount = before;
-  let lastSH = containerScrollHeight();
-  let stall = 0;              // cycles with NO growth in comments OR scrollHeight
-  let buttonsSeenMax = 0;
-  const MAX_STALL = 20;       // ~30s of true no-progress before we call it done
-  const MAX_CYCLES = 160;     // hard ceiling so a stuck page can't loop forever
-  for (let i = 0; i < MAX_CYCLES; i++) {
+
+  // Trigger the next page: prefer the explicit (+) / "view more" control; fall
+  // back to a single scroll-to-bottom when IG paginates purely on scroll.
+  const trigger = () => {
+    const btn = Array.from(document.querySelectorAll('button, div[role="button"]')).find(isLoadMoreControl);
+    if (btn) {
+      try { btn.scrollIntoView({ behavior: 'auto', block: 'center' }); btn.click(); } catch (_) {}
+      return true;            // a real load-more control existed
+    }
+    scrollCommentsToBottom();
+    return false;
+  };
+  const hadButton = trigger();
+
+  // Wait for that one page to arrive (up to ~12s). Return the instant new
+  // comments show up so we go right back to liking them one by one.
+  for (let i = 0; i < 24; i++) {
     if (STOP) break;
-
-    // 1) Click every load-more control we can match.
-    const buttons = Array.from(document.querySelectorAll('button, div[role="button"]')).filter(isLoadMoreControl);
-    buttonsSeenMax = Math.max(buttonsSeenMax, buttons.length);
-    for (const b of buttons) {
-      if (STOP) break;
-      try { b.scrollIntoView({ behavior: 'auto', block: 'center' }); b.click(); } catch (_) { /* removed mid-iteration */ }
-      await sleep(300 + rand(200));
-    }
-
-    // 2) Several scroll strategies — IG's lazy-loader may observe the nested
-    //    comments container, the window/document, or a sentinel near the last
-    //    comment. Do all of them + a wheel event so we wake whichever it is.
-    const cont = findCommentsScrollable();
-    if (cont) {
-      cont.scrollTop = cont.scrollHeight;
-      try { cont.dispatchEvent(new WheelEvent('wheel', { deltaY: 1500, bubbles: true })); } catch (_) {}
-    }
-    try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
-    const hearts = document.querySelectorAll('svg[aria-label="Like"], svg[aria-label="Unlike"]');
-    const lastHeart = hearts[hearts.length - 1];
-    if (lastHeart) { try { lastHeart.scrollIntoView({ block: 'end' }); } catch (_) {} }
-    await sleep(750 + rand(350));
-
+    await sleep(500);
     const now = countLoadedComments();
-    const sh = containerScrollHeight();
-    progress(`📥 ${label} — loading comments… ${now} in view`);
-
-    // New comments actually appeared → hand back so the caller acts on them.
     if (now > before) {
-      console.log(`[BibixCS] loadMoreComments +${now - before} (→${now}) at cycle ${i + 1}, btns=${buttons.length}`);
-      return { before, after: now, grew: true, buttonsSeenMax };
+      console.log(`[BibixCS] loadMoreComments: next page +${now - before} (→${now}), button=${hadButton}`);
+      return { before, after: now, grew: true, buttonsSeenMax: hadButton ? 1 : 0 };
     }
-
-    // Progress = more comments than last cycle OR the panel got taller (content
-    // is streaming in even if the likeable count hasn't ticked yet). A visible
-    // load-more button that does nothing is NOT progress — otherwise a broken
-    // button would loop forever.
-    const madeProgress = now > lastCount || sh > lastSH + 8;
-    lastCount = now; lastSH = sh;
-    stall = madeProgress ? 0 : stall + 1;
-    if (stall >= MAX_STALL) break;
+    if (i % 4 === 0) progress(`📥 ${label} — loading next page… ${now} in view`);
+    // Re-trigger a couple of times in case the first click/scroll didn't catch.
+    if (i === 6 || i === 14) trigger();
   }
 
   const after = countLoadedComments();
   const snapshot = commentsDomSnapshot();
-  console.log(`[BibixCS] loadMoreComments EXHAUSTED ${before}→${after} stall=${stall} buttonsSeenMax=${buttonsSeenMax}`, JSON.stringify(snapshot));
-  return { before, after, grew: after > before, buttonsSeenMax, snapshot };
+  console.log(`[BibixCS] loadMoreComments: no next page (${before}→${after}), button=${hadButton}`, JSON.stringify(snapshot));
+  return { before, after, grew: after > before, buttonsSeenMax: hadButton ? 1 : 0, snapshot };
 }
 // One persistent loadMoreComments() call already waits ~40s before declaring a
 // post exhausted, so a single dry call is enough; a second is cheap insurance
@@ -667,23 +651,30 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         const loaded = snap.comments != null ? snap.comments : loaderExit.finalCount;
         const btns = batch.buttonsSeenMax || 0;
         const elapsedMin = Math.round((Date.now() - runStartMs) / 60000);
-        let why;
+        // One clean machine code (the dashboard maps it to a Result badge) +
+        // a human sentence for the popup.
+        let reasonCode, why;
         if (liked >= total) {
+          reasonCode = 'target_reached';
           why = `✅ Done ${liked}/${total}.`;
         } else if (fails >= 5 && fails >= Math.max(5, liked * 0.4)) {
+          reasonCode = 'rate_limited';
           why = `⚠️ Stopped at ${liked}/${total} — Instagram rejected ${fails} likes (rate-limit). Use a smaller batch or wait before retrying.`;
+        } else if (loaded === 0) {
+          reasonCode = 'no_comments_found';
+          why = `⚠️ Stopped at ${liked}/${total} — no comments found on this post (comments off, or not a post page).`;
         } else {
-          const area = snap.container === 'NONE' ? 'no scroll area found' : 'scroll area ok';
-          why = `⚠️ Stopped at ${liked}/${total} — couldn't load more than ${loaded} comments (load-more buttons seen: ${btns}, ${area}). If the post clearly has more, open this tab's console and send the [BibixCS] lines to Bibix.`;
+          reasonCode = 'not_enough_comments';
+          why = `⚠️ Stopped at ${liked}/${total} — the post only had ${loaded} loadable comments (not enough to reach ${total}).`;
         }
+        loaderExit.reason = reasonCode;
         skipBreakdown.diagnosis = why;
         skipBreakdown.snapshot = snap;
 
         // Persist a compact diagnosis to the campaign so we can see server-side
-        // WHY each run stopped short — loaded comments, load-more buttons seen,
-        // scroll-container found, failed likes, elapsed minutes — without
-        // needing the user's DevTools. Queryable via instagram_campaigns.notes.
-        const notes = `v${BIBIX_EXT_VERSION} perf=${liked}/${total} loaded=${loaded} btns=${btns} fails=${fails} cont=${snap.container === 'NONE' ? 'none' : 'ok'} min=${elapsedMin} reason=${loaderExit.reason}`;
+        // (and in the dashboard) WHY each run stopped short. Queryable via
+        // instagram_campaigns.notes.
+        const notes = `v${BIBIX_EXT_VERSION} perf=${liked}/${total} loaded=${loaded} btns=${btns} fails=${fails} cont=${snap.container === 'NONE' ? 'none' : 'ok'} min=${elapsedMin} reason=${reasonCode}`;
         await finishCampaign(campaignId, {
           completed:     liked,
           status:        "done",
