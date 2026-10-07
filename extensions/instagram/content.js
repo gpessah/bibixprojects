@@ -2,7 +2,7 @@
 // response so we can ALWAYS confirm which build is actually running in a given
 // browser tab (folder/version confusion has repeatedly bitten us). Check it in
 // the IG tab's DevTools console: "content.js vX.Y.Z loaded".
-const BIBIX_EXT_VERSION = "1.50.0";
+const BIBIX_EXT_VERSION = "1.51.0";
 console.log(`✅ Instagram Extension content.js v${BIBIX_EXT_VERSION} loaded`);
 
 let STOP = false;
@@ -199,15 +199,22 @@ function containerScrollHeight() {
 async function loadMoreComments(label) {
   const before = countLoadedComments();
 
-  // Trigger the next page: prefer the explicit (+) / "view more" control; fall
-  // back to a single scroll-to-bottom when IG paginates purely on scroll.
+  // Trigger the next page: prefer the explicit (+) / "view more" control; if
+  // there's none, IG paginates on scroll — so scroll the comments container,
+  // the window, and the last comment into view (all three, since IG's
+  // lazy-loader may watch any of them). This is still ONE page per call.
   const trigger = () => {
     const btn = Array.from(document.querySelectorAll('button, div[role="button"]')).find(isLoadMoreControl);
     if (btn) {
       try { btn.scrollIntoView({ behavior: 'auto', block: 'center' }); btn.click(); } catch (_) {}
       return true;            // a real load-more control existed
     }
-    scrollCommentsToBottom();
+    const cont = findCommentsScrollable();
+    if (cont) { cont.scrollTop = cont.scrollHeight; try { cont.dispatchEvent(new WheelEvent('wheel', { deltaY: 1500, bubbles: true })); } catch (_) {} }
+    try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
+    const hearts = document.querySelectorAll('svg[aria-label="Like"], svg[aria-label="Unlike"]');
+    const last = hearts[hearts.length - 1];
+    if (last) { try { last.scrollIntoView({ block: 'end' }); } catch (_) {} }
     return false;
   };
   const hadButton = trigger();
@@ -510,6 +517,7 @@ async function handleLikes(total, asAccount, queueItemId = null) {
   const loaderExit = { finalCount: countLoadedComments(), iterations: 0, reason: 'incremental' };
   let loading = false;   // a batch load is in flight — later ticks must not start another
   let dryBatches = 0;    // consecutive batches that surfaced no new comments
+  let loadedPages = 0;   // how many times we successfully loaded a NEXT page
 
   progress("Getting post info…");
   const myUsername = getLoggedInUsername();
@@ -628,7 +636,7 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         loading = false;
       }
       loaderExit.finalCount = batch.after;
-      if (batch.grew) { dryBatches = 0; return; }   // new comments — like them on the next tick
+      if (batch.grew) { dryBatches = 0; loadedPages++; return; }   // new page loaded — like them on the next tick
       dryBatches++;
       if (dryBatches < MAX_DRY_BATCHES) return;
       loaderExit.reason = `exhausted_after_${dryBatches}_dry_batches`;
@@ -652,7 +660,10 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         const btns = batch.buttonsSeenMax || 0;
         const elapsedMin = Math.round((Date.now() - runStartMs) / 60000);
         // One clean machine code (the dashboard maps it to a Result badge) +
-        // a human sentence for the popup.
+        // a human sentence for the popup. The key distinction: if we never
+        // managed to load even one extra page (loadedPages===0) on a post that
+        // had more comments than we liked, that's a LOADER failure
+        // (could_not_load_more), NOT "the post is small".
         let reasonCode, why;
         if (liked >= total) {
           reasonCode = 'target_reached';
@@ -663,18 +674,25 @@ async function handleLikes(total, asAccount, queueItemId = null) {
         } else if (loaded === 0) {
           reasonCode = 'no_comments_found';
           why = `⚠️ Stopped at ${liked}/${total} — no comments found on this post (comments off, or not a post page).`;
+        } else if (loadedPages === 0) {
+          reasonCode = 'could_not_load_more';
+          why = `⚠️ Stopped at ${liked}/${total} — couldn't load more than the first ${loaded} comments. The loader can't find how to load the next page on this post's layout; Bibix is investigating.`;
         } else {
           reasonCode = 'not_enough_comments';
-          why = `⚠️ Stopped at ${liked}/${total} — the post only had ${loaded} loadable comments (not enough to reach ${total}).`;
+          why = `⚠️ Stopped at ${liked}/${total} — loaded ${loadedPages + 1} pages (${loaded} comments) and ran out; the post doesn't have enough to reach ${total}.`;
         }
         loaderExit.reason = reasonCode;
         skipBreakdown.diagnosis = why;
         skipBreakdown.snapshot = snap;
 
         // Persist a compact diagnosis to the campaign so we can see server-side
-        // (and in the dashboard) WHY each run stopped short. Queryable via
+        // (and in the dashboard) WHY each run stopped short. `labels` carries
+        // the most common button/icon names on the page, which reveals IG's
+        // real "load more" control when our matcher misses it — so the loader
+        // can be fixed from one query, no DevTools. Queryable via
         // instagram_campaigns.notes.
-        const notes = `v${BIBIX_EXT_VERSION} perf=${liked}/${total} loaded=${loaded} btns=${btns} fails=${fails} cont=${snap.container === 'NONE' ? 'none' : 'ok'} min=${elapsedMin} reason=${reasonCode}`;
+        const labels = (snap.topLabels || []).slice(0, 8).join('|').replace(/\s+/g, ' ').slice(0, 220);
+        const notes = `v${BIBIX_EXT_VERSION} perf=${liked}/${total} loaded=${loaded} pages=${loadedPages} btns=${btns} fails=${fails} cont=${snap.container === 'NONE' ? 'none' : 'ok'} min=${elapsedMin} reason=${reasonCode} labels=${labels}`;
         await finishCampaign(campaignId, {
           completed:     liked,
           status:        "done",

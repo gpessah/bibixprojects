@@ -63,6 +63,7 @@ const ACTION_ONE: Record<string, string> = { like: '❤️ liked comment', follo
 const RESULT_META: Record<string, { label: string; cls: string }> = {
   target_reached:      { label: '✅ Completed',         cls: 'bg-green-100 text-green-700' },
   not_enough_comments: { label: 'Not enough comments',  cls: 'bg-amber-100 text-amber-700' },
+  could_not_load_more: { label: "Couldn't load more",   cls: 'bg-orange-100 text-orange-700' },
   no_comments_found:   { label: 'No comments found',    cls: 'bg-amber-100 text-amber-700' },
   rate_limited:        { label: '⛔ Rate-limited',       cls: 'bg-red-100 text-red-700' },
   stopped_by_user:     { label: 'Stopped',              cls: 'bg-gray-200 text-gray-600' },
